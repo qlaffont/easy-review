@@ -2,7 +2,13 @@ import { describe, expect, it } from "vitest";
 
 import type { PullRequestSummary } from "#/lib/session/types.ts";
 
-import { DEFAULT_INBOX_SECTIONS, classifyPullRequest, groupIntoSections } from "#/lib/session/inbox-sections.ts";
+import {
+    DEFAULT_INBOX_SECTIONS,
+    classifyPullRequest,
+    groupIntoSections,
+    normalizeSectionLayout,
+    visibleSectionDefinitions,
+} from "#/lib/session/inbox-sections.ts";
 
 const VIEWER = "quentin";
 
@@ -98,6 +104,35 @@ describe("classifyPullRequest", () => {
         const subject = pullRequest({ reviewRequests: ["someone-else"] });
 
         expect(classifyPullRequest(subject, VIEWER)).toBe("other");
+    });
+});
+
+describe("section layout", () => {
+    it("appends missing defaults and drops unknown ids", () => {
+        const layout = normalizeSectionLayout([
+            { id: "other", label: "Misc", hidden: false },
+            { id: "needs-your-review", label: "  ", hidden: true },
+            { id: "needs-your-review", label: "dup", hidden: false },
+        ]);
+
+        expect(layout[0]).toMatchObject({ id: "other", label: "Misc" });
+        expect(layout.find((entry) => entry.id === "needs-your-review")).toMatchObject({
+            label: "  ",
+            hidden: true,
+        });
+        expect(layout).toHaveLength(DEFAULT_INBOX_SECTIONS.length);
+    });
+
+    it("only exposes visible sections to the board, with blank labels falling back", () => {
+        const layout = normalizeSectionLayout([
+            { id: "approved", label: "Ship it", hidden: false },
+            { id: "drafts", label: "   ", hidden: false },
+            { id: "needs-your-review", label: "Review", hidden: true },
+        ]);
+
+        expect(visibleSectionDefinitions(layout).map((entry) => entry.id)).not.toContain("needs-your-review");
+        expect(visibleSectionDefinitions(layout)[0]).toMatchObject({ id: "approved", label: "Ship it" });
+        expect(visibleSectionDefinitions(layout).find((entry) => entry.id === "drafts")?.label).toBe("Drafts");
     });
 });
 

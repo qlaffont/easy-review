@@ -5,6 +5,7 @@ import { useEffect } from "react";
 import type { InboxSection } from "#/lib/session/inbox-sections.ts";
 
 import { emptySectionRow, PullRequestRow } from "#/components/inbox/pull-request-row.tsx";
+import { SectionLayoutEditor } from "#/components/inbox/section-layout-editor.tsx";
 import { useOpenRepoPicker } from "#/components/repos/repo-picker.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import { formatRelativeTime } from "#/lib/format.ts";
@@ -60,15 +61,18 @@ export function InboxBoard() {
                           ? `Updated ${formatRelativeTime(inbox.lastLoadedAt)}`
                           : "Not synced yet"}
                 </p>
-                <Button
-                    variant="outline"
-                    size="sm"
-                    disabled={inbox.refreshing}
-                    onClick={() => void session.refreshInbox()}
-                >
-                    <RefreshCw className={inbox.refreshing ? "animate-spin" : undefined} />
-                    Refresh
-                </Button>
+                <div className="flex items-center gap-2">
+                    <SectionLayoutEditor />
+                    <Button
+                        variant="outline"
+                        size="sm"
+                        disabled={inbox.refreshing}
+                        onClick={() => void session.refreshInbox()}
+                    >
+                        <RefreshCw className={inbox.refreshing ? "animate-spin" : undefined} />
+                        Refresh
+                    </Button>
+                </div>
             </div>
 
             {inbox.error ? <p className="text-sm text-destructive">{inbox.error.message}</p> : null}

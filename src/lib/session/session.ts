@@ -1,7 +1,7 @@
 import { Store } from "@tanstack/store";
 
 import type { SessionError } from "#/lib/session/errors.ts";
-import type { InboxSection, InboxSectionId } from "#/lib/session/inbox-sections.ts";
+import type { InboxSection, InboxSectionId, InboxSectionLayoutEntry } from "#/lib/session/inbox-sections.ts";
 import type { GithubClient, GithubViewer, KeyValueStore } from "#/lib/session/ports.ts";
 import type {
     DiffSide,
@@ -19,7 +19,12 @@ import type {
 } from "#/lib/session/types.ts";
 
 import { EasyReviewError, missingToken, toSessionError } from "#/lib/session/errors.ts";
-import { DEFAULT_INBOX_SECTIONS, groupIntoSections } from "#/lib/session/inbox-sections.ts";
+import {
+    defaultSectionLayout,
+    groupIntoSections,
+    normalizeSectionLayout,
+    visibleSectionDefinitions,
+} from "#/lib/session/inbox-sections.ts";
 
 const TOKEN_KEY = "auth:token";
 const SELECTED_REPOS_KEY = "repos:selected";
@@ -28,6 +33,7 @@ const REPOS_CACHE_KEY = "repos:cache";
 const REPOS_ACCOUNT_KEY = "repos:account";
 const INBOX_CACHE_KEY = "inbox:cache";
 const INBOX_EXPANDED_KEY = "inbox:expanded";
+const INBOX_SECTIONS_KEY = "inbox:sections";
 /** Index of every persisted draft key so disconnect can wipe them without a store scan. */
 const DRAFT_INDEX_KEY = "review-drafts:index";
 
@@ -66,6 +72,8 @@ export type InboxState = {
     stale: boolean;
     pullRequests: Array<PullRequestSummary>;
     expandedSections: Array<InboxSectionId>;
+    /** Hide / rename / reorder preferences for the triage board. */
+    sectionLayout: Array<InboxSectionLayoutEntry>;
     error: SessionError | null;
     lastLoadedAt: string | null;
 };
@@ -152,6 +160,7 @@ const initialInboxState: InboxState = {
     stale: false,
     pullRequests: [],
     expandedSections: DEFAULT_EXPANDED_SECTIONS,
+    sectionLayout: defaultSectionLayout(),
     error: null,
     lastLoadedAt: null,
 };
@@ -327,6 +336,7 @@ export function createEasyReviewSession({ github, store }: EasyReviewSessionDeps
             store.remove(REPOS_ACCOUNT_KEY),
             store.remove(INBOX_CACHE_KEY),
             store.remove(INBOX_EXPANDED_KEY),
+            store.remove(INBOX_SECTIONS_KEY),
             clearDraftStorage(),
         ]);
         setRepos({ ...initialRepositoriesState });
@@ -347,11 +357,12 @@ export function createEasyReviewSession({ github, store }: EasyReviewSessionDeps
             return;
         }
 
-        const [selected, repositories, inbox, expanded] = await Promise.all([
+        const [selected, repositories, inbox, expanded, sections] = await Promise.all([
             readJson<Array<string>>(SELECTED_REPOS_KEY),
             readJson<RepositoriesCache>(REPOS_CACHE_KEY),
             readJson<InboxCache>(INBOX_CACHE_KEY),
             readJson<Array<InboxSectionId>>(INBOX_EXPANDED_KEY),
+            readJson<Array<InboxSectionLayoutEntry>>(INBOX_SECTIONS_KEY),
         ]);
 
         setRepos({
@@ -366,6 +377,7 @@ export function createEasyReviewSession({ github, store }: EasyReviewSessionDeps
             lastLoadedAt: inbox?.lastLoadedAt ?? null,
             status: inbox?.pullRequests.length ? "ready" : "idle",
             expandedSections: expanded ?? DEFAULT_EXPANDED_SECTIONS,
+            sectionLayout: normalizeSectionLayout(sections),
         });
     }
 
@@ -595,6 +607,49 @@ export function createEasyReviewSession({ github, store }: EasyReviewSessionDeps
         if (!isExpanded) {
             await revalidateInbox();
         }
+    }
+
+    async function persistSectionLayout(layout: Array<InboxSectionLayoutEntry>): Promise<void> {
+        const normalized = normalizeSectionLayout(layout);
+        setInbox({ sectionLayout: normalized });
+        await store.set(INBOX_SECTIONS_KEY, JSON.stringify(normalized));
+    }
+
+    function getSectionLayout(): Array<InboxSectionLayoutEntry> {
+        return state.state.inbox.sectionLayout;
+    }
+
+    async function setSectionHidden(id: InboxSectionId, hidden: boolean): Promise<void> {
+        await persistSectionLayout(
+            state.state.inbox.sectionLayout.map((entry) => (entry.id === id ? { ...entry, hidden } : entry)),
+        );
+    }
+
+    async function setSectionLabel(id: InboxSectionId, label: string): Promise<void> {
+        await persistSectionLayout(
+            state.state.inbox.sectionLayout.map((entry) => (entry.id === id ? { ...entry, label } : entry)),
+        );
+    }
+
+    async function moveSection(id: InboxSectionId, direction: "up" | "down"): Promise<void> {
+        const layout = [...state.state.inbox.sectionLayout];
+        const index = layout.findIndex((entry) => entry.id === id);
+        if (index < 0) {
+            return;
+        }
+
+        const target = direction === "up" ? index - 1 : index + 1;
+        if (target < 0 || target >= layout.length) {
+            return;
+        }
+
+        const [entry] = layout.splice(index, 1);
+        layout.splice(target, 0, entry!);
+        await persistSectionLayout(layout);
+    }
+
+    async function resetSectionLayout(): Promise<void> {
+        await persistSectionLayout(defaultSectionLayout());
     }
 
     /** Ask GitHub for one pull request in full. */
@@ -1157,13 +1212,13 @@ export function createEasyReviewSession({ github, store }: EasyReviewSessionDeps
         await refreshAfterMutation(repository, number);
     }
 
-    /** Every default section, empty ones included, holding only allowlisted repositories. */
+    /** Visible sections in the user's layout order, empty ones included when not hidden. */
     function getInboxSections(): Array<InboxSection> {
         const { inbox, repos, auth } = state.state;
         const selected = new Set(repos.selected);
         const visible = inbox.pullRequests.filter((pullRequest) => selected.has(pullRequest.repository));
 
-        return groupIntoSections(visible, auth.viewer?.login ?? "", DEFAULT_INBOX_SECTIONS);
+        return groupIntoSections(visible, auth.viewer?.login ?? "", visibleSectionDefinitions(inbox.sectionLayout));
     }
 
     return {
@@ -1182,6 +1237,11 @@ export function createEasyReviewSession({ github, store }: EasyReviewSessionDeps
         refreshInbox,
         revalidateInbox,
         toggleSection,
+        getSectionLayout,
+        setSectionHidden,
+        setSectionLabel,
+        moveSection,
+        resetSectionLayout,
         getInboxSections,
         loadPullRequest,
         refreshPullRequest,

@@ -4,10 +4,10 @@
 
 **Blocked by:** 03 — Inbox triage board
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] User can hide and show sections
-- [ ] User can reorder sections
-- [ ] User can rename sections
-- [ ] Customization persists across reload
-- [ ] Session tests cover preference apply/reset behavior with the storage double
+- [x] User can hide and show sections
+- [x] User can reorder sections
+- [x] User can rename sections
+- [x] Customization persists across reload
+- [x] Session tests cover preference apply/reset behavior with the storage double

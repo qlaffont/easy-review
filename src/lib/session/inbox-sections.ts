@@ -86,7 +86,71 @@ export type InboxSection = InboxSectionDefinition & {
     pullRequests: Array<PullRequestSummary>;
 };
 
-/** Groups pull requests into every default section, keeping empty sections visible. */
+/** One row of the user's Inbox layout: order in the array is display order. */
+export type InboxSectionLayoutEntry = {
+    id: InboxSectionId;
+    /** Display label; empty or whitespace falls back to the Graphite default. */
+    label: string;
+    hidden: boolean;
+};
+
+export function defaultSectionLayout(): Array<InboxSectionLayoutEntry> {
+    return DEFAULT_INBOX_SECTIONS.map((definition) => ({
+        id: definition.id,
+        label: definition.label,
+        hidden: false,
+    }));
+}
+
+export function defaultLabelForSection(id: InboxSectionId): string {
+    return DEFAULT_INBOX_SECTIONS.find((definition) => definition.id === id)?.label ?? id;
+}
+
+/**
+ * Normalize a stored layout: unknown ids are dropped and missing defaults are appended.
+ * Blank labels are kept so the rename field can be cleared while typing; the board falls
+ * back to the Graphite name only when resolving visible definitions.
+ */
+export function normalizeSectionLayout(
+    layout: ReadonlyArray<InboxSectionLayoutEntry> | null | undefined,
+): Array<InboxSectionLayoutEntry> {
+    const defaults = defaultSectionLayout();
+    const byId = new Map(defaults.map((entry) => [entry.id, entry]));
+
+    const ordered: Array<InboxSectionLayoutEntry> = [];
+    for (const entry of layout ?? []) {
+        if (!byId.has(entry.id)) {
+            continue;
+        }
+
+        ordered.push({
+            id: entry.id,
+            label: entry.label,
+            hidden: entry.hidden === true,
+        });
+        byId.delete(entry.id);
+    }
+
+    for (const remaining of byId.values()) {
+        ordered.push(remaining);
+    }
+
+    return ordered;
+}
+
+/** Visible sections only, in layout order, ready for `groupIntoSections`. */
+export function visibleSectionDefinitions(
+    layout: ReadonlyArray<InboxSectionLayoutEntry>,
+): Array<InboxSectionDefinition> {
+    return normalizeSectionLayout(layout)
+        .filter((entry) => !entry.hidden)
+        .map((entry) => ({
+            id: entry.id,
+            label: entry.label.trim() || defaultLabelForSection(entry.id),
+        }));
+}
+
+/** Groups pull requests into the given sections, keeping empty sections visible. */
 export function groupIntoSections(
     pullRequests: ReadonlyArray<PullRequestSummary>,
     viewerLogin: string,
