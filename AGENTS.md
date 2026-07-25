@@ -8,6 +8,10 @@ Issues live as markdown files under `.scratch/`. See `docs/agents/issue-tracker.
 
 Five canonical triage roles mapped to `Status:` lines in issue files. See `docs/agents/triage-labels.md`.
 
+### Domain docs
+
+Single-context: `CONTEXT.md` + `docs/adr/` at the repo root. See `docs/agents/domain.md`.
+
 Skills live under `.agents/skills/`. Install more with `bunx skills add <owner/repo@skill> -y`.
 
 ### Design & visual craft
