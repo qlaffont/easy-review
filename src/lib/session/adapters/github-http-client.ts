@@ -1,8 +1,12 @@
 import type { GithubClient, GithubViewer } from "#/lib/session/ports.ts";
+import type { Repository } from "#/lib/session/types.ts";
 
 import { EasyReviewError } from "#/lib/session/errors.ts";
 
 const GRAPHQL_URL = "https://api.github.com/graphql";
+const REPOSITORY_PAGE_SIZE = 100;
+/** Stops a runaway account with thousands of repos from burning the rate limit in one go. */
+const REPOSITORY_PAGE_LIMIT = 10;
 
 type GraphqlResponse<TData> = {
     data?: TData;
@@ -132,5 +136,81 @@ export function createGithubHttpClient(fetchImpl: typeof fetch = globalThis.fetc
 
             return data.viewer;
         },
+
+        async listRepositories(token) {
+            const repositories: Array<Repository> = [];
+            let cursor: string | null = null;
+
+            for (let page = 0; page < REPOSITORY_PAGE_LIMIT; page++) {
+                const data: RepositoriesQuery = await graphql<RepositoriesQuery>(token, REPOSITORIES_QUERY, {
+                    pageSize: REPOSITORY_PAGE_SIZE,
+                    cursor,
+                });
+                const { nodes, pageInfo } = data.viewer.repositories;
+
+                for (const node of nodes) {
+                    repositories.push({
+                        nameWithOwner: node.nameWithOwner,
+                        owner: node.owner.login,
+                        name: node.name,
+                        isPrivate: node.isPrivate,
+                        isArchived: node.isArchived,
+                        pushedAt: node.pushedAt,
+                    });
+                }
+
+                if (!pageInfo.hasNextPage) {
+                    break;
+                }
+
+                cursor = pageInfo.endCursor;
+            }
+
+            return repositories;
+        },
     };
 }
+
+type RepositoriesQuery = {
+    viewer: {
+        repositories: {
+            nodes: Array<{
+                name: string;
+                nameWithOwner: string;
+                isPrivate: boolean;
+                isArchived: boolean;
+                pushedAt: string | null;
+                owner: { login: string };
+            }>;
+            pageInfo: { hasNextPage: boolean; endCursor: string | null };
+        };
+    };
+};
+
+const REPOSITORIES_QUERY = `
+    query EasyReviewRepositories($pageSize: Int!, $cursor: String) {
+        viewer {
+            repositories(
+                first: $pageSize
+                after: $cursor
+                affiliations: [OWNER, COLLABORATOR, ORGANIZATION_MEMBER]
+                orderBy: { field: PUSHED_AT, direction: DESC }
+            ) {
+                nodes {
+                    name
+                    nameWithOwner
+                    isPrivate
+                    isArchived
+                    pushedAt
+                    owner {
+                        login
+                    }
+                }
+                pageInfo {
+                    hasNextPage
+                    endCursor
+                }
+            }
+        }
+    }
+`;

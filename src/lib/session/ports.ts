@@ -1,3 +1,5 @@
+import type { Repository } from "#/lib/session/types.ts";
+
 export type GithubViewer = {
     login: string;
     name: string | null;
@@ -11,6 +13,8 @@ export type GithubViewer = {
  */
 export type GithubClient = {
     getViewer(token: string): Promise<GithubViewer>;
+    /** Every repository the token can see, most recently pushed first. */
+    listRepositories(token: string): Promise<Array<Repository>>;
 };
 
 /** Browser persistence, narrowed to what the session needs so IndexedDB can replace it later. */

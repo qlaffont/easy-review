@@ -2,6 +2,7 @@ import { useState } from "react";
 
 import { AppHeader } from "#/components/app-header.tsx";
 import { ConnectTokenScreen } from "#/components/auth/connect-token-screen.tsx";
+import { RepoPickerProvider } from "#/components/repos/repo-picker.tsx";
 import { useSessionState } from "#/lib/session/provider.tsx";
 
 const bootScreen = (
@@ -26,9 +27,11 @@ export function SessionGate({ children }: { children: React.ReactNode }) {
     }
 
     return (
-        <div className="flex min-h-svh flex-col">
-            <AppHeader onReplaceToken={() => setReplacingToken(true)} />
-            <main className="flex-1">{children}</main>
-        </div>
+        <RepoPickerProvider>
+            <div className="flex min-h-svh flex-col">
+                <AppHeader onReplaceToken={() => setReplacingToken(true)} />
+                <main className="flex-1">{children}</main>
+            </div>
+        </RepoPickerProvider>
     );
 }

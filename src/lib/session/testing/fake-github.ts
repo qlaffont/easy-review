@@ -1,10 +1,13 @@
 import type { GithubClient, GithubViewer } from "#/lib/session/ports.ts";
+import type { Repository } from "#/lib/session/types.ts";
 
 import { EasyReviewError, unauthorized } from "#/lib/session/errors.ts";
 
 export type FakeGithub = GithubClient & {
     /** Register a token GitHub will accept, together with the account behind it. */
     addAccount(token: string, viewer?: Partial<GithubViewer>): GithubViewer;
+    /** Make a repository visible to a token. */
+    addRepository(token: string, nameWithOwner: string, repository?: Partial<Repository>): Repository;
     /** Revoke a token so the next call with it fails as unauthorized. */
     revokeAccount(token: string): void;
     /** Make the next call fail, whatever the token. */
@@ -17,6 +20,7 @@ export type FakeGithub = GithubClient & {
 
 export function createFakeGithub(): FakeGithub {
     const accounts = new Map<string, GithubViewer>();
+    const repositoriesByToken = new Map<string, Array<Repository>>();
     const calls: Array<string> = [];
     let forcedError: EasyReviewError | null = null;
     let gate: Promise<void> | null = null;
@@ -60,8 +64,23 @@ export function createFakeGithub(): FakeGithub {
             accounts.set(token, account);
             return account;
         },
+        addRepository(token, nameWithOwner, repository) {
+            const [owner = "", name = ""] = nameWithOwner.split("/");
+            const entry: Repository = {
+                nameWithOwner,
+                owner,
+                name,
+                isPrivate: repository?.isPrivate ?? false,
+                isArchived: repository?.isArchived ?? false,
+                pushedAt: repository?.pushedAt ?? null,
+            };
+
+            repositoriesByToken.set(token, [...(repositoriesByToken.get(token) ?? []), entry]);
+            return entry;
+        },
         revokeAccount(token) {
             accounts.delete(token);
+            repositoriesByToken.delete(token);
         },
         failNextWith(error) {
             forcedError = error;
@@ -82,6 +101,12 @@ export function createFakeGithub(): FakeGithub {
         },
         getViewer(token) {
             return respond("getViewer", () => authenticate(token));
+        },
+        listRepositories(token) {
+            return respond("listRepositories", () => {
+                authenticate(token);
+                return repositoriesByToken.get(token) ?? [];
+            });
         },
     };
 }

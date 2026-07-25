@@ -1,5 +1,6 @@
 import { KeyRound, LogOut } from "lucide-react";
 
+import { RepoPickerTrigger } from "#/components/repos/repo-picker.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import {
     DropdownMenu,
@@ -17,7 +18,10 @@ export function AppHeader({ onReplaceToken }: { onReplaceToken: () => void }) {
 
     return (
         <header className="sticky top-0 z-30 flex h-12 items-center justify-between gap-4 border-b bg-background/95 px-4 backdrop-blur">
-            <span className="text-sm font-semibold tracking-tight">Easy Review</span>
+            <div className="flex items-center gap-3">
+                <span className="text-sm font-semibold tracking-tight">Easy Review</span>
+                <RepoPickerTrigger />
+            </div>
 
             <DropdownMenu>
                 <DropdownMenuTrigger asChild>

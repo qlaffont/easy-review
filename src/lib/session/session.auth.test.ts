@@ -17,6 +17,10 @@ function newSession() {
     return createEasyReviewSession({ github, store });
 }
 
+function storedToken() {
+    return store.entries()["auth:token"] ?? null;
+}
+
 beforeEach(() => {
     github = createFakeGithub();
     store = createMemoryStore();
@@ -57,7 +61,7 @@ describe("connect", () => {
             error: null,
         });
         expect(session.state.state.auth.viewer?.login).toBe("quentin");
-        expect(Object.values(store.entries())).toContain(VALID_TOKEN);
+        expect(storedToken()).toBe(VALID_TOKEN);
     });
 
     it("trims pasted whitespace", async () => {
@@ -108,7 +112,7 @@ describe("connect", () => {
         await session.connect("github_pat_other");
 
         expect(session.state.state.auth.viewer?.login).toBe("octocat");
-        expect(Object.values(store.entries())).toEqual(["github_pat_other"]);
+        expect(storedToken()).toBe("github_pat_other");
     });
 
     it("keeps the working session when a replacement token is rejected", async () => {
@@ -121,7 +125,7 @@ describe("connect", () => {
         expect(session.state.state.auth.status).toBe("authenticated");
         expect(session.state.state.auth.viewer?.login).toBe("quentin");
         expect(session.state.state.auth.error?.kind).toBe("unauthorized");
-        expect(Object.values(store.entries())).toEqual([VALID_TOKEN]);
+        expect(storedToken()).toBe(VALID_TOKEN);
     });
 });
 
@@ -138,7 +142,7 @@ describe("overlapping credential checks", () => {
         await slow;
 
         expect(session.state.state.auth.viewer?.login).toBe("second");
-        expect(Object.values(store.entries())).toEqual(["github_pat_b"]);
+        expect(storedToken()).toBe("github_pat_b");
     });
 
     it("does not let a slow failure undo a newer successful connect", async () => {
