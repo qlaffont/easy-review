@@ -1,0 +1,1 @@
+bun audit --audit-level=high --only=prod
