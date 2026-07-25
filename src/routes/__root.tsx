@@ -1,6 +1,9 @@
 import { TanStackDevtools } from "@tanstack/react-devtools";
-import { HeadContent, Scripts, createRootRoute } from "@tanstack/react-router";
+import { HeadContent, Outlet, Scripts, createRootRoute } from "@tanstack/react-router";
 import { TanStackRouterDevtoolsPanel } from "@tanstack/react-router-devtools";
+
+import { SessionGate } from "#/components/session-gate.tsx";
+import { SessionProvider } from "#/lib/session/provider.tsx";
 
 import appCss from "../styles.css?url";
 
@@ -15,7 +18,7 @@ export const Route = createRootRoute({
                 content: "width=device-width, initial-scale=1",
             },
             {
-                title: "TanStack Start Starter",
+                title: "Easy Review",
             },
         ],
         links: [
@@ -26,7 +29,16 @@ export const Route = createRootRoute({
         ],
     }),
     shellComponent: RootDocument,
+    component: RootLayout,
 });
+
+function RootLayout() {
+    return (
+        <SessionGate>
+            <Outlet />
+        </SessionGate>
+    );
+}
 
 function RootDocument({ children }: { children: React.ReactNode }) {
     return (
@@ -35,7 +47,7 @@ function RootDocument({ children }: { children: React.ReactNode }) {
                 <HeadContent />
             </head>
             <body>
-                {children}
+                <SessionProvider>{children}</SessionProvider>
                 <TanStackDevtools
                     config={{
                         position: "bottom-right",
