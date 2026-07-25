@@ -4,10 +4,10 @@
 
 **Blocked by:** 06 — Staged review + submit (+ thread replies); 07 — PR lifecycle controls
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] Keyboard basics support moving selection and opening the selected PR
-- [ ] Command palette lists and runs available session actions
-- [ ] User can copy PR URL, title, and branch name
-- [ ] No chord-sequence engine required; actions are named so chords can attach later
-- [ ] Behavior is wired through session/actions rather than one-off UI-only handlers where practical
+- [x] Keyboard basics support moving selection and opening the selected PR
+- [x] Command palette lists and runs available session actions
+- [x] User can copy PR URL, title, and branch name
+- [x] No chord-sequence engine required; actions are named so chords can attach later
+- [x] Behavior is wired through session/actions rather than one-off UI-only handlers where practical

@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 
 import type { PullRequestFile } from "#/lib/session/types.ts";
 
+import { targetFromSummary, useSetActionTarget } from "#/components/actions/actions-provider.tsx";
 import { FileDiffViewer } from "#/components/pr/file-diff-viewer.tsx";
 import { ReviewDraftBar } from "#/components/pr/review-draft-bar.tsx";
 import { ReviewThreadsPanel } from "#/components/pr/review-threads.tsx";
@@ -20,6 +21,8 @@ export function ReviewChanges({ repository, number }: { repository: string; numb
     const selectedDiff = useSelector(session.state, () =>
         selectedPath ? session.getFileDiff(repository, number, selectedPath) : null,
     );
+    const headline = page.detail ?? page.summary;
+    useSetActionTarget(headline ? targetFromSummary(headline) : null);
 
     useEffect(() => {
         void session.loadPullRequest(repository, number);
@@ -38,7 +41,6 @@ export function ReviewChanges({ repository, number }: { repository: string; numb
         }
     }, [session, repository, number, selectedPath]);
 
-    const headline = page.detail ?? page.summary;
     const [owner = "", repo = ""] = repository.split("/");
     const pendingOnFile = draft.comments.filter((comment) => comment.path === selectedPath);
 

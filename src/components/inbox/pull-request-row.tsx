@@ -6,6 +6,7 @@ import type { PullRequestSummary } from "#/lib/session/types.ts";
 
 import { ChecksDot } from "#/components/pr/checks-dot.tsx";
 import { formatRelativeTime } from "#/lib/format.ts";
+import { cn } from "#/lib/utils.ts";
 
 function ReviewProgress({ pullRequest }: { pullRequest: PullRequestSummary }) {
     const approvals = pullRequest.reviewers.filter((reviewer) => reviewer.state === "approved").length;
@@ -31,14 +32,25 @@ function ReviewProgress({ pullRequest }: { pullRequest: PullRequestSummary }) {
     return <span>No reviewers</span>;
 }
 
-export const PullRequestRow = memo(function PullRequestRow({ pullRequest }: { pullRequest: PullRequestSummary }) {
+export const PullRequestRow = memo(function PullRequestRow({
+    pullRequest,
+    selected = false,
+}: {
+    pullRequest: PullRequestSummary;
+    selected?: boolean;
+}) {
     const [owner = "", repo = ""] = pullRequest.repository.split("/");
 
     return (
         <Link
             to="/pr/$owner/$repo/$number"
             params={{ owner, repo, number: String(pullRequest.number) }}
-            className="inbox-row grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-3 border-b px-3 py-2 text-sm no-underline last:border-b-0 hover:bg-accent/60"
+            data-selected={selected || undefined}
+            aria-current={selected ? "true" : undefined}
+            className={cn(
+                "inbox-row grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-3 border-b px-3 py-2 text-sm no-underline last:border-b-0 hover:bg-accent/60",
+                selected && "bg-accent",
+            )}
         >
             <ChecksDot state={pullRequest.checks} />
 

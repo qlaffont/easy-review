@@ -14,6 +14,7 @@ import { useEffect } from "react";
 import type { PullRequestPage } from "#/lib/session/session.ts";
 import type { CheckRun, CheckState, PullRequestDetail, PullRequestSummary } from "#/lib/session/types.ts";
 
+import { targetFromSummary, useSetActionTarget } from "#/components/actions/actions-provider.tsx";
 import { ChecksDot } from "#/components/pr/checks-dot.tsx";
 import { Markdown } from "#/components/pr/markdown.tsx";
 import { PullRequestControls } from "#/components/pr/pull-request-controls.tsx";
@@ -28,6 +29,8 @@ type Headline = PullRequestSummary;
 export function PullRequestOverview({ repository, number }: { repository: string; number: number }) {
     const session = useSession();
     const page = useSelector(session.state, () => session.getPullRequestPage(repository, number));
+    const headline: Headline | null = page.detail ?? page.summary;
+    useSetActionTarget(headline ? targetFromSummary(headline) : null);
 
     useEffect(() => {
         void session.loadPullRequest(repository, number);
@@ -48,8 +51,6 @@ export function PullRequestOverview({ repository, number }: { repository: string
             window.removeEventListener("focus", revalidateWhenVisible);
         };
     }, [session, repository, number]);
-
-    const headline: Headline | null = page.detail ?? page.summary;
 
     if (!headline) {
         return <PullRequestFallback page={page} />;

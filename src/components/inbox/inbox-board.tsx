@@ -1,9 +1,12 @@
+import { useNavigate } from "@tanstack/react-router";
 import { useSelector } from "@tanstack/react-store";
 import { ChevronRight, RefreshCw } from "lucide-react";
-import { useEffect } from "react";
+import { useEffect, useEffectEvent, useState } from "react";
 
 import type { InboxSection } from "#/lib/session/inbox-sections.ts";
+import type { PullRequestSummary } from "#/lib/session/types.ts";
 
+import { targetFromSummary, useSetActionTarget } from "#/components/actions/actions-provider.tsx";
 import { emptySectionRow, PullRequestRow } from "#/components/inbox/pull-request-row.tsx";
 import { SectionLayoutEditor } from "#/components/inbox/section-layout-editor.tsx";
 import { useOpenRepoPicker } from "#/components/repos/repo-picker.tsx";
@@ -14,11 +17,48 @@ import { cn } from "#/lib/utils.ts";
 
 export function InboxBoard() {
     const session = useSession();
+    const navigate = useNavigate();
     const openRepoPicker = useOpenRepoPicker();
     const inbox = useSessionState((state) => state.inbox);
     const selectedCount = useSessionState((state) => state.repos.selected.length);
-    // Sections are derived from the whole store, so recompute whenever any of it changes.
     const sections = useSelector(session.state, () => session.getInboxSections());
+    const [selectedKey, setSelectedKey] = useState<string | null>(null);
+
+    const flatRows = sections.flatMap((section) => section.pullRequests);
+    const selected = flatRows.find((pullRequest) => pullRequest.key === selectedKey) ?? flatRows[0] ?? null;
+
+    useSetActionTarget(selected ? targetFromSummary(selected) : null);
+
+    useEffect(() => {
+        if (selected && selected.key !== selectedKey) {
+            setSelectedKey(selected.key);
+        }
+    }, [selected, selectedKey]);
+
+    const moveSelection = useEffectEvent((delta: number) => {
+        if (flatRows.length === 0) {
+            return;
+        }
+
+        const currentIndex = Math.max(
+            0,
+            flatRows.findIndex((pullRequest) => pullRequest.key === selected?.key),
+        );
+        const nextIndex = Math.min(flatRows.length - 1, Math.max(0, currentIndex + delta));
+        setSelectedKey(flatRows[nextIndex]!.key);
+    });
+
+    const openSelected = useEffectEvent(() => {
+        if (!selected) {
+            return;
+        }
+
+        const [owner = "", repo = ""] = selected.repository.split("/");
+        void navigate({
+            to: "/pr/$owner/$repo/$number",
+            params: { owner, repo, number: String(selected.number) },
+        });
+    });
 
     useEffect(() => {
         void session.loadInbox();
@@ -40,6 +80,46 @@ export function InboxBoard() {
         };
     }, [session]);
 
+    useEffect(() => {
+        function onKeyDown(event: KeyboardEvent) {
+            if (event.defaultPrevented || event.metaKey || event.ctrlKey || event.altKey) {
+                return;
+            }
+
+            const target = event.target;
+            if (!(target instanceof HTMLElement)) {
+                return;
+            }
+
+            if (
+                target.isContentEditable ||
+                target.closest("input, textarea, select, button, a, [role='button'], [role='menuitem']")
+            ) {
+                return;
+            }
+
+            if (event.key === "j" || event.key === "ArrowDown") {
+                event.preventDefault();
+                moveSelection(1);
+                return;
+            }
+
+            if (event.key === "k" || event.key === "ArrowUp") {
+                event.preventDefault();
+                moveSelection(-1);
+                return;
+            }
+
+            if (event.key === "Enter") {
+                event.preventDefault();
+                openSelected();
+            }
+        }
+
+        window.addEventListener("keydown", onKeyDown);
+        return () => window.removeEventListener("keydown", onKeyDown);
+    }, []);
+
     if (selectedCount === 0) {
         return (
             <div className="flex flex-col items-start gap-3 rounded-lg border border-dashed p-8">
@@ -60,6 +140,7 @@ export function InboxBoard() {
                         : inbox.lastLoadedAt
                           ? `Updated ${formatRelativeTime(inbox.lastLoadedAt)}`
                           : "Not synced yet"}
+                    <span className="ml-2 hidden sm:inline">· j/k select · Enter open · ⌘K commands</span>
                 </p>
                 <div className="flex items-center gap-2">
                     <SectionLayoutEditor />
@@ -87,8 +168,10 @@ export function InboxBoard() {
                         <InboxSectionPanel
                             key={section.id}
                             section={section}
+                            selectedKey={selected?.key ?? null}
                             isExpanded={inbox.expandedSections.includes(section.id)}
                             onToggle={() => void session.toggleSection(section.id)}
+                            onSelect={setSelectedKey}
                         />
                     ))}
                 </div>
@@ -99,12 +182,16 @@ export function InboxBoard() {
 
 function InboxSectionPanel({
     section,
+    selectedKey,
     isExpanded,
     onToggle,
+    onSelect,
 }: {
     section: InboxSection;
+    selectedKey: string | null;
     isExpanded: boolean;
     onToggle: () => void;
+    onSelect: (key: string) => void;
 }) {
     return (
         <section className="overflow-hidden rounded-lg border">
@@ -132,11 +219,32 @@ function InboxSectionPanel({
                 ) : (
                     <div className="flex flex-col">
                         {section.pullRequests.map((pullRequest) => (
-                            <PullRequestRow key={pullRequest.key} pullRequest={pullRequest} />
+                            <SelectableRow
+                                key={pullRequest.key}
+                                pullRequest={pullRequest}
+                                selected={pullRequest.key === selectedKey}
+                                onSelect={onSelect}
+                            />
                         ))}
                     </div>
                 )
             ) : null}
         </section>
+    );
+}
+
+function SelectableRow({
+    pullRequest,
+    selected,
+    onSelect,
+}: {
+    pullRequest: PullRequestSummary;
+    selected: boolean;
+    onSelect: (key: string) => void;
+}) {
+    return (
+        <div onMouseEnter={() => onSelect(pullRequest.key)} onFocusCapture={() => onSelect(pullRequest.key)}>
+            <PullRequestRow pullRequest={pullRequest} selected={selected} />
+        </div>
     );
 }
