@@ -4,14 +4,20 @@ import type { SessionError } from "#/lib/session/errors.ts";
 import type { InboxSection, InboxSectionId } from "#/lib/session/inbox-sections.ts";
 import type { GithubClient, GithubViewer, KeyValueStore } from "#/lib/session/ports.ts";
 import type {
+    DiffSide,
     FileDiff,
+    PendingLineComment,
     PullRequestDetail,
     PullRequestFile,
     PullRequestSummary,
     Repository,
+    ReviewDraft,
+    ReviewEvent,
+    ReviewThread,
+    ReviewThreadComment,
 } from "#/lib/session/types.ts";
 
-import { missingToken, toSessionError } from "#/lib/session/errors.ts";
+import { EasyReviewError, missingToken, toSessionError } from "#/lib/session/errors.ts";
 import { DEFAULT_INBOX_SECTIONS, groupIntoSections } from "#/lib/session/inbox-sections.ts";
 
 const TOKEN_KEY = "auth:token";
@@ -21,6 +27,12 @@ const REPOS_CACHE_KEY = "repos:cache";
 const REPOS_ACCOUNT_KEY = "repos:account";
 const INBOX_CACHE_KEY = "inbox:cache";
 const INBOX_EXPANDED_KEY = "inbox:expanded";
+/** Index of every persisted draft key so disconnect can wipe them without a store scan. */
+const DRAFT_INDEX_KEY = "review-drafts:index";
+
+function draftStorageKey(login: string, repository: string, number: number): string {
+    return `review-draft:${login}:${repository}#${number}`;
+}
 
 const DEFAULT_EXPANDED_SECTIONS: Array<InboxSectionId> = ["needs-your-review", "returned-to-you"];
 
@@ -94,12 +106,22 @@ export type PullRequestPage = PullRequestView & {
     summary: PullRequestSummary | null;
 };
 
+export type ReviewThreadsState = {
+    status: "idle" | "loading" | "ready" | "error";
+    items: Array<ReviewThread>;
+    error: SessionError | null;
+};
+
 export type SessionState = {
     auth: AuthState;
     repos: RepositoriesState;
     inbox: InboxState;
     /** Keyed by `owner/repo#number`. */
     pullRequests: Record<string, PullRequestView>;
+    /** Staged reviews keyed by `owner/repo#number`. */
+    reviewDrafts: Record<string, ReviewDraft>;
+    /** Existing threads keyed by `owner/repo#number`. */
+    reviewThreads: Record<string, ReviewThreadsState>;
 };
 
 export type EasyReviewSessionDeps = {
@@ -173,11 +195,15 @@ type InboxCache = {
  * every GitHub interaction, so behaviour can be tested without a DOM or a real GitHub.
  */
 export function createEasyReviewSession({ github, store }: EasyReviewSessionDeps) {
+    const initialThreadsState: ReviewThreadsState = { status: "idle", items: [], error: null };
+
     const state = new Store<SessionState>({
         auth: initialAuthState,
         repos: initialRepositoriesState,
         inbox: initialInboxState,
         pullRequests: {},
+        reviewDrafts: {},
+        reviewThreads: {},
     });
 
     /** The verified token, kept out of the reactive state so the UI can never render it. */
@@ -194,6 +220,9 @@ export function createEasyReviewSession({ github, store }: EasyReviewSessionDeps
     const latestPullRequestLoads = new Map<string, number>();
     const latestFileListLoads = new Map<string, number>();
     const latestFileDiffLoads = new Map<string, number>();
+    const latestReviewThreadLoads = new Map<string, number>();
+    /** Last-write-wins for summary typing so overlapping persists cannot drop characters. */
+    const latestDraftBodyWrites = new Map<string, number>();
 
     function setAuth(patch: Partial<AuthState>) {
         state.setState((prev) => ({ ...prev, auth: { ...prev.auth, ...patch } }));
@@ -287,16 +316,21 @@ export function createEasyReviewSession({ github, store }: EasyReviewSessionDeps
             latestFileDiffLoads.set(key, attempt + 1);
         }
 
+        for (const [key, attempt] of latestReviewThreadLoads) {
+            latestReviewThreadLoads.set(key, attempt + 1);
+        }
+
         await Promise.all([
             store.remove(SELECTED_REPOS_KEY),
             store.remove(REPOS_CACHE_KEY),
             store.remove(REPOS_ACCOUNT_KEY),
             store.remove(INBOX_CACHE_KEY),
             store.remove(INBOX_EXPANDED_KEY),
+            clearDraftStorage(),
         ]);
         setRepos({ ...initialRepositoriesState });
         setInbox({ ...initialInboxState });
-        state.setState((prev) => ({ ...prev, pullRequests: {} }));
+        state.setState((prev) => ({ ...prev, pullRequests: {}, reviewDrafts: {}, reviewThreads: {} }));
     }
 
     /**
@@ -582,6 +616,7 @@ export function createEasyReviewSession({ github, store }: EasyReviewSessionDeps
                 lastLoadedAt: new Date().toISOString(),
                 error: null,
             });
+            await syncDraftWithHead(detail);
         } catch (error) {
             if (attempt !== latestPullRequestLoads.get(key)) return;
             setPullRequest(key, {
@@ -722,6 +757,281 @@ export function createEasyReviewSession({ github, store }: EasyReviewSessionDeps
         return state.state.pullRequests[pullRequestKey(repository, number)]?.diffs[path] ?? initialFileDiffState;
     }
 
+    function emptyDraft(repository: string, number: number, headSha: string): ReviewDraft {
+        return {
+            repository,
+            number,
+            headSha,
+            event: "comment",
+            body: "",
+            comments: [],
+            stale: false,
+        };
+    }
+
+    function viewerLogin(): string | null {
+        return state.state.auth.viewer?.login ?? null;
+    }
+
+    async function clearDraftStorage(): Promise<void> {
+        const keys = (await readJson<Array<string>>(DRAFT_INDEX_KEY)) ?? [];
+        await Promise.all([...keys.map((key) => store.remove(key)), store.remove(DRAFT_INDEX_KEY)]);
+    }
+
+    async function rememberDraftKey(storageKey: string): Promise<void> {
+        const keys = (await readJson<Array<string>>(DRAFT_INDEX_KEY)) ?? [];
+        if (!keys.includes(storageKey)) {
+            await store.set(DRAFT_INDEX_KEY, JSON.stringify([...keys, storageKey]));
+        }
+    }
+
+    async function persistDraft(draft: ReviewDraft): Promise<void> {
+        const key = pullRequestKey(draft.repository, draft.number);
+        state.setState((prev) => ({ ...prev, reviewDrafts: { ...prev.reviewDrafts, [key]: draft } }));
+
+        const login = viewerLogin();
+        if (!login) {
+            return;
+        }
+
+        const storageKey = draftStorageKey(login, draft.repository, draft.number);
+        await store.set(storageKey, JSON.stringify(draft));
+        await rememberDraftKey(storageKey);
+    }
+
+    /**
+     * Load a draft from browser storage (or create an empty one) and mark it stale when the live
+     * head has moved past the SHA the comments were written against. An empty stored head means
+     * the draft was staged before the PR detail arrived — bind it to the live tip, do not stale it.
+     */
+    async function syncDraftWithHead(detail: PullRequestDetail): Promise<void> {
+        const key = pullRequestKey(detail.repository, detail.number);
+        const login = viewerLogin();
+        const stored = login
+            ? await readJson<ReviewDraft>(draftStorageKey(login, detail.repository, detail.number))
+            : null;
+        const base = stored ?? emptyDraft(detail.repository, detail.number, detail.headSha);
+        const boundHead = Boolean(stored?.headSha);
+        const draft: ReviewDraft = {
+            ...base,
+            repository: detail.repository,
+            number: detail.number,
+            stale: boundHead && stored!.headSha !== detail.headSha,
+            headSha: boundHead ? stored!.headSha : detail.headSha,
+        };
+
+        state.setState((prev) => ({ ...prev, reviewDrafts: { ...prev.reviewDrafts, [key]: draft } }));
+
+        if (stored && !boundHead && draft.comments.length > 0) {
+            await persistDraft(draft);
+        }
+    }
+
+    function getReviewDraft(repository: string, number: number): ReviewDraft {
+        const key = pullRequestKey(repository, number);
+        const live = state.state.reviewDrafts[key];
+        if (live) {
+            return live;
+        }
+
+        const headSha = state.state.pullRequests[key]?.detail?.headSha ?? "";
+        return emptyDraft(repository, number, headSha);
+    }
+
+    async function ensureDraft(repository: string, number: number): Promise<ReviewDraft> {
+        const key = pullRequestKey(repository, number);
+        const existing = state.state.reviewDrafts[key];
+        if (existing) {
+            return existing;
+        }
+
+        const detail = state.state.pullRequests[key]?.detail;
+        if (detail) {
+            await syncDraftWithHead(detail);
+            return state.state.reviewDrafts[key] ?? emptyDraft(repository, number, detail.headSha);
+        }
+
+        const draft = emptyDraft(repository, number, "");
+        state.setState((prev) => ({ ...prev, reviewDrafts: { ...prev.reviewDrafts, [key]: draft } }));
+        return draft;
+    }
+
+    async function setReviewEvent(repository: string, number: number, event: ReviewEvent): Promise<void> {
+        const draft = await ensureDraft(repository, number);
+        await persistDraft({ ...draft, event });
+    }
+
+    async function setReviewBody(repository: string, number: number, body: string): Promise<void> {
+        const key = pullRequestKey(repository, number);
+        const attempt = (latestDraftBodyWrites.get(key) ?? 0) + 1;
+        latestDraftBodyWrites.set(key, attempt);
+        await ensureDraft(repository, number);
+        if (attempt !== latestDraftBodyWrites.get(key)) {
+            return;
+        }
+
+        const draft = state.state.reviewDrafts[key] ?? (await ensureDraft(repository, number));
+        await persistDraft({ ...draft, body });
+    }
+
+    async function addPendingComment(
+        repository: string,
+        number: number,
+        input: { path: string; line: number; side: DiffSide; body: string },
+    ): Promise<PendingLineComment> {
+        const draft = await ensureDraft(repository, number);
+        const headSha = state.state.pullRequests[pullRequestKey(repository, number)]?.detail?.headSha ?? draft.headSha;
+        const comment: PendingLineComment = {
+            id: crypto.randomUUID(),
+            path: input.path,
+            line: input.line,
+            side: input.side,
+            body: input.body,
+        };
+
+        await persistDraft({
+            ...draft,
+            headSha: draft.comments.length === 0 && !draft.stale ? headSha : draft.headSha,
+            comments: [...draft.comments, comment],
+        });
+
+        return comment;
+    }
+
+    async function updatePendingComment(
+        repository: string,
+        number: number,
+        commentId: string,
+        body: string,
+    ): Promise<void> {
+        const draft = await ensureDraft(repository, number);
+        await persistDraft({
+            ...draft,
+            comments: draft.comments.map((comment) => (comment.id === commentId ? { ...comment, body } : comment)),
+        });
+    }
+
+    async function removePendingComment(repository: string, number: number, commentId: string): Promise<void> {
+        const draft = await ensureDraft(repository, number);
+        const comments = draft.comments.filter((comment) => comment.id !== commentId);
+        await persistDraft({ ...draft, comments });
+    }
+
+    /** Drop a stale or unwanted draft so the reviewer can start clean against the current head. */
+    async function discardReviewDraft(repository: string, number: number): Promise<void> {
+        const headSha = state.state.pullRequests[pullRequestKey(repository, number)]?.detail?.headSha ?? "";
+        await persistDraft(emptyDraft(repository, number, headSha));
+    }
+
+    async function submitReview(repository: string, number: number): Promise<void> {
+        const draft = await ensureDraft(repository, number);
+        const detail = state.state.pullRequests[pullRequestKey(repository, number)]?.detail;
+
+        if (!detail) {
+            throw new EasyReviewError("unknown", "Load the pull request before submitting a review.");
+        }
+
+        if (draft.stale || draft.headSha !== detail.headSha) {
+            throw new EasyReviewError(
+                "unknown",
+                "This draft was written against an older head commit. Discard it and review the new tip.",
+            );
+        }
+
+        if (!draft.body.trim() && draft.comments.length === 0 && draft.event === "comment") {
+            throw new EasyReviewError("unknown", "Add a comment or a summary before submitting a review.");
+        }
+
+        await github.submitReview(requireToken(), {
+            repository,
+            number,
+            headSha: detail.headSha,
+            event: draft.event,
+            body: draft.body,
+            comments: draft.comments.map(({ path, line, side, body }) => ({ path, line, side, body })),
+        });
+
+        await persistDraft(emptyDraft(repository, number, detail.headSha));
+        await loadReviewThreads(repository, number);
+    }
+
+    async function loadReviewThreads(repository: string, number: number): Promise<void> {
+        const key = pullRequestKey(repository, number);
+        const attempt = (latestReviewThreadLoads.get(key) ?? 0) + 1;
+        latestReviewThreadLoads.set(key, attempt);
+
+        state.setState((prev) => ({
+            ...prev,
+            reviewThreads: {
+                ...prev.reviewThreads,
+                [key]: { status: "loading", items: prev.reviewThreads[key]?.items ?? [], error: null },
+            },
+        }));
+
+        try {
+            const items = await github.listReviewThreads(requireToken(), repository, number);
+            if (attempt !== latestReviewThreadLoads.get(key)) {
+                return;
+            }
+
+            state.setState((prev) => ({
+                ...prev,
+                reviewThreads: { ...prev.reviewThreads, [key]: { status: "ready", items, error: null } },
+            }));
+        } catch (error) {
+            if (attempt !== latestReviewThreadLoads.get(key)) {
+                return;
+            }
+
+            state.setState((prev) => ({
+                ...prev,
+                reviewThreads: {
+                    ...prev.reviewThreads,
+                    [key]: {
+                        status: "error",
+                        items: prev.reviewThreads[key]?.items ?? [],
+                        error: toSessionError(error),
+                    },
+                },
+            }));
+        }
+    }
+
+    function getReviewThreads(repository: string, number: number): ReviewThreadsState {
+        return state.state.reviewThreads[pullRequestKey(repository, number)] ?? initialThreadsState;
+    }
+
+    async function replyToReviewThread(
+        repository: string,
+        number: number,
+        threadId: string,
+        body: string,
+    ): Promise<ReviewThreadComment> {
+        const trimmed = body.trim();
+        if (!trimmed) {
+            throw new EasyReviewError("unknown", "Write a reply before sending it.");
+        }
+
+        const reply = await github.replyToReviewThread(requireToken(), threadId, trimmed);
+        const key = pullRequestKey(repository, number);
+        state.setState((prev) => {
+            const current = prev.reviewThreads[key] ?? initialThreadsState;
+            return {
+                ...prev,
+                reviewThreads: {
+                    ...prev.reviewThreads,
+                    [key]: {
+                        ...current,
+                        items: current.items.map((thread) =>
+                            thread.id === threadId ? { ...thread, comments: [...thread.comments, reply] } : thread,
+                        ),
+                    },
+                },
+            };
+        });
+        return reply;
+    }
+
     /** Every default section, empty ones included, holding only allowlisted repositories. */
     function getInboxSections(): Array<InboxSection> {
         const { inbox, repos, auth } = state.state;
@@ -756,6 +1066,17 @@ export function createEasyReviewSession({ github, store }: EasyReviewSessionDeps
         refreshPullRequestFiles,
         loadFileDiff,
         getFileDiff,
+        getReviewDraft,
+        setReviewEvent,
+        setReviewBody,
+        addPendingComment,
+        updatePendingComment,
+        removePendingComment,
+        discardReviewDraft,
+        submitReview,
+        loadReviewThreads,
+        getReviewThreads,
+        replyToReviewThread,
     };
 }
 

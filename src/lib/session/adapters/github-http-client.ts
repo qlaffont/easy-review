@@ -9,7 +9,10 @@ import type {
     PullRequestSummary,
     Repository,
     ReviewDecision,
+    ReviewEvent,
     ReviewState,
+    ReviewThread,
+    ReviewThreadComment,
 } from "#/lib/session/types.ts";
 
 import { buildFileDiff } from "#/lib/session/build-file-diff.ts";
@@ -332,7 +335,97 @@ export function createGithubHttpClient(fetchImpl: typeof fetch = globalThis.fetc
 
             return buildFileDiff({ path, before: before?.bytes ?? null, after: after?.bytes ?? null }, { force });
         },
+
+        async listReviewThreads(token, repository, number) {
+            const [owner = "", name = ""] = repository.split("/");
+            const threads: Array<ReviewThread> = [];
+            let cursor: string | null = null;
+
+            for (let page = 0; page < 20; page++) {
+                const data: ReviewThreadsQuery = await graphql<ReviewThreadsQuery>(token, REVIEW_THREADS_QUERY, {
+                    owner,
+                    name,
+                    number,
+                    cursor,
+                });
+                const connection = data.repository?.pullRequest?.reviewThreads;
+
+                if (!connection) {
+                    throw new EasyReviewError(
+                        "not-found",
+                        `${repository}#${number} does not exist, or this token cannot see it.`,
+                    );
+                }
+
+                for (const node of connection.nodes) {
+                    threads.push(toReviewThread(node));
+                }
+
+                if (!connection.pageInfo.hasNextPage) {
+                    break;
+                }
+
+                cursor = connection.pageInfo.endCursor;
+            }
+
+            return threads;
+        },
+
+        async submitReview(token, input) {
+            const [owner = "", name = ""] = input.repository.split("/");
+            const event = toGithubReviewEvent(input.event);
+
+            await restJson(token, "POST", `/repos/${owner}/${name}/pulls/${input.number}/reviews`, {
+                commit_id: input.headSha,
+                event,
+                body: input.body,
+                comments: input.comments.map((comment) => ({
+                    path: comment.path,
+                    line: comment.line,
+                    side: comment.side,
+                    body: comment.body,
+                })),
+            });
+        },
+
+        async replyToReviewThread(token, threadId, body) {
+            const data = await graphql<{
+                addPullRequestReviewThreadReply: { comment: ReviewThreadCommentNode };
+            }>(token, REPLY_TO_THREAD_MUTATION, { threadId, body });
+
+            return toThreadComment(data.addPullRequestReviewThreadReply.comment);
+        },
     };
+
+    async function restJson(token: string, method: string, path: string, body: unknown): Promise<unknown> {
+        let response: Response;
+
+        try {
+            response = await fetchImpl(`${REST_URL}${path}`, {
+                method,
+                headers: {
+                    authorization: `Bearer ${token}`,
+                    accept: "application/vnd.github+json",
+                    "content-type": "application/json",
+                },
+                body: JSON.stringify(body),
+            });
+        } catch (cause) {
+            throw new EasyReviewError("network", "Could not reach GitHub. Check your connection and try again.", {
+                cause,
+            });
+        }
+
+        if (!response.ok) {
+            throw errorForStatus(response);
+        }
+
+        if (response.status === 204) {
+            return null;
+        }
+
+        return response.json();
+    }
 
     async function rest(token: string, path: string): Promise<Response> {
         try {
@@ -902,3 +995,108 @@ const REPOSITORIES_QUERY = `
         }
     }
 `;
+
+type ReviewThreadCommentNode = {
+    id: string;
+    body: string;
+    createdAt: string;
+    author: { login: string } | null;
+};
+
+type ReviewThreadNode = {
+    id: string;
+    isResolved: boolean;
+    path: string;
+    line: number | null;
+    diffSide: "LEFT" | "RIGHT" | null;
+    comments: { nodes: Array<ReviewThreadCommentNode> };
+};
+
+type ReviewThreadsQuery = {
+    repository: {
+        pullRequest: {
+            reviewThreads: {
+                nodes: Array<ReviewThreadNode>;
+                pageInfo: { hasNextPage: boolean; endCursor: string | null };
+            } | null;
+        } | null;
+    } | null;
+};
+
+const REVIEW_THREADS_QUERY = `
+    query EasyReviewReviewThreads($owner: String!, $name: String!, $number: Int!, $cursor: String) {
+        repository(owner: $owner, name: $name) {
+            pullRequest(number: $number) {
+                reviewThreads(first: 50, after: $cursor) {
+                    nodes {
+                        id
+                        isResolved
+                        path
+                        line
+                        diffSide
+                        comments(first: 50) {
+                            nodes {
+                                id
+                                body
+                                createdAt
+                                author {
+                                    login
+                                }
+                            }
+                        }
+                    }
+                    pageInfo {
+                        hasNextPage
+                        endCursor
+                    }
+                }
+            }
+        }
+    }
+`;
+
+const REPLY_TO_THREAD_MUTATION = `
+    mutation EasyReviewReplyToThread($threadId: ID!, $body: String!) {
+        addPullRequestReviewThreadReply(input: { pullRequestReviewThreadId: $threadId, body: $body }) {
+            comment {
+                id
+                body
+                createdAt
+                author {
+                    login
+                }
+            }
+        }
+    }
+`;
+
+function toGithubReviewEvent(event: ReviewEvent): "COMMENT" | "APPROVE" | "REQUEST_CHANGES" {
+    switch (event) {
+        case "approve":
+            return "APPROVE";
+        case "request-changes":
+            return "REQUEST_CHANGES";
+        default:
+            return "COMMENT";
+    }
+}
+
+function toThreadComment(node: ReviewThreadCommentNode): ReviewThreadComment {
+    return {
+        id: node.id,
+        author: node.author?.login ?? "ghost",
+        body: node.body,
+        createdAt: node.createdAt,
+    };
+}
+
+function toReviewThread(node: ReviewThreadNode): ReviewThread {
+    return {
+        id: node.id,
+        path: node.path,
+        line: node.line,
+        side: node.diffSide,
+        isResolved: node.isResolved,
+        comments: node.comments.nodes.map(toThreadComment),
+    };
+}

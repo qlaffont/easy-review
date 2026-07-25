@@ -107,6 +107,58 @@ export type FileDiff = {
     stub: FileStubReason | null;
 };
 
+/** What GitHub receives when the staged review is submitted. */
+export type ReviewEvent = "comment" | "approve" | "request-changes";
+
+/** One side of a diff line, matching GitHub's pull review comment API. */
+export type DiffSide = "LEFT" | "RIGHT";
+
+/** A line comment that lives only in this browser until submit. */
+export type PendingLineComment = {
+    /** Stable for the life of the draft — used as the React key and for edits/removals. */
+    id: string;
+    path: string;
+    line: number;
+    side: DiffSide;
+    body: string;
+};
+
+/**
+ * Everything the reviewer has staged for one pull request. Keyed and persisted with the head
+ * SHA so a push that moves the tip can invalidate comments aimed at vanished lines.
+ */
+export type ReviewDraft = {
+    repository: string;
+    number: number;
+    headSha: string;
+    event: ReviewEvent;
+    /** Optional summary posted with the review itself. */
+    body: string;
+    comments: Array<PendingLineComment>;
+    /**
+     * Set when the live head no longer matches `headSha`. The draft is kept so the reviewer can
+     * read it, but submit is blocked until they discard or the session rebuilds against the new tip.
+     */
+    stale: boolean;
+};
+
+export type ReviewThreadComment = {
+    id: string;
+    author: string;
+    body: string;
+    createdAt: string;
+};
+
+/** An existing conversation on the diff, loaded so the reviewer can reply in-product. */
+export type ReviewThread = {
+    id: string;
+    path: string;
+    line: number | null;
+    side: DiffSide | null;
+    isResolved: boolean;
+    comments: Array<ReviewThreadComment>;
+};
+
 export type Repository = {
     /** `owner/repo`, the identity Easy Review uses everywhere. */
     nameWithOwner: string;

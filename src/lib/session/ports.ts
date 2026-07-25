@@ -1,9 +1,13 @@
 import type {
     FileDiff,
+    PendingLineComment,
     PullRequestDetail,
     PullRequestFile,
     PullRequestSummary,
     Repository,
+    ReviewEvent,
+    ReviewThread,
+    ReviewThreadComment,
 } from "#/lib/session/types.ts";
 
 export type GithubViewer = {
@@ -42,6 +46,22 @@ export type GithubClient = {
         path: string,
         options?: GetFileDiffOptions,
     ): Promise<FileDiff>;
+    /** Open review threads on the pull request, oldest first within each thread. */
+    listReviewThreads(token: string, repository: string, number: number): Promise<Array<ReviewThread>>;
+    /** Publish one review that carries every pending line comment. */
+    submitReview(
+        token: string,
+        input: {
+            repository: string;
+            number: number;
+            headSha: string;
+            event: ReviewEvent;
+            body: string;
+            comments: ReadonlyArray<Pick<PendingLineComment, "path" | "line" | "side" | "body">>;
+        },
+    ): Promise<void>;
+    /** Reply inside an existing thread. `threadId` is the GraphQL node id. */
+    replyToReviewThread(token: string, threadId: string, body: string): Promise<ReviewThreadComment>;
 };
 
 /** Browser persistence, narrowed to what the session needs so IndexedDB can replace it later. */

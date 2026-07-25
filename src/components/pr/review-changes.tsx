@@ -1,11 +1,13 @@
 import { Link } from "@tanstack/react-router";
 import { useSelector } from "@tanstack/react-store";
-import { ArrowLeft, FileCode2, FilePlus2, FileMinus2, FileDiff } from "lucide-react";
+import { ArrowLeft, FileCode2, FileDiff, FileMinus2, FilePlus2 } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import type { PullRequestFile } from "#/lib/session/types.ts";
 
 import { FileDiffViewer } from "#/components/pr/file-diff-viewer.tsx";
+import { ReviewDraftBar } from "#/components/pr/review-draft-bar.tsx";
+import { ReviewThreadsPanel } from "#/components/pr/review-threads.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import { useSession } from "#/lib/session/provider.tsx";
 import { cn } from "#/lib/utils.ts";
@@ -13,6 +15,7 @@ import { cn } from "#/lib/utils.ts";
 export function ReviewChanges({ repository, number }: { repository: string; number: number }) {
     const session = useSession();
     const page = useSelector(session.state, () => session.getPullRequestPage(repository, number));
+    const draft = useSelector(session.state, () => session.getReviewDraft(repository, number));
     const [selectedPath, setSelectedPath] = useState<string | null>(null);
     const selectedDiff = useSelector(session.state, () =>
         selectedPath ? session.getFileDiff(repository, number, selectedPath) : null,
@@ -37,6 +40,7 @@ export function ReviewChanges({ repository, number }: { repository: string; numb
 
     const headline = page.detail ?? page.summary;
     const [owner = "", repo = ""] = repository.split("/");
+    const pendingOnFile = draft.comments.filter((comment) => comment.path === selectedPath);
 
     return (
         <div className="flex h-[calc(100svh-3rem)] min-h-0 flex-col">
@@ -71,6 +75,7 @@ export function ReviewChanges({ repository, number }: { repository: string; numb
                     files={page.files.items}
                     status={page.files.status}
                     selectedPath={selectedPath}
+                    pendingPaths={new Set(draft.comments.map((comment) => comment.path))}
                     onSelect={setSelectedPath}
                 />
                 <section className="flex min-h-0 min-w-0 flex-col border-t md:border-t-0 md:border-l">
@@ -84,16 +89,26 @@ export function ReviewChanges({ repository, number }: { repository: string; numb
                                 diff={selectedDiff?.diff ?? null}
                                 isLoading={selectedDiff?.status === "loading" || selectedDiff?.refreshing === true}
                                 error={selectedDiff?.error?.message ?? null}
+                                pendingComments={pendingOnFile}
+                                disabled={draft.stale}
                                 onLoadAnyway={() =>
                                     void session.loadFileDiff(repository, number, selectedPath, { force: true })
                                 }
+                                onAddComment={(target, body) =>
+                                    session
+                                        .addPendingComment(repository, number, { ...target, body })
+                                        .then(() => undefined)
+                                }
                             />
+                            <ReviewThreadsPanel repository={repository} number={number} path={selectedPath} />
                         </>
                     ) : (
                         <p className="p-6 text-sm text-muted-foreground">Select a file to review its diff.</p>
                     )}
                 </section>
             </div>
+
+            <ReviewDraftBar repository={repository} number={number} />
         </div>
     );
 }
@@ -102,11 +117,13 @@ function FileList({
     files,
     status,
     selectedPath,
+    pendingPaths,
     onSelect,
 }: {
     files: Array<PullRequestFile>;
     status: string;
     selectedPath: string | null;
+    pendingPaths: Set<string>;
     onSelect: (path: string) => void;
 }) {
     if (status === "loading") {
@@ -132,7 +149,12 @@ function FileList({
                         >
                             <FileStatusIcon status={file.status} />
                             <span className="min-w-0 flex-1">
-                                <span className="block truncate font-mono">{file.path}</span>
+                                <span className="block truncate font-mono">
+                                    {file.path}
+                                    {pendingPaths.has(file.path) ? (
+                                        <span className="ml-1 text-amber-600">•</span>
+                                    ) : null}
+                                </span>
                                 <span className="mt-0.5 flex gap-2 text-[10px] text-muted-foreground tabular-nums">
                                     <span className="text-emerald-600 dark:text-emerald-400">+{file.additions}</span>
                                     <span className="text-red-600 dark:text-red-400">−{file.deletions}</span>

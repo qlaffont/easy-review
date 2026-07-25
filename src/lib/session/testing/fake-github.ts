@@ -5,6 +5,9 @@ import type {
     PullRequestFile,
     PullRequestSummary,
     Repository,
+    ReviewEvent,
+    ReviewThread,
+    ReviewThreadComment,
 } from "#/lib/session/types.ts";
 
 import { buildFileDiff } from "#/lib/session/build-file-diff.ts";
@@ -24,6 +27,19 @@ export type FakeGithub = GithubClient & {
     pullRequestQueries: Array<ReadonlyArray<string>>;
     /** Paths asked for via `getPullRequestFileDiff`, in order. */
     fileDiffQueries: Array<string>;
+    /** Submitted reviews, in order. */
+    submittedReviews: Array<{
+        repository: string;
+        number: number;
+        headSha: string;
+        event: ReviewEvent;
+        body: string;
+        comments: Array<{ path: string; line: number; side: string; body: string }>;
+    }>;
+    /** Seed an existing review thread on a pull request. */
+    addReviewThread(token: string, repository: string, number: number, thread: ReviewThread): void;
+    /** Move the head SHA so draft invalidation can be exercised. */
+    setPullRequestHead(token: string, repository: string, number: number, headSha: string): void;
     /** Revoke a token so the next call with it fails as unauthorized. */
     revokeAccount(token: string): void;
     /** Make the next call fail, whatever the token. */
@@ -138,11 +154,14 @@ export function createFakeGithub(): FakeGithub {
     const repositoriesByToken = new Map<string, Array<Repository>>();
     const pullRequestsByToken = new Map<string, Array<PullRequestDetail>>();
     const filesByPullRequest = new Map<string, Array<StoredFile>>();
+    const threadsByPullRequest = new Map<string, Array<ReviewThread>>();
     const pullRequestQueries: Array<ReadonlyArray<string>> = [];
     const fileDiffQueries: Array<string> = [];
+    const submittedReviews: FakeGithub["submittedReviews"] = [];
     const calls: Array<string> = [];
     let forcedError: EasyReviewError | null = null;
     let gate: Promise<void> | null = null;
+    let replyCounter = 0;
 
     function authenticate(token: string): GithubViewer {
         if (forcedError) {
@@ -191,6 +210,7 @@ export function createFakeGithub(): FakeGithub {
         calls,
         pullRequestQueries,
         fileDiffQueries,
+        submittedReviews,
         addAccount(token, viewer) {
             const account: GithubViewer = {
                 login: viewer?.login ?? "octocat",
@@ -218,6 +238,21 @@ export function createFakeGithub(): FakeGithub {
             const pullRequest = buildPullRequest(input);
             pullRequestsByToken.set(token, [...(pullRequestsByToken.get(token) ?? []), pullRequest]);
             return pullRequest;
+        },
+        addReviewThread(token, repository, number, thread) {
+            const key = filesKey(token, repository, number);
+            threadsByPullRequest.set(key, [...(threadsByPullRequest.get(key) ?? []), thread]);
+        },
+        setPullRequestHead(token, repository, number, headSha) {
+            const list = pullRequestsByToken.get(token) ?? [];
+            pullRequestsByToken.set(
+                token,
+                list.map((pullRequest) =>
+                    pullRequest.repository === repository && pullRequest.number === number
+                        ? { ...pullRequest, headSha }
+                        : pullRequest,
+                ),
+            );
         },
         setPullRequestFiles(token, repository, number, files) {
             filesByPullRequest.set(
@@ -332,6 +367,57 @@ export function createFakeGithub(): FakeGithub {
                 }
 
                 return buildFileDiff({ path, before: stored.before, after: stored.after }, { force });
+            });
+        },
+        listReviewThreads(token, repository, number) {
+            return respond("listReviewThreads", () => {
+                authenticate(token);
+                requirePullRequest(token, repository, number);
+                return threadsByPullRequest.get(filesKey(token, repository, number)) ?? [];
+            });
+        },
+        submitReview(token, input) {
+            return respond("submitReview", () => {
+                authenticate(token);
+                requirePullRequest(token, input.repository, input.number);
+                submittedReviews.push({
+                    repository: input.repository,
+                    number: input.number,
+                    headSha: input.headSha,
+                    event: input.event,
+                    body: input.body,
+                    comments: input.comments.map((comment) => ({ ...comment })),
+                });
+            });
+        },
+        replyToReviewThread(token, threadId, body) {
+            return respond("replyToReviewThread", (): ReviewThreadComment => {
+                authenticate(token);
+
+                for (const [key, threads] of threadsByPullRequest) {
+                    const index = threads.findIndex((thread) => thread.id === threadId);
+
+                    if (index < 0) {
+                        continue;
+                    }
+
+                    const reply: ReviewThreadComment = {
+                        id: `reply-${++replyCounter}`,
+                        author: accounts.get(token)?.login ?? "octocat",
+                        body,
+                        createdAt: new Date().toISOString(),
+                    };
+                    const updated = {
+                        ...threads[index]!,
+                        comments: [...threads[index]!.comments, reply],
+                    };
+                    const next = [...threads];
+                    next[index] = updated;
+                    threadsByPullRequest.set(key, next);
+                    return reply;
+                }
+
+                throw new EasyReviewError("not-found", "That review thread no longer exists.");
             });
         },
     };

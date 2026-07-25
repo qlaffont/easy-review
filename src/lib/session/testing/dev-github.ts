@@ -133,6 +133,24 @@ export function createSeededGithub(): GithubClient {
         });
 
         github.setPullRequestFiles(DEV_TOKEN, repository, number, seedFiles(number));
+
+        if (number % 5 === 1) {
+            github.addReviewThread(DEV_TOKEN, repository, number, {
+                id: `thread-${repository}-${number}`,
+                path: "src/index.ts",
+                line: 2,
+                side: "RIGHT",
+                isResolved: false,
+                comments: [
+                    {
+                        id: `comment-${repository}-${number}-1`,
+                        author: faker.internet.username().toLowerCase(),
+                        body: "Is returning 2 intentional, or should this stay at 1 until the flag ships?",
+                        createdAt: faker.date.recent({ days: 3 }).toISOString(),
+                    },
+                ],
+            });
+        }
     }
 
     return github;

@@ -4,11 +4,11 @@
 
 **Blocked by:** 05 — High-performance diff viewer
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] User can add/remove pending line comments without hitting GitHub until submit
-- [ ] Drafts persist in the browser keyed by PR + head SHA and survive reload
-- [ ] Head SHA change warns and invalidates incompatible drafts
-- [ ] Submit sends one review with chosen event and clears pending comments on success
-- [ ] User can reply to existing review threads
-- [ ] Session tests cover draft lifecycle, invalidation, submit, and replies via doubles
+- [x] User can add/remove pending line comments without hitting GitHub until submit
+- [x] Drafts persist in the browser keyed by PR + head SHA and survive reload
+- [x] Head SHA change warns and invalidates incompatible drafts
+- [x] Submit sends one review with chosen event and clears pending comments on success
+- [x] User can reply to existing review threads
+- [x] Session tests cover draft lifecycle, invalidation, submit, and replies via doubles
