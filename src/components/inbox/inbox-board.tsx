@@ -24,7 +24,9 @@ export function InboxBoard() {
     const sections = useSelector(session.state, () => session.getInboxSections());
     const [selectedKey, setSelectedKey] = useState<string | null>(null);
 
-    const flatRows = sections.flatMap((section) => section.pullRequests);
+    const flatRows = sections
+        .filter((section) => inbox.expandedSections.includes(section.id))
+        .flatMap((section) => section.pullRequests);
     const selected = flatRows.find((pullRequest) => pullRequest.key === selectedKey) ?? flatRows[0] ?? null;
 
     useSetActionTarget(selected ? targetFromSummary(selected) : null);
@@ -32,6 +34,9 @@ export function InboxBoard() {
     useEffect(() => {
         if (selected && selected.key !== selectedKey) {
             setSelectedKey(selected.key);
+        }
+        if (!selected && selectedKey !== null) {
+            setSelectedKey(null);
         }
     }, [selected, selectedKey]);
 
