@@ -145,9 +145,17 @@ function PullRequestHeader({ page, headline }: { page: PullRequestPage; headline
                             <ExternalLink />
                         </a>
                     </Button>
-                    {/* Ticket 05 turns this into the diff viewer. */}
-                    <Button size="sm" disabled title="The diff viewer lands in a later release.">
-                        Review changes
+                    <Button size="sm" asChild>
+                        <Link
+                            to="/pr/$owner/$repo/$number/files"
+                            params={{
+                                owner: page.repository.split("/")[0] ?? "",
+                                repo: page.repository.split("/")[1] ?? "",
+                                number: String(page.number),
+                            }}
+                        >
+                            Review changes
+                        </Link>
                     </Button>
                 </div>
             </div>

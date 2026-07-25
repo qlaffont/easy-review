@@ -2,17 +2,22 @@ import type { GithubClient, GithubViewer } from "#/lib/session/ports.ts";
 import type {
     CheckRun,
     CheckState,
+    FileChangeStatus,
     MergeableState,
     PullRequestDetail,
+    PullRequestFile,
     PullRequestSummary,
     Repository,
     ReviewDecision,
     ReviewState,
 } from "#/lib/session/types.ts";
 
+import { buildFileDiff } from "#/lib/session/build-file-diff.ts";
+import { HUGE_FILE_BYTES, stubForPath } from "#/lib/session/diff-policy.ts";
 import { EasyReviewError } from "#/lib/session/errors.ts";
 
 const GRAPHQL_URL = "https://api.github.com/graphql";
+const REST_URL = "https://api.github.com";
 const REPOSITORY_PAGE_SIZE = 100;
 /** Stops a runaway account with thousands of repos from burning the rate limit in one go. */
 const REPOSITORY_PAGE_LIMIT = 10;
@@ -20,6 +25,9 @@ const REPOSITORY_PAGE_LIMIT = 10;
 const INBOX_BATCH_SIZE = 10;
 const OPEN_PULL_REQUESTS_PER_REPOSITORY = 30;
 const MERGED_PULL_REQUESTS_PER_REPOSITORY = 10;
+/** GraphQL caps `pullRequest.files` at 100 per page. */
+const FILES_PAGE_SIZE = 100;
+const FILES_PAGE_LIMIT = 20;
 
 type GraphqlResponse<TData> = {
     data?: TData;
@@ -246,7 +254,182 @@ export function createGithubHttpClient(fetchImpl: typeof fetch = globalThis.fetc
 
             return toPullRequestDetail(node);
         },
+
+        async listPullRequestFiles(token, repository, number) {
+            const [owner = "", name = ""] = repository.split("/");
+            const files: Array<PullRequestFile> = [];
+            let cursor: string | null = null;
+
+            for (let page = 0; page < FILES_PAGE_LIMIT; page++) {
+                const data: PullRequestFilesQuery = await graphql<PullRequestFilesQuery>(
+                    token,
+                    PULL_REQUEST_FILES_QUERY,
+                    { owner, name, number, pageSize: FILES_PAGE_SIZE, cursor },
+                );
+                const connection = data.repository?.pullRequest?.files;
+
+                if (!connection) {
+                    throw new EasyReviewError(
+                        "not-found",
+                        `${repository}#${number} does not exist, or this token cannot see it.`,
+                    );
+                }
+
+                for (const node of connection.nodes) {
+                    files.push(toPullRequestFile(node));
+                }
+
+                if (!connection.pageInfo.hasNextPage) {
+                    break;
+                }
+
+                if (page === FILES_PAGE_LIMIT - 1) {
+                    throw new EasyReviewError(
+                        "unknown",
+                        `${repository}#${number} has more than ${FILES_PAGE_LIMIT * FILES_PAGE_SIZE} changed files. Easy Review stops there so the file list stays usable.`,
+                    );
+                }
+
+                cursor = connection.pageInfo.endCursor;
+            }
+
+            return files;
+        },
+
+        async getPullRequestFileDiff(token, repository, number, path, options) {
+            const force = options?.force === true;
+            const pathStub = stubForPath(path);
+
+            // Binary path stubs never expand. Generated / huge-from-path can with force.
+            if (pathStub === "binary" || (pathStub && !force)) {
+                return { path, lines: [], truncated: false, stub: pathStub };
+            }
+
+            const [owner = "", name = ""] = repository.split("/");
+            const meta = await graphql<PullRequestRefsQuery>(token, PULL_REQUEST_REFS_QUERY, {
+                owner,
+                name,
+                number,
+            });
+            const pullRequest = meta.repository?.pullRequest;
+
+            if (!pullRequest) {
+                throw new EasyReviewError(
+                    "not-found",
+                    `${repository}#${number} does not exist, or this token cannot see it.`,
+                );
+            }
+
+            const beforePath = options?.previousPath || path;
+            const [before, after] = await Promise.all([
+                readBlob(token, owner, name, beforePath, pullRequest.baseRefOid, force),
+                readBlob(token, owner, name, path, pullRequest.headRefOid, force),
+            ]);
+
+            if (before?.stub || after?.stub) {
+                return { path, lines: [], truncated: false, stub: before?.stub ?? after?.stub ?? "huge" };
+            }
+
+            return buildFileDiff({ path, before: before?.bytes ?? null, after: after?.bytes ?? null }, { force });
+        },
     };
+
+    async function rest(token: string, path: string): Promise<Response> {
+        try {
+            return await fetchImpl(`${REST_URL}${path}`, {
+                headers: {
+                    authorization: `Bearer ${token}`,
+                    accept: "application/vnd.github+json",
+                },
+            });
+        } catch (cause) {
+            throw new EasyReviewError("network", "Could not reach GitHub. Check your connection and try again.", {
+                cause,
+            });
+        }
+    }
+
+    /**
+     * Raw file bytes at one commit. `null` means the path does not exist there (added or removed
+     * files). Directories and Git LFS pointers are treated as missing content for diff purposes.
+     * When GitHub omits inline content (blobs over ~1 MB), we either stub as huge or follow
+     * `download_url` if the reviewer forced the load.
+     */
+    async function readBlob(
+        token: string,
+        owner: string,
+        name: string,
+        path: string,
+        ref: string,
+        force: boolean,
+    ): Promise<{ bytes: Uint8Array; stub?: undefined } | { bytes?: undefined; stub: "huge" } | null> {
+        const response = await rest(
+            token,
+            `/repos/${owner}/${name}/contents/${encodePath(path)}?ref=${encodeURIComponent(ref)}`,
+        );
+
+        if (response.status === 404) {
+            return null;
+        }
+
+        if (!response.ok) {
+            throw errorForStatus(response);
+        }
+
+        const payload = (await response.json()) as {
+            type?: string;
+            encoding?: string;
+            content?: string;
+            size?: number;
+            download_url?: string | null;
+        };
+
+        if (payload.type !== "file") {
+            return null;
+        }
+
+        const size = payload.size ?? 0;
+
+        if (!force && size > HUGE_FILE_BYTES) {
+            return { stub: "huge" };
+        }
+
+        if (typeof payload.content === "string" && payload.encoding === "base64") {
+            return {
+                bytes: Uint8Array.from(atob(payload.content.replace(/\n/g, "")), (char) => char.charCodeAt(0)),
+            };
+        }
+
+        if (typeof payload.content === "string") {
+            return { bytes: new TextEncoder().encode(payload.content) };
+        }
+
+        if (!payload.download_url) {
+            return size > HUGE_FILE_BYTES ? { stub: "huge" } : null;
+        }
+
+        if (!force && size > HUGE_FILE_BYTES) {
+            return { stub: "huge" };
+        }
+
+        const download = await fetchImpl(payload.download_url, {
+            headers: { authorization: `Bearer ${token}` },
+        });
+
+        if (!download.ok) {
+            throw errorForStatus(download);
+        }
+
+        return { bytes: new Uint8Array(await download.arrayBuffer()) };
+    }
+}
+
+/** Encode each path segment so nested paths survive the Contents API. */
+function encodePath(path: string): string {
+    return path
+        .split("/")
+        .map((segment) => encodeURIComponent(segment))
+        .join("/");
 }
 
 type PullRequestNode = {
@@ -465,6 +648,8 @@ type CheckContextNode =
  */
 type PullRequestDetailNode = Omit<PullRequestNode, "commits"> & {
     body: string;
+    baseRefOid: string;
+    headRefOid: string;
     mergeable: "MERGEABLE" | "CONFLICTING" | "UNKNOWN";
     labels: { nodes: Array<{ name: string; color: string }> } | null;
     assignees: { nodes: Array<{ login: string }> };
@@ -480,12 +665,36 @@ type PullRequestDetailNode = Omit<PullRequestNode, "commits"> & {
 
 type PullRequestQuery = { repository: { pullRequest: PullRequestDetailNode | null } | null };
 
+type PullRequestFileNode = {
+    path: string;
+    additions: number;
+    deletions: number;
+    changeType: "ADDED" | "DELETED" | "MODIFIED" | "RENAMED" | "COPIED" | "CHANGED";
+};
+
+type PullRequestFilesQuery = {
+    repository: {
+        pullRequest: {
+            files: {
+                nodes: Array<PullRequestFileNode>;
+                pageInfo: { hasNextPage: boolean; endCursor: string | null };
+            } | null;
+        } | null;
+    } | null;
+};
+
+type PullRequestRefsQuery = {
+    repository: { pullRequest: { baseRefOid: string; headRefOid: string } | null } | null;
+};
+
 const PULL_REQUEST_QUERY = `
     query EasyReviewPullRequest($owner: String!, $name: String!, $number: Int!) {
         repository(owner: $owner, name: $name) {
             pullRequest(number: $number) {
                 ${PULL_REQUEST_FIELDS}
                 body
+                baseRefOid
+                headRefOid
                 mergeable
                 labels(first: 20) {
                     nodes {
@@ -527,6 +736,68 @@ const PULL_REQUEST_QUERY = `
         }
     }
 `;
+
+const PULL_REQUEST_FILES_QUERY = `
+    query EasyReviewPullRequestFiles(
+        $owner: String!
+        $name: String!
+        $number: Int!
+        $pageSize: Int!
+        $cursor: String
+    ) {
+        repository(owner: $owner, name: $name) {
+            pullRequest(number: $number) {
+                files(first: $pageSize, after: $cursor) {
+                    nodes {
+                        path
+                        additions
+                        deletions
+                        changeType
+                    }
+                    pageInfo {
+                        hasNextPage
+                        endCursor
+                    }
+                }
+            }
+        }
+    }
+`;
+
+const PULL_REQUEST_REFS_QUERY = `
+    query EasyReviewPullRequestRefs($owner: String!, $name: String!, $number: Int!) {
+        repository(owner: $owner, name: $name) {
+            pullRequest(number: $number) {
+                baseRefOid
+                headRefOid
+            }
+        }
+    }
+`;
+
+function toFileChangeStatus(changeType: PullRequestFileNode["changeType"]): FileChangeStatus {
+    switch (changeType) {
+        case "ADDED":
+            return "added";
+        case "DELETED":
+            return "removed";
+        case "RENAMED":
+            return "renamed";
+        default:
+            return "modified";
+    }
+}
+
+function toPullRequestFile(node: PullRequestFileNode): PullRequestFile {
+    return {
+        path: node.path,
+        previousPath: null,
+        status: toFileChangeStatus(node.changeType),
+        additions: node.additions,
+        deletions: node.deletions,
+        stub: stubForPath(node.path),
+    };
+}
 
 /** A run GitHub has not finished is pending whatever it ends up concluding. */
 function toCheckRunState(status: string, conclusion: string | null): CheckState {
@@ -579,7 +850,8 @@ function toPullRequestDetail(node: PullRequestDetailNode): PullRequestDetail {
     return {
         ...toPullRequestSummary(node),
         body: node.body,
-        headSha: commit?.oid ?? "",
+        headSha: node.headRefOid || commit?.oid || "",
+        baseSha: node.baseRefOid,
         labels: node.labels?.nodes ?? [],
         assignees: node.assignees.nodes.map((assignee) => assignee.login),
         checkRuns: (commit?.statusCheckRollup?.contexts.nodes ?? []).map(toCheckRun),

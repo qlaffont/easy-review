@@ -10,7 +10,8 @@ import type {
     ReviewState,
 } from "#/lib/session/types.ts";
 
-import { createFakeGithub } from "#/lib/session/testing/fake-github.ts";
+import { HUGE_FILE_BYTES } from "#/lib/session/diff-policy.ts";
+import { createFakeGithub, type FakeFileInput } from "#/lib/session/testing/fake-github.ts";
 
 /** The only token the seeded GitHub accepts. */
 export const DEV_TOKEN = "dev";
@@ -130,7 +131,64 @@ export function createSeededGithub(): GithubClient {
             ...shape,
             ...(shape.state === "merged" ? { mergedAt: updatedAt.toISOString() } : {}),
         });
+
+        github.setPullRequestFiles(DEV_TOKEN, repository, number, seedFiles(number));
     }
 
     return github;
+}
+
+function seedFiles(seed: number): Array<FakeFileInput> {
+    const files: Array<FakeFileInput> = [
+        {
+            path: "src/index.ts",
+            status: "modified",
+            additions: 3,
+            deletions: 1,
+            before: "export function main() {\n  return 1\n}\n",
+            after: "export function main() {\n  return 2\n}\n\nexport const ready = true\n",
+        },
+        {
+            path: `src/feature-${seed}.ts`,
+            status: "added",
+            additions: 8,
+            deletions: 0,
+            after: Array.from({ length: 40 }, (_, index) => `export const line${index} = ${index}`).join("\n") + "\n",
+        },
+        {
+            path: "README.md",
+            status: "modified",
+            additions: 2,
+            deletions: 0,
+            before: "# App\n",
+            after: `# App\n\n## Change ${seed}\n\n${faker.lorem.paragraph()}\n`,
+        },
+        {
+            path: "package-lock.json",
+            status: "modified",
+            additions: 20,
+            deletions: 20,
+            before: '{ "lockfileVersion": 2 }\n',
+            after: '{ "lockfileVersion": 3 }\n',
+        },
+        {
+            path: "assets/icon.png",
+            status: "added",
+            additions: 0,
+            deletions: 0,
+            afterBytes: new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x00, 0x0d, 0x0a]),
+        },
+    ];
+
+    if (seed % 11 === 0) {
+        files.push({
+            path: "data/big.csv",
+            status: "added",
+            additions: 1,
+            deletions: 0,
+            afterBytes: new Uint8Array(HUGE_FILE_BYTES + 64).fill(97),
+        });
+    }
+
+    return files;
 }

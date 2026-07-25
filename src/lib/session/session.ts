@@ -3,7 +3,13 @@ import { Store } from "@tanstack/store";
 import type { SessionError } from "#/lib/session/errors.ts";
 import type { InboxSection, InboxSectionId } from "#/lib/session/inbox-sections.ts";
 import type { GithubClient, GithubViewer, KeyValueStore } from "#/lib/session/ports.ts";
-import type { PullRequestDetail, PullRequestSummary, Repository } from "#/lib/session/types.ts";
+import type {
+    FileDiff,
+    PullRequestDetail,
+    PullRequestFile,
+    PullRequestSummary,
+    Repository,
+} from "#/lib/session/types.ts";
 
 import { missingToken, toSessionError } from "#/lib/session/errors.ts";
 import { DEFAULT_INBOX_SECTIONS, groupIntoSections } from "#/lib/session/inbox-sections.ts";
@@ -51,6 +57,21 @@ export type InboxState = {
     lastLoadedAt: string | null;
 };
 
+export type FilesListState = {
+    status: "idle" | "loading" | "ready" | "error";
+    refreshing: boolean;
+    items: Array<PullRequestFile>;
+    error: SessionError | null;
+    lastLoadedAt: string | null;
+};
+
+export type FileDiffState = {
+    status: "idle" | "loading" | "ready" | "error";
+    refreshing: boolean;
+    diff: FileDiff | null;
+    error: SessionError | null;
+};
+
 /**
  * One pull request's overview. Details are held for the life of the tab only: they are large,
  * they go stale quickly, and the persisted Inbox row is enough to paint a page header instantly.
@@ -61,6 +82,9 @@ export type PullRequestView = {
     detail: PullRequestDetail | null;
     error: SessionError | null;
     lastLoadedAt: string | null;
+    files: FilesListState;
+    /** Keyed by path. Diff bodies are fetched one file at a time. */
+    diffs: Record<string, FileDiffState>;
 };
 
 /** What a PR page renders: the full detail when it has arrived, the Inbox row until then. */
@@ -109,12 +133,29 @@ const initialInboxState: InboxState = {
     lastLoadedAt: null,
 };
 
+const initialFilesListState: FilesListState = {
+    status: "idle",
+    refreshing: false,
+    items: [],
+    error: null,
+    lastLoadedAt: null,
+};
+
+const initialFileDiffState: FileDiffState = {
+    status: "idle",
+    refreshing: false,
+    diff: null,
+    error: null,
+};
+
 const initialPullRequestView: PullRequestView = {
     status: "idle",
     refreshing: false,
     detail: null,
     error: null,
     lastLoadedAt: null,
+    files: initialFilesListState,
+    diffs: {},
 };
 
 type RepositoriesCache = {
@@ -151,6 +192,8 @@ export function createEasyReviewSession({ github, store }: EasyReviewSessionDeps
     let latestInboxLoad = 0;
     /** The same rule per pull request, since several pages can be opened in one tab's history. */
     const latestPullRequestLoads = new Map<string, number>();
+    const latestFileListLoads = new Map<string, number>();
+    const latestFileDiffLoads = new Map<string, number>();
 
     function setAuth(patch: Partial<AuthState>) {
         state.setState((prev) => ({ ...prev, auth: { ...prev.auth, ...patch } }));
@@ -172,6 +215,40 @@ export function createEasyReviewSession({ github, store }: EasyReviewSessionDeps
                 [key]: { ...(prev.pullRequests[key] ?? initialPullRequestView), ...patch },
             },
         }));
+    }
+
+    function setFiles(key: string, patch: Partial<FilesListState>) {
+        state.setState((prev) => {
+            const current = prev.pullRequests[key] ?? initialPullRequestView;
+
+            return {
+                ...prev,
+                pullRequests: {
+                    ...prev.pullRequests,
+                    [key]: { ...current, files: { ...current.files, ...patch } },
+                },
+            };
+        });
+    }
+
+    function setFileDiff(key: string, path: string, patch: Partial<FileDiffState>) {
+        state.setState((prev) => {
+            const current = prev.pullRequests[key] ?? initialPullRequestView;
+
+            return {
+                ...prev,
+                pullRequests: {
+                    ...prev.pullRequests,
+                    [key]: {
+                        ...current,
+                        diffs: {
+                            ...current.diffs,
+                            [path]: { ...(current.diffs[path] ?? initialFileDiffState), ...patch },
+                        },
+                    },
+                },
+            };
+        });
     }
 
     function requireToken(): string {
@@ -200,6 +277,14 @@ export function createEasyReviewSession({ github, store }: EasyReviewSessionDeps
     async function forgetAccountData(): Promise<void> {
         for (const [key, attempt] of latestPullRequestLoads) {
             latestPullRequestLoads.set(key, attempt + 1);
+        }
+
+        for (const [key, attempt] of latestFileListLoads) {
+            latestFileListLoads.set(key, attempt + 1);
+        }
+
+        for (const [key, attempt] of latestFileDiffLoads) {
+            latestFileDiffLoads.set(key, attempt + 1);
         }
 
         await Promise.all([
@@ -539,6 +624,104 @@ export function createEasyReviewSession({ github, store }: EasyReviewSessionDeps
         return { ...view, repository, number, summary };
     }
 
+    /** Paths only — opening Review Changes must not download every patch. */
+    async function refreshPullRequestFiles(repository: string, number: number): Promise<void> {
+        const key = pullRequestKey(repository, number);
+        const attempt = (latestFileListLoads.get(key) ?? 0) + 1;
+        latestFileListLoads.set(key, attempt);
+
+        const cached = state.state.pullRequests[key]?.files.items ?? [];
+        setFiles(key, { refreshing: true, status: cached.length ? "ready" : "loading", error: null });
+
+        try {
+            const items = await github.listPullRequestFiles(requireToken(), repository, number);
+            if (attempt !== latestFileListLoads.get(key)) return;
+
+            // Drop cached diffs: the head may have moved, and loadFileDiff would otherwise keep
+            // serving the pre-refresh patch for the still-selected path.
+            setPullRequest(key, {
+                files: {
+                    status: "ready",
+                    refreshing: false,
+                    items,
+                    lastLoadedAt: new Date().toISOString(),
+                    error: null,
+                },
+                diffs: {},
+            });
+        } catch (error) {
+            if (attempt !== latestFileListLoads.get(key)) return;
+            setFiles(key, {
+                status: cached.length ? "ready" : "error",
+                refreshing: false,
+                error: toSessionError(error),
+            });
+        }
+    }
+
+    async function loadPullRequestFiles(repository: string, number: number): Promise<void> {
+        const files = state.state.pullRequests[pullRequestKey(repository, number)]?.files;
+
+        if (files?.refreshing || files?.status === "ready") {
+            return;
+        }
+
+        await refreshPullRequestFiles(repository, number);
+    }
+
+    /**
+     * Fetch one file's diff. `force` skips the generated / huge stubs; binary files still refuse.
+     * Opening file A must never request file B.
+     */
+    async function loadFileDiff(
+        repository: string,
+        number: number,
+        path: string,
+        { force = false }: { force?: boolean } = {},
+    ): Promise<void> {
+        const key = pullRequestKey(repository, number);
+        const diffKey = `${key}:${path}`;
+        const attempt = (latestFileDiffLoads.get(diffKey) ?? 0) + 1;
+        latestFileDiffLoads.set(diffKey, attempt);
+
+        const cached = state.state.pullRequests[key]?.diffs[path]?.diff ?? null;
+
+        // A warm non-stubbed diff is reused unless the reviewer is forcing past a stub.
+        if (
+            !force &&
+            cached &&
+            cached.stub === null &&
+            state.state.pullRequests[key]?.diffs[path]?.status === "ready"
+        ) {
+            return;
+        }
+
+        setFileDiff(key, path, { refreshing: true, status: cached ? "ready" : "loading", error: null });
+
+        try {
+            const previousPath =
+                state.state.pullRequests[key]?.files.items.find((file) => file.path === path)?.previousPath ?? null;
+            const diff = await github.getPullRequestFileDiff(requireToken(), repository, number, path, {
+                force,
+                previousPath,
+            });
+            if (attempt !== latestFileDiffLoads.get(diffKey)) return;
+
+            setFileDiff(key, path, { status: "ready", refreshing: false, diff, error: null });
+        } catch (error) {
+            if (attempt !== latestFileDiffLoads.get(diffKey)) return;
+            setFileDiff(key, path, {
+                status: cached ? "ready" : "error",
+                refreshing: false,
+                error: toSessionError(error),
+            });
+        }
+    }
+
+    function getFileDiff(repository: string, number: number, path: string): FileDiffState {
+        return state.state.pullRequests[pullRequestKey(repository, number)]?.diffs[path] ?? initialFileDiffState;
+    }
+
     /** Every default section, empty ones included, holding only allowlisted repositories. */
     function getInboxSections(): Array<InboxSection> {
         const { inbox, repos, auth } = state.state;
@@ -569,6 +752,10 @@ export function createEasyReviewSession({ github, store }: EasyReviewSessionDeps
         refreshPullRequest,
         revalidatePullRequest,
         getPullRequestPage,
+        loadPullRequestFiles,
+        refreshPullRequestFiles,
+        loadFileDiff,
+        getFileDiff,
     };
 }
 

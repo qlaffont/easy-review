@@ -1,6 +1,14 @@
-import type { GithubClient, GithubViewer } from "#/lib/session/ports.ts";
-import type { PullRequestDetail, PullRequestSummary, Repository } from "#/lib/session/types.ts";
+import type { GithubClient, GithubViewer, GetFileDiffOptions } from "#/lib/session/ports.ts";
+import type {
+    FileDiff,
+    PullRequestDetail,
+    PullRequestFile,
+    PullRequestSummary,
+    Repository,
+} from "#/lib/session/types.ts";
 
+import { buildFileDiff } from "#/lib/session/build-file-diff.ts";
+import { stubForPath } from "#/lib/session/diff-policy.ts";
 import { EasyReviewError, unauthorized } from "#/lib/session/errors.ts";
 
 export type FakeGithub = GithubClient & {
@@ -10,8 +18,12 @@ export type FakeGithub = GithubClient & {
     addRepository(token: string, nameWithOwner: string, repository?: Partial<Repository>): Repository;
     /** Add a pull request to a repository. */
     addPullRequest(token: string, pullRequest: PullRequestInput): PullRequestDetail;
+    /** Seed the files (and optional before/after text) for a pull request. */
+    setPullRequestFiles(token: string, repository: string, number: number, files: Array<FakeFileInput>): void;
     /** Repository sets asked for, one entry per `listPullRequests` call. */
     pullRequestQueries: Array<ReadonlyArray<string>>;
+    /** Paths asked for via `getPullRequestFileDiff`, in order. */
+    fileDiffQueries: Array<string>;
     /** Revoke a token so the next call with it fails as unauthorized. */
     revokeAccount(token: string): void;
     /** Make the next call fail, whatever the token. */
@@ -23,6 +35,26 @@ export type FakeGithub = GithubClient & {
 };
 
 export type PullRequestInput = Partial<PullRequestDetail> & { repository: string; number: number };
+
+export type FakeFileInput = {
+    path: string;
+    previousPath?: string | null;
+    status?: PullRequestFile["status"];
+    additions?: number;
+    deletions?: number;
+    /** Text on the base side. Omit for an added file. */
+    before?: string | null;
+    /** Text on the head side. Omit for a removed file. */
+    after?: string | null;
+    /** Raw bytes override text — used to seed binary fixtures. */
+    beforeBytes?: Uint8Array | null;
+    afterBytes?: Uint8Array | null;
+};
+
+type StoredFile = PullRequestFile & {
+    before: Uint8Array | null;
+    after: Uint8Array | null;
+};
 
 function buildPullRequest(input: PullRequestInput): PullRequestDetail {
     return {
@@ -49,7 +81,8 @@ function buildPullRequest(input: PullRequestInput): PullRequestDetail {
         changedFiles: input.changedFiles ?? 0,
         commentCount: input.commentCount ?? 0,
         body: input.body ?? "",
-        headSha: input.headSha ?? `sha-${input.number}`,
+        headSha: input.headSha ?? `sha-head-${input.number}`,
+        baseSha: input.baseSha ?? `sha-base-${input.number}`,
         labels: input.labels ?? [],
         assignees: input.assignees ?? [],
         checkRuns: input.checkRuns ?? [],
@@ -88,11 +121,25 @@ function toSummary(detail: PullRequestDetail): PullRequestSummary {
     return Object.fromEntries(SUMMARY_FIELDS.map((field) => [field, detail[field]])) as PullRequestSummary;
 }
 
+function encode(text: string | null | undefined): Uint8Array | null {
+    if (text === null || text === undefined) {
+        return null;
+    }
+
+    return new TextEncoder().encode(text);
+}
+
+function filesKey(token: string, repository: string, number: number): string {
+    return `${token}:${repository}#${number}`;
+}
+
 export function createFakeGithub(): FakeGithub {
     const accounts = new Map<string, GithubViewer>();
     const repositoriesByToken = new Map<string, Array<Repository>>();
     const pullRequestsByToken = new Map<string, Array<PullRequestDetail>>();
+    const filesByPullRequest = new Map<string, Array<StoredFile>>();
     const pullRequestQueries: Array<ReadonlyArray<string>> = [];
+    const fileDiffQueries: Array<string> = [];
     const calls: Array<string> = [];
     let forcedError: EasyReviewError | null = null;
     let gate: Promise<void> | null = null;
@@ -125,9 +172,25 @@ export function createFakeGithub(): FakeGithub {
         return produce();
     }
 
+    function requirePullRequest(token: string, repository: string, number: number): PullRequestDetail {
+        const found = (pullRequestsByToken.get(token) ?? []).find(
+            (pullRequest) => pullRequest.repository === repository && pullRequest.number === number,
+        );
+
+        if (!found) {
+            throw new EasyReviewError(
+                "not-found",
+                `${repository}#${number} does not exist, or this token cannot see it.`,
+            );
+        }
+
+        return found;
+    }
+
     return {
         calls,
         pullRequestQueries,
+        fileDiffQueries,
         addAccount(token, viewer) {
             const account: GithubViewer = {
                 login: viewer?.login ?? "octocat",
@@ -156,10 +219,45 @@ export function createFakeGithub(): FakeGithub {
             pullRequestsByToken.set(token, [...(pullRequestsByToken.get(token) ?? []), pullRequest]);
             return pullRequest;
         },
+        setPullRequestFiles(token, repository, number, files) {
+            filesByPullRequest.set(
+                filesKey(token, repository, number),
+                files.map((file) => {
+                    const status = file.status ?? "modified";
+
+                    return {
+                        path: file.path,
+                        previousPath: file.previousPath ?? null,
+                        status,
+                        additions: file.additions ?? 0,
+                        deletions: file.deletions ?? 0,
+                        stub: stubForPath(file.path),
+                        before:
+                            file.beforeBytes !== undefined
+                                ? file.beforeBytes
+                                : status === "added"
+                                  ? null
+                                  : encode(file.before ?? ""),
+                        after:
+                            file.afterBytes !== undefined
+                                ? file.afterBytes
+                                : status === "removed"
+                                  ? null
+                                  : encode(file.after ?? ""),
+                    };
+                }),
+            );
+        },
         revokeAccount(token) {
             accounts.delete(token);
             repositoriesByToken.delete(token);
             pullRequestsByToken.delete(token);
+
+            for (const key of filesByPullRequest.keys()) {
+                if (key.startsWith(`${token}:`)) {
+                    filesByPullRequest.delete(key);
+                }
+            }
         },
         failNextWith(error) {
             forcedError = error;
@@ -201,18 +299,39 @@ export function createFakeGithub(): FakeGithub {
         getPullRequest(token, repository, number) {
             return respond("getPullRequest", () => {
                 authenticate(token);
-                const found = (pullRequestsByToken.get(token) ?? []).find(
-                    (pullRequest) => pullRequest.repository === repository && pullRequest.number === number,
-                );
+                return requirePullRequest(token, repository, number);
+            });
+        },
+        listPullRequestFiles(token, repository, number) {
+            return respond("listPullRequestFiles", () => {
+                authenticate(token);
+                requirePullRequest(token, repository, number);
+                const stored = filesByPullRequest.get(filesKey(token, repository, number)) ?? [];
+                return stored.map(({ before: _before, after: _after, ...file }) => file);
+            });
+        },
+        getPullRequestFileDiff(token, repository, number, path, options?: GetFileDiffOptions) {
+            fileDiffQueries.push(path);
 
-                if (!found) {
-                    throw new EasyReviewError(
-                        "not-found",
-                        `${repository}#${number} does not exist, or this token cannot see it.`,
-                    );
+            return respond("getPullRequestFileDiff", (): FileDiff => {
+                authenticate(token);
+                requirePullRequest(token, repository, number);
+                const force = options?.force === true;
+                const pathStub = stubForPath(path);
+
+                if (pathStub === "binary" || (pathStub && !force)) {
+                    return { path, lines: [], truncated: false, stub: pathStub };
                 }
 
-                return found;
+                const stored = (filesByPullRequest.get(filesKey(token, repository, number)) ?? []).find(
+                    (file) => file.path === path,
+                );
+
+                if (!stored) {
+                    throw new EasyReviewError("not-found", `${path} is not part of ${repository}#${number}.`);
+                }
+
+                return buildFileDiff({ path, before: stored.before, after: stored.after }, { force });
             });
         },
     };

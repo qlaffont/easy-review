@@ -11,6 +11,7 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as PrOwnerRepoNumberRouteImport } from './routes/pr.$owner.$repo.$number'
+import { Route as PrOwnerRepoNumberFilesRouteImport } from './routes/pr.$owner.$repo.$number_.files'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -22,31 +23,44 @@ const PrOwnerRepoNumberRoute = PrOwnerRepoNumberRouteImport.update({
   path: '/pr/$owner/$repo/$number',
   getParentRoute: () => rootRouteImport,
 } as any)
+const PrOwnerRepoNumberFilesRoute = PrOwnerRepoNumberFilesRouteImport.update({
+  id: '/pr/$owner/$repo/$number_/files',
+  path: '/pr/$owner/$repo/$number/files',
+  getParentRoute: () => rootRouteImport,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/pr/$owner/$repo/$number': typeof PrOwnerRepoNumberRoute
+  '/pr/$owner/$repo/$number/files': typeof PrOwnerRepoNumberFilesRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/pr/$owner/$repo/$number': typeof PrOwnerRepoNumberRoute
+  '/pr/$owner/$repo/$number/files': typeof PrOwnerRepoNumberFilesRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/pr/$owner/$repo/$number': typeof PrOwnerRepoNumberRoute
+  '/pr/$owner/$repo/$number_/files': typeof PrOwnerRepoNumberFilesRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/pr/$owner/$repo/$number'
+  fullPaths: '/' | '/pr/$owner/$repo/$number' | '/pr/$owner/$repo/$number/files'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/pr/$owner/$repo/$number'
-  id: '__root__' | '/' | '/pr/$owner/$repo/$number'
+  to: '/' | '/pr/$owner/$repo/$number' | '/pr/$owner/$repo/$number/files'
+  id:
+    | '__root__'
+    | '/'
+    | '/pr/$owner/$repo/$number'
+    | '/pr/$owner/$repo/$number_/files'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   PrOwnerRepoNumberRoute: typeof PrOwnerRepoNumberRoute
+  PrOwnerRepoNumberFilesRoute: typeof PrOwnerRepoNumberFilesRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -65,12 +79,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof PrOwnerRepoNumberRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/pr/$owner/$repo/$number_/files': {
+      id: '/pr/$owner/$repo/$number_/files'
+      path: '/pr/$owner/$repo/$number/files'
+      fullPath: '/pr/$owner/$repo/$number/files'
+      preLoaderRoute: typeof PrOwnerRepoNumberFilesRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   PrOwnerRepoNumberRoute: PrOwnerRepoNumberRoute,
+  PrOwnerRepoNumberFilesRoute: PrOwnerRepoNumberFilesRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
