@@ -6,13 +6,17 @@ import type { EasyReviewSession, SessionState } from "#/lib/session/session.ts";
 import { createBrowserStore } from "#/lib/session/adapters/browser-store.ts";
 import { createGithubHttpClient } from "#/lib/session/adapters/github-http-client.ts";
 import { createEasyReviewSession } from "#/lib/session/session.ts";
+import { createSeededGithub } from "#/lib/session/testing/dev-github.ts";
 
 const SessionContext = createContext<EasyReviewSession | null>(null);
+
+/** `VITE_FAKE_GITHUB=1 bun run dev` swaps GitHub for fixtures. Folded away in a build. */
+const useFixtures = import.meta.env.DEV && import.meta.env.VITE_FAKE_GITHUB === "1";
 
 export function SessionProvider({ children }: { children: React.ReactNode }) {
     const [session] = useState(() =>
         createEasyReviewSession({
-            github: createGithubHttpClient(),
+            github: useFixtures ? createSeededGithub() : createGithubHttpClient(),
             store: createBrowserStore(),
         }),
     );

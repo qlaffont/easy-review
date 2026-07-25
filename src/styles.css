@@ -130,6 +130,12 @@ body {
     -moz-osx-font-smoothing: grayscale;
 }
 
+/* Long Inbox sections should not pay layout and paint for rows nobody scrolled to. */
+.inbox-row {
+    content-visibility: auto;
+    contain-intrinsic-size: auto 44px;
+}
+
 @layer base {
     * {
         @apply border-border outline-ring/50;

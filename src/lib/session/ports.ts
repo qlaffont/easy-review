@@ -1,4 +1,4 @@
-import type { Repository } from "#/lib/session/types.ts";
+import type { PullRequestSummary, Repository } from "#/lib/session/types.ts";
 
 export type GithubViewer = {
     login: string;
@@ -15,6 +15,8 @@ export type GithubClient = {
     getViewer(token: string): Promise<GithubViewer>;
     /** Every repository the token can see, most recently pushed first. */
     listRepositories(token: string): Promise<Array<Repository>>;
+    /** Open and recently merged pull requests across the given repositories, in one batch. */
+    listPullRequests(token: string, repositories: ReadonlyArray<string>): Promise<Array<PullRequestSummary>>;
 };
 
 /** Browser persistence, narrowed to what the session needs so IndexedDB can replace it later. */
