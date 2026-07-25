@@ -40,6 +40,33 @@ export type PullRequestSummary = {
     commentCount: number;
 };
 
+export type Label = {
+    name: string;
+    /** Six hex digits, without the leading `#`, exactly as GitHub stores it. */
+    color: string;
+};
+
+/** One entry of the head commit's status rollup: a check run or a legacy commit status. */
+export type CheckRun = {
+    name: string;
+    state: CheckState;
+    url: string | null;
+};
+
+/** Whether GitHub thinks the branches can still be combined. */
+export type MergeableState = "mergeable" | "conflicting" | "unknown";
+
+/** What the overview page needs on top of an Inbox row. */
+export type PullRequestDetail = PullRequestSummary & {
+    /** Raw markdown, rendered client-side. Empty when the author wrote no description. */
+    body: string;
+    headSha: string;
+    labels: Array<Label>;
+    assignees: Array<string>;
+    checkRuns: Array<CheckRun>;
+    mergeable: MergeableState;
+};
+
 export type Repository = {
     /** `owner/repo`, the identity Easy Review uses everywhere. */
     nameWithOwner: string;

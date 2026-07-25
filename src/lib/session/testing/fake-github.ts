@@ -1,5 +1,5 @@
 import type { GithubClient, GithubViewer } from "#/lib/session/ports.ts";
-import type { PullRequestSummary, Repository } from "#/lib/session/types.ts";
+import type { PullRequestDetail, PullRequestSummary, Repository } from "#/lib/session/types.ts";
 
 import { EasyReviewError, unauthorized } from "#/lib/session/errors.ts";
 
@@ -9,7 +9,7 @@ export type FakeGithub = GithubClient & {
     /** Make a repository visible to a token. */
     addRepository(token: string, nameWithOwner: string, repository?: Partial<Repository>): Repository;
     /** Add a pull request to a repository. */
-    addPullRequest(token: string, pullRequest: PullRequestInput): PullRequestSummary;
+    addPullRequest(token: string, pullRequest: PullRequestInput): PullRequestDetail;
     /** Repository sets asked for, one entry per `listPullRequests` call. */
     pullRequestQueries: Array<ReadonlyArray<string>>;
     /** Revoke a token so the next call with it fails as unauthorized. */
@@ -22,9 +22,9 @@ export type FakeGithub = GithubClient & {
     calls: Array<string>;
 };
 
-export type PullRequestInput = Partial<PullRequestSummary> & { repository: string; number: number };
+export type PullRequestInput = Partial<PullRequestDetail> & { repository: string; number: number };
 
-function buildPullRequest(input: PullRequestInput): PullRequestSummary {
+function buildPullRequest(input: PullRequestInput): PullRequestDetail {
     return {
         key: `${input.repository}#${input.number}`,
         repository: input.repository,
@@ -48,13 +48,50 @@ function buildPullRequest(input: PullRequestInput): PullRequestSummary {
         deletions: input.deletions ?? 0,
         changedFiles: input.changedFiles ?? 0,
         commentCount: input.commentCount ?? 0,
+        body: input.body ?? "",
+        headSha: input.headSha ?? `sha-${input.number}`,
+        labels: input.labels ?? [],
+        assignees: input.assignees ?? [],
+        checkRuns: input.checkRuns ?? [],
+        mergeable: input.mergeable ?? "mergeable",
     };
+}
+
+/** Fields the Inbox batch query asks for. Anything else is only on the overview. */
+const SUMMARY_FIELDS = [
+    "key",
+    "repository",
+    "number",
+    "title",
+    "url",
+    "author",
+    "authorAvatarUrl",
+    "state",
+    "isDraft",
+    "createdAt",
+    "updatedAt",
+    "mergedAt",
+    "headRefName",
+    "baseRefName",
+    "reviewDecision",
+    "reviewRequests",
+    "reviewers",
+    "checks",
+    "additions",
+    "deletions",
+    "changedFiles",
+    "commentCount",
+] as const satisfies ReadonlyArray<keyof PullRequestSummary>;
+
+/** The Inbox only ever sees the row-shaped fields, exactly as the real batch query returns. */
+function toSummary(detail: PullRequestDetail): PullRequestSummary {
+    return Object.fromEntries(SUMMARY_FIELDS.map((field) => [field, detail[field]])) as PullRequestSummary;
 }
 
 export function createFakeGithub(): FakeGithub {
     const accounts = new Map<string, GithubViewer>();
     const repositoriesByToken = new Map<string, Array<Repository>>();
-    const pullRequestsByToken = new Map<string, Array<PullRequestSummary>>();
+    const pullRequestsByToken = new Map<string, Array<PullRequestDetail>>();
     const pullRequestQueries: Array<ReadonlyArray<string>> = [];
     const calls: Array<string> = [];
     let forcedError: EasyReviewError | null = null;
@@ -156,9 +193,26 @@ export function createFakeGithub(): FakeGithub {
             return respond("listPullRequests", () => {
                 authenticate(token);
                 const wanted = new Set(repositories);
-                return (pullRequestsByToken.get(token) ?? []).filter((pullRequest) =>
-                    wanted.has(pullRequest.repository),
+                return (pullRequestsByToken.get(token) ?? [])
+                    .filter((pullRequest) => wanted.has(pullRequest.repository))
+                    .map(toSummary);
+            });
+        },
+        getPullRequest(token, repository, number) {
+            return respond("getPullRequest", () => {
+                authenticate(token);
+                const found = (pullRequestsByToken.get(token) ?? []).find(
+                    (pullRequest) => pullRequest.repository === repository && pullRequest.number === number,
                 );
+
+                if (!found) {
+                    throw new EasyReviewError(
+                        "not-found",
+                        `${repository}#${number} does not exist, or this token cannot see it.`,
+                    );
+                }
+
+                return found;
             });
         },
     };

@@ -1,5 +1,14 @@
 import type { GithubClient, GithubViewer } from "#/lib/session/ports.ts";
-import type { CheckState, PullRequestSummary, Repository, ReviewDecision, ReviewState } from "#/lib/session/types.ts";
+import type {
+    CheckRun,
+    CheckState,
+    MergeableState,
+    PullRequestDetail,
+    PullRequestSummary,
+    Repository,
+    ReviewDecision,
+    ReviewState,
+} from "#/lib/session/types.ts";
 
 import { EasyReviewError } from "#/lib/session/errors.ts";
 
@@ -222,6 +231,21 @@ export function createGithubHttpClient(fetchImpl: typeof fetch = globalThis.fetc
                 ),
             );
         },
+
+        async getPullRequest(token, repository, number) {
+            const [owner = "", name = ""] = repository.split("/");
+            const data = await graphql<PullRequestQuery>(token, PULL_REQUEST_QUERY, { owner, name, number });
+            const node = data.repository?.pullRequest;
+
+            if (!node) {
+                throw new EasyReviewError(
+                    "not-found",
+                    `${repository}#${number} does not exist, or this token cannot see it.`,
+                );
+            }
+
+            return toPullRequestDetail(node);
+        },
     };
 }
 
@@ -362,61 +386,205 @@ function buildInboxQuery(repositories: ReadonlyArray<string>): string {
         }
 
         fragment InboxPullRequest on PullRequest {
-            number
-            title
-            url
-            state
-            isDraft
-            createdAt
-            updatedAt
-            mergedAt
-            headRefName
-            baseRefName
-            additions
-            deletions
-            changedFiles
-            reviewDecision
-            author {
-                login
-                avatarUrl
-            }
-            repository {
-                nameWithOwner
-            }
-            comments {
-                totalCount
-            }
-            reviewRequests(first: 10) {
-                nodes {
-                    requestedReviewer {
-                        ... on User {
-                            login
-                        }
-                        ... on Team {
-                            name
-                        }
-                    }
+            ${PULL_REQUEST_FIELDS}
+        }
+    `;
+}
+
+/** The fields behind `PullRequestSummary`, shared by the Inbox batch and the overview query. */
+const PULL_REQUEST_FIELDS = `
+    number
+    title
+    url
+    state
+    isDraft
+    createdAt
+    updatedAt
+    mergedAt
+    headRefName
+    baseRefName
+    additions
+    deletions
+    changedFiles
+    reviewDecision
+    author {
+        login
+        avatarUrl
+    }
+    repository {
+        nameWithOwner
+    }
+    comments {
+        totalCount
+    }
+    reviewRequests(first: 10) {
+        nodes {
+            requestedReviewer {
+                ... on User {
+                    login
+                }
+                ... on Team {
+                    name
                 }
             }
-            latestReviews(first: 20) {
-                nodes {
-                    author {
-                        login
-                    }
+        }
+    }
+    latestReviews(first: 20) {
+        nodes {
+            author {
+                login
+            }
+            state
+        }
+    }
+    commits(last: 1) {
+        nodes {
+            commit {
+                statusCheckRollup {
                     state
                 }
             }
-            commits(last: 1) {
-                nodes {
-                    commit {
-                        statusCheckRollup {
-                            state
+        }
+    }
+`;
+
+type CheckContextNode =
+    | {
+          __typename: "CheckRun";
+          name: string;
+          status: string;
+          conclusion: string | null;
+          detailsUrl: string | null;
+      }
+    | { __typename: "StatusContext"; context: string; state: string; targetUrl: string | null };
+
+/**
+ * The overview asks for the same fields as an Inbox row plus the ones only a whole page has
+ * room for. GraphQL merges the two `commits` selections, so the head SHA and the individual
+ * check runs arrive alongside the rollup the row already used.
+ */
+type PullRequestDetailNode = Omit<PullRequestNode, "commits"> & {
+    body: string;
+    mergeable: "MERGEABLE" | "CONFLICTING" | "UNKNOWN";
+    labels: { nodes: Array<{ name: string; color: string }> } | null;
+    assignees: { nodes: Array<{ login: string }> };
+    commits: {
+        nodes: Array<{
+            commit: {
+                oid: string;
+                statusCheckRollup: { state: string; contexts: { nodes: Array<CheckContextNode> } } | null;
+            };
+        }>;
+    };
+};
+
+type PullRequestQuery = { repository: { pullRequest: PullRequestDetailNode | null } | null };
+
+const PULL_REQUEST_QUERY = `
+    query EasyReviewPullRequest($owner: String!, $name: String!, $number: Int!) {
+        repository(owner: $owner, name: $name) {
+            pullRequest(number: $number) {
+                ${PULL_REQUEST_FIELDS}
+                body
+                mergeable
+                labels(first: 20) {
+                    nodes {
+                        name
+                        color
+                    }
+                }
+                assignees(first: 10) {
+                    nodes {
+                        login
+                    }
+                }
+                commits(last: 1) {
+                    nodes {
+                        commit {
+                            oid
+                            statusCheckRollup {
+                                contexts(first: 50) {
+                                    nodes {
+                                        __typename
+                                        ... on CheckRun {
+                                            name
+                                            status
+                                            conclusion
+                                            detailsUrl
+                                        }
+                                        ... on StatusContext {
+                                            context
+                                            state
+                                            targetUrl
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
                 }
             }
         }
-    `;
+    }
+`;
+
+/** A run GitHub has not finished is pending whatever it ends up concluding. */
+function toCheckRunState(status: string, conclusion: string | null): CheckState {
+    if (status !== "COMPLETED") {
+        return "pending";
+    }
+
+    switch (conclusion) {
+        case "SUCCESS":
+        case "NEUTRAL":
+        case "SKIPPED":
+            return "success";
+        case "FAILURE":
+        case "TIMED_OUT":
+        case "CANCELLED":
+        case "ACTION_REQUIRED":
+        case "STARTUP_FAILURE":
+            return "failure";
+        default:
+            return "none";
+    }
+}
+
+function toCheckRun(context: CheckContextNode): CheckRun {
+    if (context.__typename === "CheckRun") {
+        return {
+            name: context.name,
+            state: toCheckRunState(context.status, context.conclusion),
+            url: context.detailsUrl,
+        };
+    }
+
+    return { name: context.context, state: toCheckState(context.state), url: context.targetUrl };
+}
+
+function toMergeableState(mergeable: PullRequestDetailNode["mergeable"]): MergeableState {
+    switch (mergeable) {
+        case "MERGEABLE":
+            return "mergeable";
+        case "CONFLICTING":
+            return "conflicting";
+        default:
+            return "unknown";
+    }
+}
+
+function toPullRequestDetail(node: PullRequestDetailNode): PullRequestDetail {
+    const commit = node.commits.nodes[0]?.commit;
+
+    return {
+        ...toPullRequestSummary(node),
+        body: node.body,
+        headSha: commit?.oid ?? "",
+        labels: node.labels?.nodes ?? [],
+        assignees: node.assignees.nodes.map((assignee) => assignee.login),
+        checkRuns: (commit?.statusCheckRollup?.contexts.nodes ?? []).map(toCheckRun),
+        mergeable: toMergeableState(node.mergeable),
+    };
 }
 
 type RepositoriesQuery = {

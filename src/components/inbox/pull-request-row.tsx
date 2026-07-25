@@ -1,34 +1,11 @@
+import { Link } from "@tanstack/react-router";
 import { CircleDashed, GitPullRequestDraft, MessageSquare } from "lucide-react";
 import { memo } from "react";
 
-import type { CheckState, PullRequestSummary } from "#/lib/session/types.ts";
+import type { PullRequestSummary } from "#/lib/session/types.ts";
 
+import { ChecksDot } from "#/components/pr/checks-dot.tsx";
 import { formatRelativeTime } from "#/lib/format.ts";
-import { cn } from "#/lib/utils.ts";
-
-const CHECK_LABELS: Record<CheckState, string> = {
-    none: "No checks",
-    pending: "Checks running",
-    success: "Checks passed",
-    failure: "Checks failed",
-};
-
-const CHECK_COLORS: Record<CheckState, string> = {
-    none: "bg-muted-foreground/30",
-    pending: "bg-amber-500",
-    success: "bg-emerald-500",
-    failure: "bg-red-500",
-};
-
-function ChecksDot({ state }: { state: CheckState }) {
-    return (
-        <span
-            title={CHECK_LABELS[state]}
-            aria-label={CHECK_LABELS[state]}
-            className={cn("size-2 shrink-0 rounded-full", CHECK_COLORS[state])}
-        />
-    );
-}
 
 function ReviewProgress({ pullRequest }: { pullRequest: PullRequestSummary }) {
     const approvals = pullRequest.reviewers.filter((reviewer) => reviewer.state === "approved").length;
@@ -55,11 +32,12 @@ function ReviewProgress({ pullRequest }: { pullRequest: PullRequestSummary }) {
 }
 
 export const PullRequestRow = memo(function PullRequestRow({ pullRequest }: { pullRequest: PullRequestSummary }) {
+    const [owner = "", repo = ""] = pullRequest.repository.split("/");
+
     return (
-        <a
-            href={pullRequest.url}
-            target="_blank"
-            rel="noreferrer"
+        <Link
+            to="/pr/$owner/$repo/$number"
+            params={{ owner, repo, number: String(pullRequest.number) }}
             className="inbox-row grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-3 border-b px-3 py-2 text-sm no-underline last:border-b-0 hover:bg-accent/60"
         >
             <ChecksDot state={pullRequest.checks} />
@@ -97,7 +75,7 @@ export const PullRequestRow = memo(function PullRequestRow({ pullRequest }: { pu
                     {formatRelativeTime(pullRequest.updatedAt)}
                 </time>
             </span>
-        </a>
+        </Link>
     );
 });
 

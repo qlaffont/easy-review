@@ -3,7 +3,7 @@ import { Store } from "@tanstack/store";
 import type { SessionError } from "#/lib/session/errors.ts";
 import type { InboxSection, InboxSectionId } from "#/lib/session/inbox-sections.ts";
 import type { GithubClient, GithubViewer, KeyValueStore } from "#/lib/session/ports.ts";
-import type { PullRequestSummary, Repository } from "#/lib/session/types.ts";
+import type { PullRequestDetail, PullRequestSummary, Repository } from "#/lib/session/types.ts";
 
 import { missingToken, toSessionError } from "#/lib/session/errors.ts";
 import { DEFAULT_INBOX_SECTIONS, groupIntoSections } from "#/lib/session/inbox-sections.ts";
@@ -51,10 +51,31 @@ export type InboxState = {
     lastLoadedAt: string | null;
 };
 
+/**
+ * One pull request's overview. Details are held for the life of the tab only: they are large,
+ * they go stale quickly, and the persisted Inbox row is enough to paint a page header instantly.
+ */
+export type PullRequestView = {
+    status: "idle" | "loading" | "ready" | "error";
+    refreshing: boolean;
+    detail: PullRequestDetail | null;
+    error: SessionError | null;
+    lastLoadedAt: string | null;
+};
+
+/** What a PR page renders: the full detail when it has arrived, the Inbox row until then. */
+export type PullRequestPage = PullRequestView & {
+    repository: string;
+    number: number;
+    summary: PullRequestSummary | null;
+};
+
 export type SessionState = {
     auth: AuthState;
     repos: RepositoriesState;
     inbox: InboxState;
+    /** Keyed by `owner/repo#number`. */
+    pullRequests: Record<string, PullRequestView>;
 };
 
 export type EasyReviewSessionDeps = {
@@ -88,6 +109,14 @@ const initialInboxState: InboxState = {
     lastLoadedAt: null,
 };
 
+const initialPullRequestView: PullRequestView = {
+    status: "idle",
+    refreshing: false,
+    detail: null,
+    error: null,
+    lastLoadedAt: null,
+};
+
 type RepositoriesCache = {
     available: Array<Repository>;
     lastLoadedAt: string | null;
@@ -107,6 +136,7 @@ export function createEasyReviewSession({ github, store }: EasyReviewSessionDeps
         auth: initialAuthState,
         repos: initialRepositoriesState,
         inbox: initialInboxState,
+        pullRequests: {},
     });
 
     /** The verified token, kept out of the reactive state so the UI can never render it. */
@@ -119,6 +149,8 @@ export function createEasyReviewSession({ github, store }: EasyReviewSessionDeps
     let latestAuthAttempt = 0;
     let latestRepositoryLoad = 0;
     let latestInboxLoad = 0;
+    /** The same rule per pull request, since several pages can be opened in one tab's history. */
+    const latestPullRequestLoads = new Map<string, number>();
 
     function setAuth(patch: Partial<AuthState>) {
         state.setState((prev) => ({ ...prev, auth: { ...prev.auth, ...patch } }));
@@ -130,6 +162,16 @@ export function createEasyReviewSession({ github, store }: EasyReviewSessionDeps
 
     function setInbox(patch: Partial<InboxState>) {
         state.setState((prev) => ({ ...prev, inbox: { ...prev.inbox, ...patch } }));
+    }
+
+    function setPullRequest(key: string, patch: Partial<PullRequestView>) {
+        state.setState((prev) => ({
+            ...prev,
+            pullRequests: {
+                ...prev.pullRequests,
+                [key]: { ...(prev.pullRequests[key] ?? initialPullRequestView), ...patch },
+            },
+        }));
     }
 
     function requireToken(): string {
@@ -156,6 +198,10 @@ export function createEasyReviewSession({ github, store }: EasyReviewSessionDeps
 
     /** Drops everything that describes one account's work: repos, allowlist, cached Inbox. */
     async function forgetAccountData(): Promise<void> {
+        for (const [key, attempt] of latestPullRequestLoads) {
+            latestPullRequestLoads.set(key, attempt + 1);
+        }
+
         await Promise.all([
             store.remove(SELECTED_REPOS_KEY),
             store.remove(REPOS_CACHE_KEY),
@@ -165,6 +211,7 @@ export function createEasyReviewSession({ github, store }: EasyReviewSessionDeps
         ]);
         setRepos({ ...initialRepositoriesState });
         setInbox({ ...initialInboxState });
+        state.setState((prev) => ({ ...prev, pullRequests: {} }));
     }
 
     /**
@@ -430,6 +477,68 @@ export function createEasyReviewSession({ github, store }: EasyReviewSessionDeps
         }
     }
 
+    /** Ask GitHub for one pull request in full. */
+    async function refreshPullRequest(repository: string, number: number): Promise<void> {
+        const key = pullRequestKey(repository, number);
+        const attempt = (latestPullRequestLoads.get(key) ?? 0) + 1;
+        latestPullRequestLoads.set(key, attempt);
+
+        const cached = state.state.pullRequests[key]?.detail ?? null;
+        setPullRequest(key, { refreshing: true, status: cached ? "ready" : "loading", error: null });
+
+        try {
+            const detail = await github.getPullRequest(requireToken(), repository, number);
+            if (attempt !== latestPullRequestLoads.get(key)) return;
+
+            setPullRequest(key, {
+                status: "ready",
+                refreshing: false,
+                detail,
+                lastLoadedAt: new Date().toISOString(),
+                error: null,
+            });
+        } catch (error) {
+            if (attempt !== latestPullRequestLoads.get(key)) return;
+            setPullRequest(key, {
+                status: cached ? "ready" : "error",
+                refreshing: false,
+                error: toSessionError(error),
+            });
+        }
+    }
+
+    /** Reuse what this tab already fetched, and only call GitHub when there is nothing to show. */
+    async function loadPullRequest(repository: string, number: number): Promise<void> {
+        const view = state.state.pullRequests[pullRequestKey(repository, number)];
+
+        if (view?.refreshing || view?.status === "ready") {
+            return;
+        }
+
+        await refreshPullRequest(repository, number);
+    }
+
+    /** Called when the tab regains focus while a pull request is open, and by manual refresh. */
+    async function revalidatePullRequest(repository: string, number: number): Promise<void> {
+        if (state.state.pullRequests[pullRequestKey(repository, number)]?.refreshing) {
+            return;
+        }
+
+        await refreshPullRequest(repository, number);
+    }
+
+    /**
+     * The overview, with the Inbox row alongside it. The row is persisted and the detail is not,
+     * so after a reload the page has a title and an author to paint before GitHub answers.
+     */
+    function getPullRequestPage(repository: string, number: number): PullRequestPage {
+        const key = pullRequestKey(repository, number);
+        const view = state.state.pullRequests[key] ?? initialPullRequestView;
+        const summary = state.state.inbox.pullRequests.find((pullRequest) => pullRequest.key === key) ?? null;
+
+        return { ...view, repository, number, summary };
+    }
+
     /** Every default section, empty ones included, holding only allowlisted repositories. */
     function getInboxSections(): Array<InboxSection> {
         const { inbox, repos, auth } = state.state;
@@ -456,7 +565,16 @@ export function createEasyReviewSession({ github, store }: EasyReviewSessionDeps
         revalidateInbox,
         toggleSection,
         getInboxSections,
+        loadPullRequest,
+        refreshPullRequest,
+        revalidatePullRequest,
+        getPullRequestPage,
     };
+}
+
+/** The identity a pull request keeps everywhere: Inbox row, cache key, route. */
+export function pullRequestKey(repository: string, number: number): string {
+    return `${repository}#${number}`;
 }
 
 /** A repo the user picked before, whose details are not in the cache yet. */
