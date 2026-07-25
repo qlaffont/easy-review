@@ -4,6 +4,7 @@ import type {
     CheckState,
     FileChangeStatus,
     MergeableState,
+    MergeMethod,
     PullRequestDetail,
     PullRequestFile,
     PullRequestSummary,
@@ -394,6 +395,85 @@ export function createGithubHttpClient(fetchImpl: typeof fetch = globalThis.fetc
             }>(token, REPLY_TO_THREAD_MUTATION, { threadId, body });
 
             return toThreadComment(data.addPullRequestReviewThreadReply.comment);
+        },
+
+        async setPullRequestDraft(token, repository, number, isDraft) {
+            const [owner = "", name = ""] = repository.split("/");
+            await restJson(token, "PATCH", `/repos/${owner}/${name}/pulls/${number}`, { draft: isDraft });
+        },
+
+        async setPullRequestLabels(token, repository, number, labels) {
+            const [owner = "", name = ""] = repository.split("/");
+            await restJson(token, "PUT", `/repos/${owner}/${name}/issues/${number}/labels`, {
+                labels: [...labels],
+            });
+        },
+
+        async setPullRequestAssignees(token, repository, number, assignees) {
+            const [owner = "", name = ""] = repository.split("/");
+            await restJson(token, "PATCH", `/repos/${owner}/${name}/issues/${number}`, {
+                assignees: [...assignees],
+            });
+        },
+
+        async requestReviewers(token, repository, number, reviewers) {
+            if (reviewers.length === 0) {
+                return;
+            }
+
+            const [owner = "", name = ""] = repository.split("/");
+            await restJson(token, "POST", `/repos/${owner}/${name}/pulls/${number}/requested_reviewers`, {
+                reviewers: [...reviewers],
+            });
+        },
+
+        async removeReviewers(token, repository, number, reviewers) {
+            if (reviewers.length === 0) {
+                return;
+            }
+
+            const [owner = "", name = ""] = repository.split("/");
+            await restJson(token, "DELETE", `/repos/${owner}/${name}/pulls/${number}/requested_reviewers`, {
+                reviewers: [...reviewers],
+            });
+        },
+
+        async reRequestReview(token, repository, number, reviewers) {
+            if (reviewers.length === 0) {
+                return;
+            }
+
+            const [owner = "", name = ""] = repository.split("/");
+            const path = `/repos/${owner}/${name}/pulls/${number}/requested_reviewers`;
+            const body = { reviewers: [...reviewers] };
+
+            await restJson(token, "DELETE", path, body);
+
+            try {
+                await restJson(token, "POST", path, body);
+            } catch (error) {
+                // Best-effort restore: DELETE already cleared the requests; put them back
+                // before surfacing the failure so the PR is not left without reviewers.
+                try {
+                    await restJson(token, "POST", path, body);
+                } catch {
+                    // Preserve the original POST failure.
+                }
+
+                throw error;
+            }
+        },
+
+        async mergePullRequest(token, repository, number, method: MergeMethod) {
+            const [owner = "", name = ""] = repository.split("/");
+            await restJson(token, "PUT", `/repos/${owner}/${name}/pulls/${number}/merge`, {
+                merge_method: method,
+            });
+        },
+
+        async closePullRequest(token, repository, number) {
+            const [owner = "", name = ""] = repository.split("/");
+            await restJson(token, "PATCH", `/repos/${owner}/${name}/pulls/${number}`, { state: "closed" });
         },
     };
 

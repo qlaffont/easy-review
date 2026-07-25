@@ -4,10 +4,10 @@
 
 **Blocked by:** 04 — PR overview
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] Ready for review / convert to draft works through the session and updates the overview
-- [ ] Labels and assignees can be edited
-- [ ] Reviewers can be added/removed and review re-requested
-- [ ] Merge and close require confirmation and then succeed via GitHub
-- [ ] Session tests cover mutations against the GitHub double and cache invalidation of affected views
+- [x] Ready for review / convert to draft works through the session and updates the overview
+- [x] Labels and assignees can be edited
+- [x] Reviewers can be added/removed and review re-requested
+- [x] Merge and close require confirmation and then succeed via GitHub
+- [x] Session tests cover mutations against the GitHub double and cache invalidation of affected views

@@ -1,6 +1,8 @@
 import type { GithubClient, GithubViewer, GetFileDiffOptions } from "#/lib/session/ports.ts";
 import type {
     FileDiff,
+    Label,
+    MergeMethod,
     PullRequestDetail,
     PullRequestFile,
     PullRequestSummary,
@@ -204,6 +206,30 @@ export function createFakeGithub(): FakeGithub {
         }
 
         return found;
+    }
+
+    function patchPullRequest(
+        token: string,
+        repository: string,
+        number: number,
+        patch: Partial<PullRequestDetail>,
+    ): PullRequestDetail {
+        const list = pullRequestsByToken.get(token) ?? [];
+        pullRequestsByToken.set(
+            token,
+            list.map((pullRequest) =>
+                pullRequest.repository === repository && pullRequest.number === number
+                    ? { ...pullRequest, ...patch, updatedAt: new Date().toISOString() }
+                    : pullRequest,
+            ),
+        );
+        return requirePullRequest(token, repository, number);
+    }
+
+    function requireOpen(pullRequest: PullRequestDetail): void {
+        if (pullRequest.state !== "open") {
+            throw new EasyReviewError("unknown", `${pullRequest.repository}#${pullRequest.number} is not open.`);
+        }
     }
 
     return {
@@ -418,6 +444,97 @@ export function createFakeGithub(): FakeGithub {
                 }
 
                 throw new EasyReviewError("not-found", "That review thread no longer exists.");
+            });
+        },
+        setPullRequestDraft(token, repository, number, isDraft) {
+            return respond("setPullRequestDraft", () => {
+                authenticate(token);
+                const pullRequest = requirePullRequest(token, repository, number);
+                requireOpen(pullRequest);
+                patchPullRequest(token, repository, number, { isDraft });
+            });
+        },
+        setPullRequestLabels(token, repository, number, labels) {
+            return respond("setPullRequestLabels", () => {
+                authenticate(token);
+                const pullRequest = requirePullRequest(token, repository, number);
+                requireOpen(pullRequest);
+                const next: Array<Label> = labels.map((name) => {
+                    const existing = pullRequest.labels.find((label) => label.name === name);
+                    return existing ?? { name, color: "ededed" };
+                });
+                patchPullRequest(token, repository, number, { labels: next });
+            });
+        },
+        setPullRequestAssignees(token, repository, number, assignees) {
+            return respond("setPullRequestAssignees", () => {
+                authenticate(token);
+                const pullRequest = requirePullRequest(token, repository, number);
+                requireOpen(pullRequest);
+                patchPullRequest(token, repository, number, { assignees: [...assignees] });
+            });
+        },
+        requestReviewers(token, repository, number, reviewers) {
+            return respond("requestReviewers", () => {
+                authenticate(token);
+                const pullRequest = requirePullRequest(token, repository, number);
+                requireOpen(pullRequest);
+                const next = new Set(pullRequest.reviewRequests);
+                for (const login of reviewers) {
+                    next.add(login);
+                }
+                patchPullRequest(token, repository, number, { reviewRequests: [...next] });
+            });
+        },
+        removeReviewers(token, repository, number, reviewers) {
+            return respond("removeReviewers", () => {
+                authenticate(token);
+                const pullRequest = requirePullRequest(token, repository, number);
+                requireOpen(pullRequest);
+                const drop = new Set(reviewers);
+                patchPullRequest(token, repository, number, {
+                    reviewRequests: pullRequest.reviewRequests.filter((login) => !drop.has(login)),
+                });
+            });
+        },
+        reRequestReview(token, repository, number, reviewers) {
+            return respond("reRequestReview", () => {
+                authenticate(token);
+                const pullRequest = requirePullRequest(token, repository, number);
+                requireOpen(pullRequest);
+                const drop = new Set(reviewers);
+                const without = pullRequest.reviewRequests.filter((login) => !drop.has(login));
+                patchPullRequest(token, repository, number, {
+                    reviewRequests: [...without, ...reviewers],
+                });
+            });
+        },
+        mergePullRequest(token, repository, number, _method: MergeMethod) {
+            return respond("mergePullRequest", () => {
+                authenticate(token);
+                const pullRequest = requirePullRequest(token, repository, number);
+                requireOpen(pullRequest);
+                if (pullRequest.mergeable === "conflicting") {
+                    throw new EasyReviewError("unknown", "This pull request has merge conflicts.");
+                }
+                patchPullRequest(token, repository, number, {
+                    state: "merged",
+                    isDraft: false,
+                    mergedAt: new Date().toISOString(),
+                    reviewRequests: [],
+                });
+            });
+        },
+        closePullRequest(token, repository, number) {
+            return respond("closePullRequest", () => {
+                authenticate(token);
+                const pullRequest = requirePullRequest(token, repository, number);
+                requireOpen(pullRequest);
+                patchPullRequest(token, repository, number, {
+                    state: "closed",
+                    isDraft: false,
+                    reviewRequests: [],
+                });
             });
         },
     };

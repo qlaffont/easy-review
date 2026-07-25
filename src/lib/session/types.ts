@@ -56,6 +56,9 @@ export type CheckRun = {
 /** Whether GitHub thinks the branches can still be combined. */
 export type MergeableState = "mergeable" | "conflicting" | "unknown";
 
+/** How GitHub should combine the head into the base when merging. */
+export type MergeMethod = "merge" | "squash" | "rebase";
+
 /** What the overview page needs on top of an Inbox row. */
 export type PullRequestDetail = PullRequestSummary & {
     /** Raw markdown, rendered client-side. Empty when the author wrote no description. */

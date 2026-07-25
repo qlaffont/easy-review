@@ -16,6 +16,7 @@ import type { CheckRun, CheckState, PullRequestDetail, PullRequestSummary } from
 
 import { ChecksDot } from "#/components/pr/checks-dot.tsx";
 import { Markdown } from "#/components/pr/markdown.tsx";
+import { PullRequestControls } from "#/components/pr/pull-request-controls.tsx";
 import { Badge } from "#/components/ui/badge.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import { formatRelativeTime } from "#/lib/format.ts";
@@ -68,6 +69,12 @@ export function PullRequestOverview({ repository, number }: { repository: string
                         baseUrl={blobBaseUrl(headline)}
                     />
                     <ChecksPanel detail={page.detail} />
+                    {page.detail ? (
+                        <PullRequestControls
+                            key={`${page.detail.updatedAt}-${page.detail.isDraft}-${page.detail.state}`}
+                            detail={page.detail}
+                        />
+                    ) : null}
                 </div>
                 <Sidebar headline={headline} detail={page.detail} />
             </div>

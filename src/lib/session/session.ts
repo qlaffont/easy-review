@@ -6,6 +6,7 @@ import type { GithubClient, GithubViewer, KeyValueStore } from "#/lib/session/po
 import type {
     DiffSide,
     FileDiff,
+    MergeMethod,
     PendingLineComment,
     PullRequestDetail,
     PullRequestFile,
@@ -1032,6 +1033,130 @@ export function createEasyReviewSession({ github, store }: EasyReviewSessionDeps
         return reply;
     }
 
+    /**
+     * After a lifecycle mutation, re-fetch the PR and patch the Inbox row so section
+     * classification and the overview stay aligned without a full inbox refresh.
+     * Shares the pull-request load generation counter so a slower tab-focus refresh
+     * cannot paint over the mutation result. Soft-fails the fetch so a successful
+     * GitHub write is not reported as an action failure.
+     */
+    async function refreshAfterMutation(repository: string, number: number): Promise<void> {
+        const key = pullRequestKey(repository, number);
+        const attempt = (latestPullRequestLoads.get(key) ?? 0) + 1;
+        latestPullRequestLoads.set(key, attempt);
+
+        try {
+            const detail = await github.getPullRequest(requireToken(), repository, number);
+            if (attempt !== latestPullRequestLoads.get(key)) {
+                return;
+            }
+
+            const summary = toInboxSummary(detail);
+
+            setPullRequest(key, {
+                status: "ready",
+                refreshing: false,
+                detail,
+                lastLoadedAt: new Date().toISOString(),
+                error: null,
+            });
+
+            const pullRequests = state.state.inbox.pullRequests.some((pullRequest) => pullRequest.key === key)
+                ? state.state.inbox.pullRequests.map((pullRequest) => (pullRequest.key === key ? summary : pullRequest))
+                : state.state.inbox.pullRequests;
+
+            setInbox({ pullRequests });
+            if (state.state.inbox.lastLoadedAt) {
+                await store.set(
+                    INBOX_CACHE_KEY,
+                    JSON.stringify({
+                        pullRequests,
+                        lastLoadedAt: state.state.inbox.lastLoadedAt,
+                    } satisfies InboxCache),
+                );
+            }
+
+            await syncDraftWithHead(detail);
+        } catch (error) {
+            if (attempt !== latestPullRequestLoads.get(key)) {
+                return;
+            }
+
+            setPullRequest(key, {
+                refreshing: false,
+                error: toSessionError(error),
+            });
+        }
+    }
+
+    async function setPullRequestDraft(repository: string, number: number, isDraft: boolean): Promise<void> {
+        await github.setPullRequestDraft(requireToken(), repository, number, isDraft);
+        await refreshAfterMutation(repository, number);
+    }
+
+    async function setPullRequestLabels(
+        repository: string,
+        number: number,
+        labels: ReadonlyArray<string>,
+    ): Promise<void> {
+        await github.setPullRequestLabels(requireToken(), repository, number, labels);
+        await refreshAfterMutation(repository, number);
+    }
+
+    async function setPullRequestAssignees(
+        repository: string,
+        number: number,
+        assignees: ReadonlyArray<string>,
+    ): Promise<void> {
+        await github.setPullRequestAssignees(requireToken(), repository, number, assignees);
+        await refreshAfterMutation(repository, number);
+    }
+
+    async function setReviewRequests(
+        repository: string,
+        number: number,
+        reviewers: ReadonlyArray<string>,
+    ): Promise<void> {
+        const detail = state.state.pullRequests[pullRequestKey(repository, number)]?.detail;
+        const current = new Set(detail?.reviewRequests ?? []);
+        const wanted = new Set(reviewers);
+        const toAdd = [...wanted].filter((login) => !current.has(login));
+        const toRemove = [...current].filter((login) => !wanted.has(login));
+
+        // Add before remove so a failed add cannot leave the wanted set already stripped.
+        if (toAdd.length > 0) {
+            await github.requestReviewers(requireToken(), repository, number, toAdd);
+        }
+        if (toRemove.length > 0) {
+            await github.removeReviewers(requireToken(), repository, number, toRemove);
+        }
+
+        await refreshAfterMutation(repository, number);
+    }
+
+    async function reRequestReview(
+        repository: string,
+        number: number,
+        reviewers: ReadonlyArray<string>,
+    ): Promise<void> {
+        if (reviewers.length === 0) {
+            return;
+        }
+
+        await github.reRequestReview(requireToken(), repository, number, reviewers);
+        await refreshAfterMutation(repository, number);
+    }
+
+    async function mergePullRequest(repository: string, number: number, method: MergeMethod): Promise<void> {
+        await github.mergePullRequest(requireToken(), repository, number, method);
+        await refreshAfterMutation(repository, number);
+    }
+
+    async function closePullRequest(repository: string, number: number): Promise<void> {
+        await github.closePullRequest(requireToken(), repository, number);
+        await refreshAfterMutation(repository, number);
+    }
+
     /** Every default section, empty ones included, holding only allowlisted repositories. */
     function getInboxSections(): Array<InboxSection> {
         const { inbox, repos, auth } = state.state;
@@ -1077,6 +1202,40 @@ export function createEasyReviewSession({ github, store }: EasyReviewSessionDeps
         loadReviewThreads,
         getReviewThreads,
         replyToReviewThread,
+        setPullRequestDraft,
+        setPullRequestLabels,
+        setPullRequestAssignees,
+        setReviewRequests,
+        reRequestReview,
+        mergePullRequest,
+        closePullRequest,
+    };
+}
+
+function toInboxSummary(detail: PullRequestDetail): PullRequestSummary {
+    return {
+        key: detail.key,
+        repository: detail.repository,
+        number: detail.number,
+        title: detail.title,
+        url: detail.url,
+        author: detail.author,
+        authorAvatarUrl: detail.authorAvatarUrl,
+        state: detail.state,
+        isDraft: detail.isDraft,
+        createdAt: detail.createdAt,
+        updatedAt: detail.updatedAt,
+        mergedAt: detail.mergedAt,
+        headRefName: detail.headRefName,
+        baseRefName: detail.baseRefName,
+        reviewDecision: detail.reviewDecision,
+        reviewRequests: detail.reviewRequests,
+        reviewers: detail.reviewers,
+        checks: detail.checks,
+        additions: detail.additions,
+        deletions: detail.deletions,
+        changedFiles: detail.changedFiles,
+        commentCount: detail.commentCount,
     };
 }
 

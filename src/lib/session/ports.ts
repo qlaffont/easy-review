@@ -1,5 +1,6 @@
 import type {
     FileDiff,
+    MergeMethod,
     PendingLineComment,
     PullRequestDetail,
     PullRequestFile,
@@ -62,6 +63,37 @@ export type GithubClient = {
     ): Promise<void>;
     /** Reply inside an existing thread. `threadId` is the GraphQL node id. */
     replyToReviewThread(token: string, threadId: string, body: string): Promise<ReviewThreadComment>;
+    /** Convert to draft (`true`) or mark ready for review (`false`). */
+    setPullRequestDraft(token: string, repository: string, number: number, isDraft: boolean): Promise<void>;
+    /** Replace the pull request's labels with exactly these names. */
+    setPullRequestLabels(
+        token: string,
+        repository: string,
+        number: number,
+        labels: ReadonlyArray<string>,
+    ): Promise<void>;
+    /** Replace the pull request's assignees with exactly these logins. */
+    setPullRequestAssignees(
+        token: string,
+        repository: string,
+        number: number,
+        assignees: ReadonlyArray<string>,
+    ): Promise<void>;
+    /** Ask these logins for a review (idempotent for already-requested logins). */
+    requestReviewers(
+        token: string,
+        repository: string,
+        number: number,
+        reviewers: ReadonlyArray<string>,
+    ): Promise<void>;
+    /** Drop outstanding review requests for these logins. */
+    removeReviewers(token: string, repository: string, number: number, reviewers: ReadonlyArray<string>): Promise<void>;
+    /** Remove then re-add review requests so GitHub pings the reviewers again. */
+    reRequestReview(token: string, repository: string, number: number, reviewers: ReadonlyArray<string>): Promise<void>;
+    /** Merge an open, mergeable pull request. */
+    mergePullRequest(token: string, repository: string, number: number, method: MergeMethod): Promise<void>;
+    /** Close an open pull request without merging. */
+    closePullRequest(token: string, repository: string, number: number): Promise<void>;
 };
 
 /** Browser persistence, narrowed to what the session needs so IndexedDB can replace it later. */
