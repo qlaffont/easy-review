@@ -251,7 +251,15 @@ export function createGithubHttpClient(fetchImpl: typeof fetch = globalThis.fetc
 
         async getPullRequest(token, repository, number) {
             const [owner = "", name = ""] = repository.split("/");
-            const data = await graphql<PullRequestQuery>(token, PULL_REQUEST_QUERY, { owner, name, number });
+            // Fine-grained PATs cannot read CheckRun nodes (no Checks permission exists for
+            // them), so GitHub returns FORBIDDEN on those context slots while still returning
+            // the PR and any StatusContext rows. Keep the partial payload.
+            const data = await graphql<PullRequestQuery>(
+                token,
+                PULL_REQUEST_QUERY,
+                { owner, name, number },
+                { keepPartial: true },
+            );
             const node = data.repository?.pullRequest;
 
             if (!node) {
@@ -817,7 +825,8 @@ type CheckContextNode =
           conclusion: string | null;
           detailsUrl: string | null;
       }
-    | { __typename: "StatusContext"; context: string; state: string; targetUrl: string | null };
+    | { __typename: "StatusContext"; context: string; state: string; targetUrl: string | null }
+    | null;
 
 /**
  * The overview asks for the same fields as an Inbox row plus the ones only a whole page has
@@ -999,7 +1008,7 @@ function toCheckRunState(status: string, conclusion: string | null): CheckState 
     }
 }
 
-function toCheckRun(context: CheckContextNode): CheckRun {
+function toCheckRun(context: NonNullable<CheckContextNode>): CheckRun {
     if (context.__typename === "CheckRun") {
         return {
             name: context.name,
@@ -1032,7 +1041,9 @@ function toPullRequestDetail(node: PullRequestDetailNode): PullRequestDetail {
         baseSha: node.baseRefOid,
         labels: node.labels?.nodes ?? [],
         assignees: node.assignees.nodes.map((assignee) => assignee.login),
-        checkRuns: (commit?.statusCheckRollup?.contexts.nodes ?? []).map(toCheckRun),
+        checkRuns: (commit?.statusCheckRollup?.contexts.nodes ?? [])
+            .filter((context): context is NonNullable<CheckContextNode> => context !== null)
+            .map(toCheckRun),
         mergeable: toMergeableState(node.mergeable),
     };
 }

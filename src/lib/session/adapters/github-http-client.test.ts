@@ -34,6 +34,82 @@ function pullRequestNode(repository: string, number: number) {
     };
 }
 
+describe("getPullRequest", () => {
+    it("keeps the pull request when CheckRun contexts are forbidden to fine-grained PATs", async () => {
+        const github = createGithubHttpClient(
+            respondWith({
+                data: {
+                    repository: {
+                        pullRequest: {
+                            number: 278,
+                            title: "Ship checks",
+                            url: "https://github.com/latomate/medical-web/pull/278",
+                            state: "OPEN",
+                            isDraft: true,
+                            createdAt: "2026-07-13T16:21:46Z",
+                            updatedAt: "2026-07-13T17:22:16Z",
+                            mergedAt: null,
+                            headRefName: "feature",
+                            baseRefName: "dev",
+                            additions: 1,
+                            deletions: 0,
+                            changedFiles: 1,
+                            reviewDecision: "REVIEW_REQUIRED",
+                            author: { login: "qlaffont", avatarUrl: null },
+                            repository: { nameWithOwner: "latomate/medical-web" },
+                            comments: { totalCount: 0 },
+                            reviewRequests: { nodes: [] },
+                            latestReviews: { nodes: [] },
+                            body: "",
+                            baseRefOid: "base",
+                            headRefOid: "head",
+                            mergeable: "CONFLICTING",
+                            labels: { nodes: [] },
+                            assignees: { nodes: [{ login: "qlaffont" }] },
+                            commits: {
+                                nodes: [
+                                    {
+                                        commit: {
+                                            oid: "head",
+                                            statusCheckRollup: {
+                                                state: "FAILURE",
+                                                contexts: {
+                                                    nodes: [
+                                                        null,
+                                                        null,
+                                                        {
+                                                            __typename: "StatusContext",
+                                                            context: "CodeRabbit",
+                                                            state: "SUCCESS",
+                                                            targetUrl: null,
+                                                        },
+                                                    ],
+                                                },
+                                            },
+                                        },
+                                    },
+                                ],
+                            },
+                        },
+                    },
+                },
+                errors: [
+                    {
+                        type: "FORBIDDEN",
+                        message: "Resource not accessible by personal access token",
+                    },
+                ],
+            }),
+        );
+
+        const detail = await github.getPullRequest("token", "latomate/medical-web", 278);
+
+        expect(detail.title).toBe("Ship checks");
+        expect(detail.checks).toBe("failure");
+        expect(detail.checkRuns).toEqual([{ name: "CodeRabbit", state: "success", url: null }]);
+    });
+});
+
 describe("listRepositories", () => {
     it("uses REST /user/repos so org-scoped fine-grained tokens see organization repos", async () => {
         const github = createGithubHttpClient(async (input) => {

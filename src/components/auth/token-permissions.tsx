@@ -7,8 +7,11 @@ const PERMISSIONS = [
         why: "Read PRs, submit reviews, edit reviewers, labels and assignees.",
     },
     { name: "Contents", level: "Read and write", why: "Read file diffs, and merge a pull request." },
-    { name: "Commit statuses", level: "Read-only", why: "Show CI status on Inbox rows and the PR overview." },
-    { name: "Checks", level: "Read-only", why: "Show check runs on Inbox rows and the PR overview." },
+    {
+        name: "Commit statuses",
+        level: "Read-only",
+        why: "Show CI status on Inbox rows and the PR overview (legacy statuses).",
+    },
 ];
 
 export function TokenPermissions() {
@@ -24,6 +27,15 @@ export function TokenPermissions() {
                     </dd>
                 </div>
             ))}
+            <div className="grid gap-1 px-3 py-2.5 sm:grid-cols-[11rem_1fr] sm:gap-3">
+                <dt className="font-medium">Checks</dt>
+                <dd className="text-muted-foreground">
+                    <span className="text-foreground">Not available on fine-grained PATs</span>
+                    <span aria-hidden="true"> — </span>
+                    GitHub only exposes Check runs to GitHub Apps. Easy Review still loads the PR and any commit
+                    statuses your token can see.
+                </dd>
+            </div>
         </dl>
     );
 }
