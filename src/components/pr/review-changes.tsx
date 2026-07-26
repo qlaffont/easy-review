@@ -1,78 +1,94 @@
-import { Link } from "@tanstack/react-router";
 import { useSelector } from "@tanstack/react-store";
-import { ArrowLeft, FileCode2, FileDiff, FileMinus2, FilePlus2 } from "lucide-react";
+import { FileCode2, FileDiff, FileMinus2, FilePlus2, RefreshCw } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import type { PullRequestFile } from "#/lib/session/types.ts";
 
-import { targetFromSummary, useSetActionTarget } from "#/components/actions/actions-provider.tsx";
 import { FileDiffViewer } from "#/components/pr/file-diff-viewer.tsx";
-import { ReviewDraftBar } from "#/components/pr/review-draft-bar.tsx";
 import { ReviewThreadsPanel } from "#/components/pr/review-threads.tsx";
 import { Button } from "#/components/ui/button.tsx";
+import { HelpTooltip } from "#/components/ui/help-tooltip.tsx";
 import { useSession } from "#/lib/session/provider.tsx";
 import { cn } from "#/lib/utils.ts";
 
-export function ReviewChanges({ repository, number }: { repository: string; number: number }) {
+export function ReviewChanges({
+    repository,
+    number,
+    initialPath,
+}: {
+    repository: string;
+    number: number;
+    initialPath?: string;
+}) {
     const session = useSession();
     const page = useSelector(session.state, () => session.getPullRequestPage(repository, number));
     const draft = useSelector(session.state, () => session.getReviewDraft(repository, number));
-    const [selectedPath, setSelectedPath] = useState<string | null>(null);
+    const [selectedPath, setSelectedPath] = useState<string | null>(initialPath ?? null);
     const selectedDiff = useSelector(session.state, () =>
         selectedPath ? session.getFileDiff(repository, number, selectedPath) : null,
     );
-    const headline = page.detail ?? page.summary;
-    useSetActionTarget(headline ? targetFromSummary(headline) : null);
 
     useEffect(() => {
-        void session.loadPullRequest(repository, number);
         void session.loadPullRequestFiles(repository, number);
     }, [session, repository, number]);
 
     useEffect(() => {
+        if (initialPath) {
+            setSelectedPath(initialPath);
+            return;
+        }
+
         if (!selectedPath && page.files.items[0]) {
             setSelectedPath(page.files.items[0].path);
         }
-    }, [page.files.items, selectedPath]);
+    }, [page.files.items, selectedPath, initialPath]);
+
+    // Re-run when the file list refreshes — that wipe clears `diffs`, and selectedPath alone
+    // would not change, so without `filesEpoch` the pane would stay empty.
+    const filesEpoch = page.files.lastLoadedAt;
 
     useEffect(() => {
         if (selectedPath) {
             void session.loadFileDiff(repository, number, selectedPath);
         }
-    }, [session, repository, number, selectedPath]);
+    }, [session, repository, number, selectedPath, filesEpoch]);
 
-    const [owner = "", repo = ""] = repository.split("/");
     const pendingOnFile = draft.comments.filter((comment) => comment.path === selectedPath);
+    const fileCount = page.files.status === "ready" ? page.files.items.length : null;
+    const diffPending =
+        selectedDiff === null ||
+        selectedDiff.status === "idle" ||
+        selectedDiff.status === "loading" ||
+        selectedDiff.refreshing === true;
 
     return (
-        <div className="flex h-[calc(100svh-3rem)] min-h-0 flex-col">
-            <header className="flex shrink-0 items-center justify-between gap-3 border-b px-4 py-3">
-                <div className="flex min-w-0 items-center gap-3">
-                    <Link
-                        to="/pr/$owner/$repo/$number"
-                        params={{ owner, repo, number: String(number) }}
-                        className="flex shrink-0 items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground"
+        <section id="review" className="flex min-h-0 flex-col overflow-hidden rounded-lg border">
+            <header className="flex shrink-0 items-center justify-between gap-3 border-b bg-muted/40 px-3 py-2">
+                <h2 className="text-sm font-medium">
+                    Files changed
+                    {fileCount !== null ? (
+                        <span className="ml-2 text-xs font-normal text-muted-foreground tabular-nums">{fileCount}</span>
+                    ) : null}
+                </h2>
+                <HelpTooltip label="Reload the changed-files list from GitHub">
+                    <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-7 px-2 text-xs"
+                        disabled={page.files.refreshing}
+                        onClick={() => void session.refreshPullRequestFiles(repository, number)}
                     >
-                        <ArrowLeft className="size-3.5" aria-hidden="true" />
-                        Overview
-                    </Link>
-                    <span className="truncate text-sm font-medium">{headline?.title ?? `${repository}#${number}`}</span>
-                </div>
-                <Button
-                    variant="outline"
-                    size="sm"
-                    disabled={page.files.refreshing}
-                    onClick={() => void session.refreshPullRequestFiles(repository, number)}
-                >
-                    Refresh files
-                </Button>
+                        <RefreshCw className={cn("size-3.5", page.files.refreshing && "animate-spin")} />
+                        Refresh
+                    </Button>
+                </HelpTooltip>
             </header>
 
             {page.files.error ? (
-                <p className="border-b px-4 py-2 text-sm text-destructive">{page.files.error.message}</p>
+                <p className="border-b px-3 py-2 text-sm text-destructive">{page.files.error.message}</p>
             ) : null}
 
-            <div className="grid min-h-0 flex-1 grid-cols-1 md:grid-cols-[18rem_minmax(0,1fr)]">
+            <div className="grid min-h-0 h-[min(70svh,52rem)] grid-cols-1 md:grid-cols-[16rem_minmax(0,1fr)]">
                 <FileList
                     files={page.files.items}
                     status={page.files.status}
@@ -80,25 +96,35 @@ export function ReviewChanges({ repository, number }: { repository: string; numb
                     pendingPaths={new Set(draft.comments.map((comment) => comment.path))}
                     onSelect={setSelectedPath}
                 />
-                <section className="flex min-h-0 min-w-0 flex-col border-t md:border-t-0 md:border-l">
+                <div className="flex min-h-0 min-w-0 flex-col border-t md:border-t-0 md:border-l">
                     {selectedPath ? (
                         <>
-                            <h2 className="shrink-0 truncate border-b bg-muted/40 px-3 py-2 font-mono text-xs">
+                            <h3 className="shrink-0 truncate border-b px-3 py-2 font-mono text-xs text-muted-foreground">
                                 {selectedPath}
-                            </h2>
+                            </h3>
                             <FileDiffViewer
                                 path={selectedPath}
                                 diff={selectedDiff?.diff ?? null}
-                                isLoading={selectedDiff?.status === "loading" || selectedDiff?.refreshing === true}
+                                isLoading={diffPending}
                                 error={selectedDiff?.error?.message ?? null}
                                 pendingComments={pendingOnFile}
                                 disabled={draft.stale}
+                                previewBaseUrl={
+                                    page.detail
+                                        ? `https://github.com/${page.detail.repository}/blob/${page.detail.headRefName}/`
+                                        : `https://github.com/${repository}/`
+                                }
                                 onLoadAnyway={() =>
                                     void session.loadFileDiff(repository, number, selectedPath, { force: true })
                                 }
                                 onAddComment={(target, body) =>
                                     session
-                                        .addPendingComment(repository, number, { ...target, body })
+                                        .addPendingComment(repository, number, {
+                                            path: target.path,
+                                            line: target.line,
+                                            side: target.side,
+                                            body,
+                                        })
                                         .then(() => undefined)
                                 }
                             />
@@ -107,11 +133,19 @@ export function ReviewChanges({ repository, number }: { repository: string; numb
                     ) : (
                         <p className="p-6 text-sm text-muted-foreground">Select a file to review its diff.</p>
                     )}
-                </section>
+                </div>
             </div>
 
-            <ReviewDraftBar repository={repository} number={number} />
-        </div>
+            {draft.comments.length > 0 || draft.stale ? (
+                <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-t bg-muted/30 px-3 py-2 text-xs">
+                    <p className="text-muted-foreground">
+                        {draft.stale
+                            ? "Draft is stale — open Review changes to discard or refresh."
+                            : `${draft.comments.length} pending comment${draft.comments.length === 1 ? "" : "s"} — submit from Review changes above.`}
+                    </p>
+                </div>
+            ) : null}
+        </section>
     );
 }
 
@@ -128,12 +162,12 @@ function FileList({
     pendingPaths: Set<string>;
     onSelect: (path: string) => void;
 }) {
-    if (status === "loading") {
-        return <p className="p-4 text-sm text-muted-foreground">Loading files…</p>;
+    if (status === "loading" || status === "idle") {
+        return <p className="p-3 text-sm text-muted-foreground">Loading files…</p>;
     }
 
     if (files.length === 0) {
-        return <p className="p-4 text-sm text-muted-foreground">No files changed.</p>;
+        return <p className="p-3 text-sm text-muted-foreground">No files changed.</p>;
     }
 
     return (
@@ -145,7 +179,7 @@ function FileList({
                             type="button"
                             onClick={() => onSelect(file.path)}
                             className={cn(
-                                "flex w-full items-start gap-2 px-3 py-1.5 text-left text-xs hover:bg-accent",
+                                "flex w-full cursor-pointer items-start gap-2 px-3 py-1.5 text-left text-xs hover:bg-accent",
                                 selectedPath === file.path && "bg-accent",
                             )}
                         >

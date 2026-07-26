@@ -5,7 +5,8 @@ import { memo } from "react";
 import type { PullRequestSummary } from "#/lib/session/types.ts";
 
 import { ChecksDot } from "#/components/pr/checks-dot.tsx";
-import { formatRelativeTime } from "#/lib/format.ts";
+import { HelpTooltip } from "#/components/ui/help-tooltip.tsx";
+import { RelativeTime } from "#/components/ui/relative-time.tsx";
 import { cn } from "#/lib/utils.ts";
 
 function ReviewProgress({ pullRequest }: { pullRequest: PullRequestSummary }) {
@@ -48,7 +49,7 @@ export const PullRequestRow = memo(function PullRequestRow({
             data-selected={selected || undefined}
             aria-current={selected ? "true" : undefined}
             className={cn(
-                "inbox-row grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-3 border-b px-3 py-2 text-sm no-underline last:border-b-0 hover:bg-accent/60",
+                "inbox-row grid cursor-pointer grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-3 border-b px-3 py-2 text-sm no-underline last:border-b-0 hover:bg-accent/60",
                 selected && "bg-accent",
             )}
         >
@@ -74,18 +75,20 @@ export const PullRequestRow = memo(function PullRequestRow({
 
             <span className="flex shrink-0 items-center gap-3 text-xs text-muted-foreground tabular-nums">
                 {pullRequest.commentCount > 0 ? (
-                    <span className="flex items-center gap-1" title={`${pullRequest.commentCount} comments`}>
-                        <MessageSquare className="size-3" aria-hidden="true" />
-                        {pullRequest.commentCount}
-                    </span>
+                    <HelpTooltip label={`${pullRequest.commentCount} comments`}>
+                        <span className="flex items-center gap-1">
+                            <MessageSquare className="size-3" aria-hidden="true" />
+                            {pullRequest.commentCount}
+                        </span>
+                    </HelpTooltip>
                 ) : null}
-                <span title={`${pullRequest.changedFiles} files changed`} className="hidden sm:inline">
-                    <span className="text-emerald-600 dark:text-emerald-400">+{pullRequest.additions}</span>{" "}
-                    <span className="text-red-600 dark:text-red-400">−{pullRequest.deletions}</span>
-                </span>
-                <time dateTime={pullRequest.updatedAt} className="w-14 text-right">
-                    {formatRelativeTime(pullRequest.updatedAt)}
-                </time>
+                <HelpTooltip label={`${pullRequest.changedFiles} files changed`}>
+                    <span className="hidden sm:inline">
+                        <span className="text-emerald-600 dark:text-emerald-400">+{pullRequest.additions}</span>{" "}
+                        <span className="text-red-600 dark:text-red-400">−{pullRequest.deletions}</span>
+                    </span>
+                </HelpTooltip>
+                <RelativeTime iso={pullRequest.updatedAt} className="w-14 text-right" />
             </span>
         </Link>
     );

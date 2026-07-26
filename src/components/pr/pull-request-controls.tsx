@@ -1,3 +1,4 @@
+import { AlertTriangle, Check, ChevronDown, GitMerge, GitPullRequestDraft, RotateCcw } from "lucide-react";
 import { useRef, useState } from "react";
 
 import type { MergeMethod, PullRequestDetail } from "#/lib/session/types.ts";
@@ -14,18 +15,45 @@ import {
     AlertDialogTrigger,
 } from "#/components/ui/alert-dialog.tsx";
 import { Button } from "#/components/ui/button.tsx";
-import { Input } from "#/components/ui/input.tsx";
+import {
+    DropdownMenu,
+    DropdownMenuContent,
+    DropdownMenuItem,
+    DropdownMenuSeparator,
+    DropdownMenuTrigger,
+} from "#/components/ui/dropdown-menu.tsx";
 import { useSession } from "#/lib/session/provider.tsx";
+import { cn } from "#/lib/utils.ts";
 
-function splitTokens(value: string): Array<string> {
-    return [
-        ...new Set(
-            value
-                .split(/[\s,]+/)
-                .map((token) => token.trim())
-                .filter(Boolean),
-        ),
-    ];
+const MERGE_METHOD_ORDER: Array<MergeMethod> = ["merge", "squash", "rebase"];
+
+function mergeMethodOptions(
+    allowed: Array<MergeMethod>,
+    commitCount: number,
+): Array<{ value: MergeMethod; label: string; description: string }> {
+    const commitLabel =
+        commitCount === 1 ? "The 1 commit from this branch" : `The ${commitCount} commits from this branch`;
+
+    const catalog: Record<MergeMethod, { label: string; description: string }> = {
+        merge: {
+            label: "Create a merge commit",
+            description: "All commits from this branch will be added to the base branch via a merge commit.",
+        },
+        squash: {
+            label: "Squash and merge",
+            description: `${commitLabel} will be combined into one commit in the base branch.`,
+        },
+        rebase: {
+            label: "Rebase and merge",
+            description: "All commits from this branch will be rebased and added to the base branch.",
+        },
+    };
+
+    const allowedSet = new Set(allowed);
+    return MERGE_METHOD_ORDER.filter((method) => allowedSet.has(method)).map((method) => ({
+        value: method,
+        ...catalog[method],
+    }));
 }
 
 export function PullRequestControls({ detail }: { detail: PullRequestDetail }) {
@@ -33,10 +61,10 @@ export function PullRequestControls({ detail }: { detail: PullRequestDetail }) {
     const [error, setError] = useState<string | null>(null);
     const [busy, setBusy] = useState(false);
     const busyRef = useRef(false);
-    const [labels, setLabels] = useState(() => detail.labels.map((label) => label.name).join(", "));
-    const [assignees, setAssignees] = useState(() => detail.assignees.join(", "));
-    const [reviewers, setReviewers] = useState(() => detail.reviewRequests.join(", "));
-    const [mergeMethod, setMergeMethod] = useState<MergeMethod>("squash");
+    const mergeOptions = mergeMethodOptions(detail.allowedMergeMethods, detail.commitCount);
+    const [mergeMethod, setMergeMethod] = useState<MergeMethod>(
+        () => detail.defaultMergeMethod ?? mergeOptions[0]?.value ?? "squash",
+    );
 
     if (detail.state !== "open") {
         return null;
@@ -60,182 +88,225 @@ export function PullRequestControls({ detail }: { detail: PullRequestDetail }) {
         }
     }
 
+    const mergeBlocked = detail.mergeable === "conflicting" || detail.isDraft || mergeOptions.length === 0;
+    const activeMergeMethod = mergeOptions.some((method) => method.value === mergeMethod)
+        ? mergeMethod
+        : (mergeOptions[0]?.value ?? mergeMethod);
+    const selectedMerge = mergeOptions.find((method) => method.value === activeMergeMethod) ?? mergeOptions[0] ?? null;
+    const conflictsUrl = `${detail.url}/conflicts`;
+    const mergeButtonClass = mergeBlocked
+        ? "bg-muted text-muted-foreground"
+        : "bg-[#1f883d] text-white hover:bg-[#1a7f37] dark:bg-[#238636] dark:hover:bg-[#2ea043]";
+
     return (
-        <section className="flex flex-col gap-3 rounded-lg border p-4">
-            <h2 className="text-sm font-medium">Controls</h2>
+        <section className="overflow-hidden rounded-lg border">
+            <h2 className="sr-only">Manage</h2>
 
-            <div className="flex flex-wrap gap-2">
-                <Button
-                    size="sm"
-                    variant="outline"
-                    disabled={busy}
-                    onClick={() =>
-                        void run(async () => {
-                            await session.setPullRequestDraft(detail.repository, detail.number, !detail.isDraft);
-                        })
+            {detail.mergeable === "conflicting" ? (
+                <StatusRow
+                    icon={<AlertTriangle className="size-4" aria-hidden="true" />}
+                    iconClassName="bg-muted text-muted-foreground"
+                    title="This branch has conflicts that must be resolved"
+                    description={`Resolve them before this pull request can land into ${detail.baseRefName}.`}
+                    action={
+                        <Button size="sm" variant="outline" asChild>
+                            <a href={conflictsUrl} target="_blank" rel="noreferrer">
+                                Resolve conflicts
+                            </a>
+                        </Button>
                     }
-                >
-                    {detail.isDraft ? "Ready for review" : "Convert to draft"}
-                </Button>
-
-                <ConfirmAction
-                    title="Close pull request?"
-                    description="The pull request will stay on GitHub as closed. This does not delete the branch."
-                    actionLabel="Close"
-                    disabled={busy}
-                    onConfirm={() =>
-                        void run(async () => {
-                            await session.closePullRequest(detail.repository, detail.number);
-                        })
-                    }
-                >
-                    Close
-                </ConfirmAction>
-
-                <div className="flex items-center gap-2">
-                    <select
-                        className="h-8 rounded-md border bg-background px-2 text-xs"
-                        value={mergeMethod}
-                        disabled={busy || detail.mergeable === "conflicting"}
-                        onChange={(event) => setMergeMethod(event.target.value as MergeMethod)}
-                    >
-                        <option value="squash">Squash</option>
-                        <option value="merge">Merge commit</option>
-                        <option value="rebase">Rebase</option>
-                    </select>
-                    <ConfirmAction
-                        title="Merge pull request?"
-                        description={`This will ${mergeMethod} ${detail.headRefName} into ${detail.baseRefName}.`}
-                        actionLabel="Merge"
-                        disabled={busy || detail.mergeable === "conflicting"}
-                        onConfirm={() =>
-                            void run(async () => {
-                                await session.mergePullRequest(detail.repository, detail.number, mergeMethod);
-                            })
-                        }
-                    >
-                        Merge
-                    </ConfirmAction>
-                </div>
-            </div>
-
-            <TokenField
-                label="Labels"
-                value={labels}
-                disabled={busy}
-                onChange={setLabels}
-                onSave={() =>
-                    void run(async () => {
-                        await session.setPullRequestLabels(detail.repository, detail.number, splitTokens(labels));
-                    })
-                }
-            />
-            <TokenField
-                label="Assignees"
-                value={assignees}
-                disabled={busy}
-                onChange={setAssignees}
-                onSave={() =>
-                    void run(async () => {
-                        await session.setPullRequestAssignees(detail.repository, detail.number, splitTokens(assignees));
-                    })
-                }
-            />
-            <TokenField
-                label="Requested reviewers"
-                value={reviewers}
-                disabled={busy}
-                onChange={setReviewers}
-                onSave={() =>
-                    void run(async () => {
-                        await session.setReviewRequests(detail.repository, detail.number, splitTokens(reviewers));
-                    })
-                }
-            />
-
-            {detail.reviewRequests.length > 0 ? (
-                <Button
-                    size="sm"
-                    variant="outline"
-                    disabled={busy}
-                    onClick={() =>
-                        void run(async () => {
-                            await session.reRequestReview(detail.repository, detail.number, detail.reviewRequests);
-                        })
-                    }
-                >
-                    Re-request review
-                </Button>
+                />
             ) : null}
 
-            {error ? <p className="text-sm text-destructive">{error}</p> : null}
+            {detail.isDraft ? (
+                <StatusRow
+                    icon={<GitPullRequestDraft className="size-4" aria-hidden="true" />}
+                    iconClassName="bg-muted text-muted-foreground"
+                    title="This pull request is still a work in progress"
+                    description="Draft pull requests cannot be merged."
+                    action={
+                        <Button
+                            size="sm"
+                            variant="outline"
+                            disabled={busy}
+                            onClick={() =>
+                                void run(async () => {
+                                    await session.setPullRequestDraft(detail.repository, detail.number, false);
+                                })
+                            }
+                        >
+                            Ready for review
+                        </Button>
+                    }
+                />
+            ) : null}
+
+            {detail.requiredApprovingReviewCount != null &&
+            detail.requiredApprovingReviewCount > 0 &&
+            detail.reviewDecision === "review-required" ? (
+                <StatusRow
+                    icon={<GitMerge className="size-4" aria-hidden="true" />}
+                    iconClassName="bg-muted text-muted-foreground"
+                    title={`At least ${detail.requiredApprovingReviewCount} approving ${
+                        detail.requiredApprovingReviewCount === 1 ? "review is" : "reviews are"
+                    } required to merge this pull request.`}
+                />
+            ) : null}
+
+            {detail.reviewRequests.length > 0 ? (
+                <StatusRow
+                    icon={<RotateCcw className="size-4" aria-hidden="true" />}
+                    iconClassName="bg-muted text-muted-foreground"
+                    title="Reviewers have already been requested"
+                    description="Ask them again if they need another look."
+                    action={
+                        <Button
+                            size="sm"
+                            variant="outline"
+                            disabled={busy}
+                            onClick={() =>
+                                void run(async () => {
+                                    await session.reRequestReview(
+                                        detail.repository,
+                                        detail.number,
+                                        detail.reviewRequests,
+                                    );
+                                })
+                            }
+                        >
+                            Re-request review
+                        </Button>
+                    }
+                />
+            ) : null}
+
+            <div className="flex flex-wrap items-center justify-end gap-x-3 gap-y-2 bg-muted/20 px-4 py-3">
+                <p className="mr-auto text-xs text-muted-foreground">
+                    {mergeOptions.length === 0
+                        ? "No merge methods are enabled for this repository."
+                        : detail.mergeable === "conflicting"
+                          ? `Conflicts with ${detail.baseRefName} — resolve them before merging.`
+                          : detail.isDraft
+                            ? "Draft pull requests cannot be merged."
+                            : `Ready to land into ${detail.baseRefName}.`}
+                </p>
+                {selectedMerge ? (
+                    <div className="inline-flex">
+                        <AlertDialog>
+                            <AlertDialogTrigger asChild>
+                                <Button
+                                    size="sm"
+                                    disabled={busy || mergeBlocked}
+                                    className={cn(
+                                        mergeOptions.length > 1 ? "rounded-r-none" : undefined,
+                                        mergeButtonClass,
+                                    )}
+                                >
+                                    {selectedMerge.label}
+                                </Button>
+                            </AlertDialogTrigger>
+                            <AlertDialogContent>
+                                <AlertDialogHeader>
+                                    <AlertDialogTitle>Merge pull request?</AlertDialogTitle>
+                                    <AlertDialogDescription>
+                                        This will {activeMergeMethod} {detail.headRefName} into {detail.baseRefName}.
+                                    </AlertDialogDescription>
+                                </AlertDialogHeader>
+                                <AlertDialogFooter>
+                                    <AlertDialogCancel>Cancel</AlertDialogCancel>
+                                    <AlertDialogAction
+                                        className="bg-[#1f883d] text-white hover:bg-[#1a7f37]"
+                                        onClick={() =>
+                                            void run(async () => {
+                                                await session.mergePullRequest(
+                                                    detail.repository,
+                                                    detail.number,
+                                                    activeMergeMethod,
+                                                );
+                                            })
+                                        }
+                                    >
+                                        {selectedMerge.label}
+                                    </AlertDialogAction>
+                                </AlertDialogFooter>
+                            </AlertDialogContent>
+                        </AlertDialog>
+                        {mergeOptions.length > 1 ? (
+                            <DropdownMenu>
+                                <DropdownMenuTrigger asChild>
+                                    <Button
+                                        size="sm"
+                                        disabled={busy || mergeBlocked}
+                                        className={cn(
+                                            "rounded-l-none border-l px-2",
+                                            mergeBlocked ? "border-border" : "border-white/25",
+                                            mergeButtonClass,
+                                        )}
+                                        aria-label="Select merge method"
+                                    >
+                                        <ChevronDown className="size-3.5" aria-hidden="true" />
+                                    </Button>
+                                </DropdownMenuTrigger>
+                                <DropdownMenuContent align="end" className="w-80">
+                                    {mergeOptions.map((method, index) => (
+                                        <div key={method.value}>
+                                            {index > 0 ? <DropdownMenuSeparator /> : null}
+                                            <DropdownMenuItem
+                                                className="items-start gap-2 py-2"
+                                                onSelect={() => setMergeMethod(method.value)}
+                                            >
+                                                <Check
+                                                    className={cn(
+                                                        "mt-0.5 size-3.5 shrink-0",
+                                                        activeMergeMethod === method.value
+                                                            ? "opacity-100"
+                                                            : "opacity-0",
+                                                    )}
+                                                    aria-hidden="true"
+                                                />
+                                                <span className="flex min-w-0 flex-col gap-0.5">
+                                                    <span className="font-medium">{method.label}</span>
+                                                    <span className="text-xs text-muted-foreground">
+                                                        {method.description}
+                                                    </span>
+                                                </span>
+                                            </DropdownMenuItem>
+                                        </div>
+                                    ))}
+                                </DropdownMenuContent>
+                            </DropdownMenu>
+                        ) : null}
+                    </div>
+                ) : null}
+                {error ? <p className="w-full text-sm text-destructive">{error}</p> : null}
+            </div>
         </section>
     );
 }
 
-function TokenField({
-    label,
-    value,
-    disabled,
-    onChange,
-    onSave,
-}: {
-    label: string;
-    value: string;
-    disabled: boolean;
-    onChange: (value: string) => void;
-    onSave: () => void;
-}) {
-    return (
-        <label className="flex flex-col gap-1.5 text-xs text-muted-foreground">
-            {label}
-            <div className="flex gap-2">
-                <Input
-                    value={value}
-                    disabled={disabled}
-                    placeholder="comma-separated"
-                    onChange={(event) => onChange(event.target.value)}
-                />
-                <Button size="sm" variant="outline" disabled={disabled} onClick={onSave}>
-                    Save
-                </Button>
-            </div>
-        </label>
-    );
-}
-
-function ConfirmAction({
+function StatusRow({
+    icon,
+    iconClassName,
     title,
     description,
-    actionLabel,
-    disabled,
-    onConfirm,
-    children,
+    action,
 }: {
+    icon: React.ReactNode;
+    iconClassName?: string;
     title: string;
-    description: string;
-    actionLabel: string;
-    disabled?: boolean;
-    onConfirm: () => void;
-    children: React.ReactNode;
+    description?: string;
+    action?: React.ReactNode;
 }) {
     return (
-        <AlertDialog>
-            <AlertDialogTrigger asChild>
-                <Button size="sm" variant="outline" disabled={disabled}>
-                    {children}
-                </Button>
-            </AlertDialogTrigger>
-            <AlertDialogContent>
-                <AlertDialogHeader>
-                    <AlertDialogTitle>{title}</AlertDialogTitle>
-                    <AlertDialogDescription>{description}</AlertDialogDescription>
-                </AlertDialogHeader>
-                <AlertDialogFooter>
-                    <AlertDialogCancel>Cancel</AlertDialogCancel>
-                    <AlertDialogAction onClick={onConfirm}>{actionLabel}</AlertDialogAction>
-                </AlertDialogFooter>
-            </AlertDialogContent>
-        </AlertDialog>
+        <div className="flex flex-wrap items-center gap-3 border-b px-4 py-3">
+            <span className={cn("flex size-8 shrink-0 items-center justify-center rounded-full", iconClassName)}>
+                {icon}
+            </span>
+            <div className="min-w-0 flex-1">
+                <p className="text-sm font-semibold text-foreground">{title}</p>
+                {description ? <p className="text-sm text-muted-foreground">{description}</p> : null}
+            </div>
+            {action ? <div className="shrink-0">{action}</div> : null}
+        </div>
     );
 }

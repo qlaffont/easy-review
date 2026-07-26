@@ -114,7 +114,7 @@ function SectionLayoutRow({
                     </Button>
                 </div>
             </div>
-            <label className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
+            <label className="flex cursor-pointer items-center justify-between gap-2 text-xs text-muted-foreground">
                 Show on Inbox
                 <Switch checked={!entry.hidden} onCheckedChange={(checked) => onHidden(!checked)} />
             </label>

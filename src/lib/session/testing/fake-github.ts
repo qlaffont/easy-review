@@ -3,10 +3,14 @@ import type {
     FileDiff,
     Label,
     MergeMethod,
+    PullRequestComment,
     PullRequestDetail,
     PullRequestFile,
     PullRequestSummary,
+    PullRequestTimelineItem,
     Repository,
+    RepositoryLabel,
+    RepositoryUser,
     ReviewEvent,
     ReviewThread,
     ReviewThreadComment,
@@ -21,6 +25,10 @@ export type FakeGithub = GithubClient & {
     addAccount(token: string, viewer?: Partial<GithubViewer>): GithubViewer;
     /** Make a repository visible to a token. */
     addRepository(token: string, nameWithOwner: string, repository?: Partial<Repository>): Repository;
+    /** Seed assignable users for a repository. */
+    setRepositoryAssignees(token: string, repository: string, users: Array<RepositoryUser>): void;
+    /** Seed labels for a repository. */
+    setRepositoryLabels(token: string, repository: string, labels: Array<RepositoryLabel>): void;
     /** Add a pull request to a repository. */
     addPullRequest(token: string, pullRequest: PullRequestInput): PullRequestDetail;
     /** Seed the files (and optional before/after text) for a pull request. */
@@ -40,6 +48,10 @@ export type FakeGithub = GithubClient & {
     }>;
     /** Seed an existing review thread on a pull request. */
     addReviewThread(token: string, repository: string, number: number, thread: ReviewThread): void;
+    /** Seed a conversation comment on a pull request. */
+    addConversationComment(token: string, repository: string, number: number, comment: PullRequestComment): void;
+    /** Seed a timeline event (commit, assignment, rename, …). */
+    addTimelineItem(token: string, repository: string, number: number, item: PullRequestTimelineItem): void;
     /** Move the head SHA so draft invalidation can be exercised. */
     setPullRequestHead(token: string, repository: string, number: number, headSha: string): void;
     /** Revoke a token so the next call with it fails as unauthorized. */
@@ -105,6 +117,11 @@ function buildPullRequest(input: PullRequestInput): PullRequestDetail {
         assignees: input.assignees ?? [],
         checkRuns: input.checkRuns ?? [],
         mergeable: input.mergeable ?? "mergeable",
+        requiredApprovingReviewCount:
+            input.requiredApprovingReviewCount ?? (input.reviewDecision === "review-required" ? 1 : null),
+        allowedMergeMethods: input.allowedMergeMethods ?? ["merge", "squash", "rebase"],
+        defaultMergeMethod: input.defaultMergeMethod ?? "squash",
+        commitCount: input.commitCount ?? 1,
     };
 }
 
@@ -157,6 +174,9 @@ export function createFakeGithub(): FakeGithub {
     const pullRequestsByToken = new Map<string, Array<PullRequestDetail>>();
     const filesByPullRequest = new Map<string, Array<StoredFile>>();
     const threadsByPullRequest = new Map<string, Array<ReviewThread>>();
+    const timelineByPullRequest = new Map<string, Array<PullRequestTimelineItem>>();
+    const assigneesByRepository = new Map<string, Array<RepositoryUser>>();
+    const labelsByRepository = new Map<string, Array<RepositoryLabel>>();
     const pullRequestQueries: Array<ReadonlyArray<string>> = [];
     const fileDiffQueries: Array<string> = [];
     const submittedReviews: FakeGithub["submittedReviews"] = [];
@@ -164,6 +184,7 @@ export function createFakeGithub(): FakeGithub {
     let forcedError: EasyReviewError | null = null;
     let gate: Promise<void> | null = null;
     let replyCounter = 0;
+    let conversationCommentCounter = 0;
 
     function authenticate(token: string): GithubViewer {
         if (forcedError) {
@@ -258,16 +279,79 @@ export function createFakeGithub(): FakeGithub {
             };
 
             repositoriesByToken.set(token, [...(repositoriesByToken.get(token) ?? []), entry]);
+            const repoKey = `${token}:${nameWithOwner}`;
+            if (!assigneesByRepository.has(repoKey)) {
+                assigneesByRepository.set(repoKey, [
+                    {
+                        login: accounts.get(token)?.login ?? "octocat",
+                        name: accounts.get(token)?.name ?? null,
+                        avatarUrl: accounts.get(token)?.avatarUrl ?? null,
+                    },
+                    { login: "hubot", name: "Hubot", avatarUrl: null },
+                    { login: "mona", name: "Mona Lisa", avatarUrl: null },
+                ]);
+            }
+            if (!labelsByRepository.has(repoKey)) {
+                labelsByRepository.set(repoKey, [
+                    { name: "bug", color: "d73a4a", description: "Something isn't working" },
+                    { name: "enhancement", color: "a2eeef", description: "New feature or request" },
+                    {
+                        name: "documentation",
+                        color: "0075ca",
+                        description: "Improvements or additions to documentation",
+                    },
+                ]);
+            }
             return entry;
+        },
+        setRepositoryAssignees(token, repository, users) {
+            assigneesByRepository.set(`${token}:${repository}`, [...users]);
+        },
+        setRepositoryLabels(token, repository, labels) {
+            labelsByRepository.set(`${token}:${repository}`, [...labels]);
         },
         addPullRequest(token, input) {
             const pullRequest = buildPullRequest(input);
             pullRequestsByToken.set(token, [...(pullRequestsByToken.get(token) ?? []), pullRequest]);
+            const repoKey = `${token}:${input.repository}`;
+            if (!assigneesByRepository.has(repoKey)) {
+                assigneesByRepository.set(repoKey, [
+                    {
+                        login: accounts.get(token)?.login ?? "octocat",
+                        name: accounts.get(token)?.name ?? null,
+                        avatarUrl: accounts.get(token)?.avatarUrl ?? null,
+                    },
+                    { login: "hubot", name: "Hubot", avatarUrl: null },
+                    { login: "mona", name: "Mona Lisa", avatarUrl: null },
+                ]);
+            }
+            if (!labelsByRepository.has(repoKey)) {
+                labelsByRepository.set(repoKey, [
+                    { name: "bug", color: "d73a4a", description: "Something isn't working" },
+                    { name: "enhancement", color: "a2eeef", description: "New feature or request" },
+                    {
+                        name: "documentation",
+                        color: "0075ca",
+                        description: "Improvements or additions to documentation",
+                    },
+                ]);
+            }
             return pullRequest;
         },
         addReviewThread(token, repository, number, thread) {
             const key = filesKey(token, repository, number);
             threadsByPullRequest.set(key, [...(threadsByPullRequest.get(key) ?? []), thread]);
+        },
+        addConversationComment(token, repository, number, comment) {
+            const key = filesKey(token, repository, number);
+            timelineByPullRequest.set(key, [
+                ...(timelineByPullRequest.get(key) ?? []),
+                { kind: "comment", ...comment },
+            ]);
+        },
+        addTimelineItem(token, repository, number, item) {
+            const key = filesKey(token, repository, number);
+            timelineByPullRequest.set(key, [...(timelineByPullRequest.get(key) ?? []), item]);
         },
         setPullRequestHead(token, repository, number, headSha) {
             const list = pullRequestsByToken.get(token) ?? [];
@@ -314,9 +398,15 @@ export function createFakeGithub(): FakeGithub {
             repositoriesByToken.delete(token);
             pullRequestsByToken.delete(token);
 
-            for (const key of filesByPullRequest.keys()) {
+            for (const key of [
+                ...filesByPullRequest.keys(),
+                ...threadsByPullRequest.keys(),
+                ...timelineByPullRequest.keys(),
+            ]) {
                 if (key.startsWith(`${token}:`)) {
                     filesByPullRequest.delete(key);
+                    threadsByPullRequest.delete(key);
+                    timelineByPullRequest.delete(key);
                 }
             }
         },
@@ -363,6 +453,18 @@ export function createFakeGithub(): FakeGithub {
                 return requirePullRequest(token, repository, number);
             });
         },
+        listRepositoryAssignees(token, repository) {
+            return respond("listRepositoryAssignees", () => {
+                authenticate(token);
+                return [...(assigneesByRepository.get(`${token}:${repository}`) ?? [])];
+            });
+        },
+        listRepositoryLabels(token, repository) {
+            return respond("listRepositoryLabels", () => {
+                authenticate(token);
+                return [...(labelsByRepository.get(`${token}:${repository}`) ?? [])];
+            });
+        },
         listPullRequestFiles(token, repository, number) {
             return respond("listPullRequestFiles", () => {
                 authenticate(token);
@@ -400,6 +502,48 @@ export function createFakeGithub(): FakeGithub {
                 authenticate(token);
                 requirePullRequest(token, repository, number);
                 return threadsByPullRequest.get(filesKey(token, repository, number)) ?? [];
+            });
+        },
+        listPullRequestComments(token, repository, number) {
+            return respond("listPullRequestComments", () => {
+                authenticate(token);
+                requirePullRequest(token, repository, number);
+                return (timelineByPullRequest.get(filesKey(token, repository, number)) ?? [])
+                    .filter(
+                        (item): item is Extract<PullRequestTimelineItem, { kind: "comment" }> =>
+                            item.kind === "comment",
+                    )
+                    .map(({ kind: _kind, ...comment }) => comment);
+            });
+        },
+        listPullRequestTimeline(token, repository, number) {
+            return respond("listPullRequestTimeline", () => {
+                authenticate(token);
+                requirePullRequest(token, repository, number);
+                return [...(timelineByPullRequest.get(filesKey(token, repository, number)) ?? [])];
+            });
+        },
+        addPullRequestComment(token, repository, number, body) {
+            return respond("addPullRequestComment", (): PullRequestComment => {
+                authenticate(token);
+                const pullRequest = requirePullRequest(token, repository, number);
+                const comment: PullRequestComment = {
+                    id: `issue-comment-${++conversationCommentCounter}`,
+                    author: accounts.get(token)?.login ?? "octocat",
+                    authorAvatarUrl: accounts.get(token)?.avatarUrl ?? null,
+                    body,
+                    createdAt: new Date().toISOString(),
+                    url: `${pullRequest.url}#issuecomment-${conversationCommentCounter}`,
+                };
+                const key = filesKey(token, repository, number);
+                timelineByPullRequest.set(key, [
+                    ...(timelineByPullRequest.get(key) ?? []),
+                    { kind: "comment", ...comment },
+                ]);
+                patchPullRequest(token, repository, number, {
+                    commentCount: pullRequest.commentCount + 1,
+                });
+                return comment;
             });
         },
         submitReview(token, input) {

@@ -5,10 +5,14 @@ import type {
     FileChangeStatus,
     MergeableState,
     MergeMethod,
+    PullRequestComment,
     PullRequestDetail,
     PullRequestFile,
     PullRequestSummary,
+    PullRequestTimelineItem,
     Repository,
+    RepositoryLabel,
+    RepositoryUser,
     ReviewDecision,
     ReviewEvent,
     ReviewState,
@@ -32,6 +36,8 @@ const MERGED_PULL_REQUESTS_PER_REPOSITORY = 10;
 /** GraphQL caps `pullRequest.files` at 100 per page. */
 const FILES_PAGE_SIZE = 100;
 const FILES_PAGE_LIMIT = 20;
+const TIMELINE_PAGE_SIZE = 100;
+const TIMELINE_PAGE_LIMIT = 5;
 
 type GraphqlResponse<TData> = {
     data?: TData;
@@ -269,7 +275,79 @@ export function createGithubHttpClient(fetchImpl: typeof fetch = globalThis.fetc
                 );
             }
 
-            return toPullRequestDetail(node);
+            const repo = data.repository!;
+            const detail = toPullRequestDetail(node, {
+                mergeCommitAllowed: repo.mergeCommitAllowed,
+                squashMergeAllowed: repo.squashMergeAllowed,
+                rebaseMergeAllowed: repo.rebaseMergeAllowed,
+                viewerDefaultMergeMethod: repo.viewerDefaultMergeMethod,
+            });
+            if (detail.requiredApprovingReviewCount != null) {
+                return detail;
+            }
+
+            // Classic `branchProtectionRule` is often null when the requirement comes from
+            // repository rulesets — resolve the effective rules for the base branch.
+            const fromRulesets = await requiredApprovingReviewsFromBranchRules(token, owner, name, node.baseRefName);
+
+            return {
+                ...detail,
+                requiredApprovingReviewCount: fromRulesets,
+            };
+        },
+
+        async listRepositoryAssignees(token, repository) {
+            const [owner = "", name = ""] = repository.split("/");
+            const users: Array<RepositoryUser> = [];
+            let path: string | null = `/repos/${owner}/${name}/assignees?per_page=100`;
+
+            for (let page = 0; page < 10 && path; page++) {
+                const response = await rest(token, path);
+
+                if (!response.ok) {
+                    throw errorForStatus(response);
+                }
+
+                const nodes = (await response.json()) as Array<RestUserNode>;
+                for (const node of nodes) {
+                    users.push({
+                        login: node.login,
+                        name: node.name ?? null,
+                        avatarUrl: node.avatar_url ?? null,
+                    });
+                }
+
+                path = nextRestPath(response.headers.get("link"));
+            }
+
+            return users;
+        },
+
+        async listRepositoryLabels(token, repository) {
+            const [owner = "", name = ""] = repository.split("/");
+            const labels: Array<RepositoryLabel> = [];
+            let path: string | null = `/repos/${owner}/${name}/labels?per_page=100`;
+
+            for (let page = 0; page < 10 && path; page++) {
+                const response = await rest(token, path);
+
+                if (!response.ok) {
+                    throw errorForStatus(response);
+                }
+
+                const nodes = (await response.json()) as Array<RestLabelNode>;
+                for (const node of nodes) {
+                    labels.push({
+                        name: node.name,
+                        color: node.color,
+                        description: node.description,
+                    });
+                }
+
+                path = nextRestPath(response.headers.get("link"));
+            }
+
+            return labels;
         },
 
         async listPullRequestFiles(token, repository, number) {
@@ -383,6 +461,76 @@ export function createGithubHttpClient(fetchImpl: typeof fetch = globalThis.fetc
             }
 
             return threads;
+        },
+
+        async listPullRequestComments(token, repository, number) {
+            const [owner = "", name = ""] = repository.split("/");
+            const comments: Array<PullRequestComment> = [];
+            let path: string | null = `/repos/${owner}/${name}/issues/${number}/comments?per_page=100`;
+
+            for (let page = 0; page < 10 && path; page++) {
+                const response = await rest(token, path);
+
+                if (!response.ok) {
+                    throw errorForStatus(response);
+                }
+
+                const nodes = (await response.json()) as Array<RestIssueCommentNode>;
+                for (const node of nodes) {
+                    comments.push(toPullRequestComment(node));
+                }
+
+                path = nextRestPath(response.headers.get("link"));
+            }
+
+            return comments;
+        },
+
+        async listPullRequestTimeline(token, repository, number) {
+            const [owner = "", name = ""] = repository.split("/");
+            const items: Array<PullRequestTimelineItem> = [];
+            let cursor: string | null = null;
+
+            for (let page = 0; page < TIMELINE_PAGE_LIMIT; page++) {
+                const data: PullRequestTimelineQuery = await graphql(token, PULL_REQUEST_TIMELINE_QUERY, {
+                    owner,
+                    name,
+                    number,
+                    pageSize: TIMELINE_PAGE_SIZE,
+                    cursor,
+                });
+                const connection = data.repository?.pullRequest?.timelineItems;
+                if (!connection) {
+                    throw new EasyReviewError(
+                        "not-found",
+                        `${repository}#${number} does not exist, or this token cannot see it.`,
+                    );
+                }
+
+                for (const node of connection.nodes) {
+                    const item = toTimelineItem(node);
+                    if (item) {
+                        items.push(item);
+                    }
+                }
+
+                if (!connection.pageInfo.hasNextPage || !connection.pageInfo.endCursor) {
+                    break;
+                }
+
+                cursor = connection.pageInfo.endCursor;
+            }
+
+            return items;
+        },
+
+        async addPullRequestComment(token, repository, number, body) {
+            const [owner = "", name = ""] = repository.split("/");
+            const node = (await restJson(token, "POST", `/repos/${owner}/${name}/issues/${number}/comments`, {
+                body,
+            })) as RestIssueCommentNode;
+
+            return toPullRequestComment(node);
         },
 
         async submitReview(token, input) {
@@ -533,6 +681,36 @@ export function createGithubHttpClient(fetchImpl: typeof fetch = globalThis.fetc
                 cause,
             });
         }
+    }
+
+    /** Effective pull-request rules for a branch (rulesets + classic protection). */
+    async function requiredApprovingReviewsFromBranchRules(
+        token: string,
+        owner: string,
+        name: string,
+        branch: string,
+    ): Promise<number | null> {
+        const response = await rest(token, `/repos/${owner}/${name}/rules/branches/${encodeURIComponent(branch)}`);
+
+        if (!response.ok) {
+            return null;
+        }
+
+        const rules = (await response.json()) as Array<BranchRuleNode>;
+        let required: number | null = null;
+
+        for (const rule of rules) {
+            if (rule.type !== "pull_request") {
+                continue;
+            }
+
+            const count = rule.parameters?.required_approving_review_count;
+            if (typeof count === "number" && count > 0) {
+                required = required == null ? count : Math.max(required, count);
+            }
+        }
+
+        return required;
     }
 
     /**
@@ -838,9 +1016,16 @@ type PullRequestDetailNode = Omit<PullRequestNode, "commits"> & {
     baseRefOid: string;
     headRefOid: string;
     mergeable: "MERGEABLE" | "CONFLICTING" | "UNKNOWN";
+    baseRef: {
+        branchProtectionRule: {
+            requiresApprovingReviews: boolean;
+            requiredApprovingReviewCount: number;
+        } | null;
+    } | null;
     labels: { nodes: Array<{ name: string; color: string }> } | null;
     assignees: { nodes: Array<{ login: string }> };
     commits: {
+        totalCount: number;
         nodes: Array<{
             commit: {
                 oid: string;
@@ -850,7 +1035,16 @@ type PullRequestDetailNode = Omit<PullRequestNode, "commits"> & {
     };
 };
 
-type PullRequestQuery = { repository: { pullRequest: PullRequestDetailNode | null } | null };
+type RepositoryMergeSettings = {
+    mergeCommitAllowed: boolean;
+    squashMergeAllowed: boolean;
+    rebaseMergeAllowed: boolean;
+    viewerDefaultMergeMethod: "MERGE" | "SQUASH" | "REBASE" | null;
+};
+
+type PullRequestQuery = {
+    repository: (RepositoryMergeSettings & { pullRequest: PullRequestDetailNode | null }) | null;
+};
 
 type PullRequestFileNode = {
     path: string;
@@ -877,12 +1071,22 @@ type PullRequestRefsQuery = {
 const PULL_REQUEST_QUERY = `
     query EasyReviewPullRequest($owner: String!, $name: String!, $number: Int!) {
         repository(owner: $owner, name: $name) {
+            mergeCommitAllowed
+            squashMergeAllowed
+            rebaseMergeAllowed
+            viewerDefaultMergeMethod
             pullRequest(number: $number) {
                 ${PULL_REQUEST_FIELDS}
                 body
                 baseRefOid
                 headRefOid
                 mergeable
+                baseRef {
+                    branchProtectionRule {
+                        requiresApprovingReviews
+                        requiredApprovingReviewCount
+                    }
+                }
                 labels(first: 20) {
                     nodes {
                         name
@@ -895,6 +1099,7 @@ const PULL_REQUEST_QUERY = `
                     }
                 }
                 commits(last: 1) {
+                    totalCount
                     nodes {
                         commit {
                             oid
@@ -950,6 +1155,508 @@ const PULL_REQUEST_FILES_QUERY = `
         }
     }
 `;
+
+const TIMELINE_ITEM_TYPES = [
+    "ISSUE_COMMENT",
+    "PULL_REQUEST_COMMIT",
+    "ASSIGNED_EVENT",
+    "UNASSIGNED_EVENT",
+    "RENAMED_TITLE_EVENT",
+    "LABELED_EVENT",
+    "UNLABELED_EVENT",
+    "REVIEW_REQUESTED_EVENT",
+    "REVIEW_REQUEST_REMOVED_EVENT",
+    "READY_FOR_REVIEW_EVENT",
+    "CONVERT_TO_DRAFT_EVENT",
+    "CLOSED_EVENT",
+    "REOPENED_EVENT",
+    "MERGED_EVENT",
+    "PULL_REQUEST_REVIEW",
+    "HEAD_REF_FORCE_PUSHED_EVENT",
+    "BASE_REF_CHANGED_EVENT",
+] as const;
+
+const PULL_REQUEST_TIMELINE_QUERY = `
+    query EasyReviewPullRequestTimeline(
+        $owner: String!
+        $name: String!
+        $number: Int!
+        $pageSize: Int!
+        $cursor: String
+    ) {
+        repository(owner: $owner, name: $name) {
+            pullRequest(number: $number) {
+                timelineItems(
+                    first: $pageSize
+                    after: $cursor
+                    itemTypes: [${TIMELINE_ITEM_TYPES.join(", ")}]
+                ) {
+                    pageInfo {
+                        hasNextPage
+                        endCursor
+                    }
+                    nodes {
+                        __typename
+                        ... on IssueComment {
+                            id
+                            body
+                            createdAt
+                            url
+                            author {
+                                login
+                                avatarUrl
+                            }
+                        }
+                        ... on PullRequestCommit {
+                            id
+                            commit {
+                                oid
+                                abbreviatedOid
+                                messageHeadline
+                                committedDate
+                                url
+                                author {
+                                    user {
+                                        login
+                                        avatarUrl
+                                    }
+                                    name
+                                }
+                                statusCheckRollup {
+                                    state
+                                }
+                            }
+                        }
+                        ... on AssignedEvent {
+                            id
+                            createdAt
+                            actor {
+                                login
+                                avatarUrl
+                            }
+                            assignee {
+                                ... on User {
+                                    login
+                                }
+                            }
+                        }
+                        ... on UnassignedEvent {
+                            id
+                            createdAt
+                            actor {
+                                login
+                                avatarUrl
+                            }
+                            assignee {
+                                ... on User {
+                                    login
+                                }
+                            }
+                        }
+                        ... on RenamedTitleEvent {
+                            id
+                            createdAt
+                            actor {
+                                login
+                                avatarUrl
+                            }
+                            previousTitle
+                            currentTitle
+                        }
+                        ... on LabeledEvent {
+                            id
+                            createdAt
+                            actor {
+                                login
+                                avatarUrl
+                            }
+                            label {
+                                name
+                                color
+                            }
+                        }
+                        ... on UnlabeledEvent {
+                            id
+                            createdAt
+                            actor {
+                                login
+                                avatarUrl
+                            }
+                            label {
+                                name
+                                color
+                            }
+                        }
+                        ... on ReviewRequestedEvent {
+                            id
+                            createdAt
+                            actor {
+                                login
+                                avatarUrl
+                            }
+                            requestedReviewer {
+                                ... on User {
+                                    login
+                                }
+                                ... on Team {
+                                    name
+                                }
+                            }
+                        }
+                        ... on ReviewRequestRemovedEvent {
+                            id
+                            createdAt
+                            actor {
+                                login
+                                avatarUrl
+                            }
+                            requestedReviewer {
+                                ... on User {
+                                    login
+                                }
+                                ... on Team {
+                                    name
+                                }
+                            }
+                        }
+                        ... on ReadyForReviewEvent {
+                            id
+                            createdAt
+                            actor {
+                                login
+                                avatarUrl
+                            }
+                        }
+                        ... on ConvertToDraftEvent {
+                            id
+                            createdAt
+                            actor {
+                                login
+                                avatarUrl
+                            }
+                        }
+                        ... on ClosedEvent {
+                            id
+                            createdAt
+                            actor {
+                                login
+                                avatarUrl
+                            }
+                        }
+                        ... on ReopenedEvent {
+                            id
+                            createdAt
+                            actor {
+                                login
+                                avatarUrl
+                            }
+                        }
+                        ... on MergedEvent {
+                            id
+                            createdAt
+                            actor {
+                                login
+                                avatarUrl
+                            }
+                        }
+                        ... on PullRequestReview {
+                            id
+                            body
+                            createdAt
+                            url
+                            state
+                            author {
+                                login
+                                avatarUrl
+                            }
+                        }
+                        ... on HeadRefForcePushedEvent {
+                            id
+                            createdAt
+                            actor {
+                                login
+                                avatarUrl
+                            }
+                        }
+                        ... on BaseRefChangedEvent {
+                            id
+                            createdAt
+                            actor {
+                                login
+                                avatarUrl
+                            }
+                            previousRefName
+                            currentRefName
+                        }
+                    }
+                }
+            }
+        }
+    }
+`;
+
+type TimelineActorNode = { login: string; avatarUrl: string | null } | null;
+
+type TimelineNode =
+    | {
+          __typename: "IssueComment";
+          id: string;
+          body: string;
+          createdAt: string;
+          url: string;
+          author: TimelineActorNode;
+      }
+    | {
+          __typename: "PullRequestCommit";
+          id: string;
+          commit: {
+              oid: string;
+              abbreviatedOid: string;
+              messageHeadline: string;
+              committedDate: string;
+              url: string;
+              author: { user: TimelineActorNode; name: string | null } | null;
+              statusCheckRollup: { state: string } | null;
+          };
+      }
+    | {
+          __typename: "AssignedEvent" | "UnassignedEvent";
+          id: string;
+          createdAt: string;
+          actor: TimelineActorNode;
+          assignee: { login: string } | null;
+      }
+    | {
+          __typename: "RenamedTitleEvent";
+          id: string;
+          createdAt: string;
+          actor: TimelineActorNode;
+          previousTitle: string;
+          currentTitle: string;
+      }
+    | {
+          __typename: "LabeledEvent" | "UnlabeledEvent";
+          id: string;
+          createdAt: string;
+          actor: TimelineActorNode;
+          label: { name: string; color: string };
+      }
+    | {
+          __typename: "ReviewRequestedEvent" | "ReviewRequestRemovedEvent";
+          id: string;
+          createdAt: string;
+          actor: TimelineActorNode;
+          requestedReviewer: { login?: string; name?: string } | null;
+      }
+    | {
+          __typename:
+              | "ReadyForReviewEvent"
+              | "ConvertToDraftEvent"
+              | "ClosedEvent"
+              | "ReopenedEvent"
+              | "MergedEvent"
+              | "HeadRefForcePushedEvent";
+          id: string;
+          createdAt: string;
+          actor: TimelineActorNode;
+      }
+    | {
+          __typename: "PullRequestReview";
+          id: string;
+          body: string;
+          createdAt: string;
+          url: string;
+          state: string;
+          author: TimelineActorNode;
+      }
+    | {
+          __typename: "BaseRefChangedEvent";
+          id: string;
+          createdAt: string;
+          actor: TimelineActorNode;
+          previousRefName: string;
+          currentRefName: string;
+      }
+    | null;
+
+type PullRequestTimelineQuery = {
+    repository: {
+        pullRequest: {
+            timelineItems: {
+                pageInfo: { hasNextPage: boolean; endCursor: string | null };
+                nodes: Array<TimelineNode>;
+            };
+        } | null;
+    } | null;
+};
+
+function toTimelineActor(actor: TimelineActorNode): { login: string; avatarUrl: string | null } {
+    return {
+        login: actor?.login ?? "ghost",
+        avatarUrl: actor?.avatarUrl ?? null,
+    };
+}
+
+function toTimelineReviewer(reviewer: { login?: string; name?: string } | null): string {
+    return reviewer?.login ?? reviewer?.name ?? "someone";
+}
+
+function toTimelineItem(node: TimelineNode): PullRequestTimelineItem | null {
+    if (!node) {
+        return null;
+    }
+
+    switch (node.__typename) {
+        case "IssueComment":
+            return {
+                kind: "comment",
+                id: node.id,
+                author: node.author?.login ?? "ghost",
+                authorAvatarUrl: node.author?.avatarUrl ?? null,
+                body: node.body,
+                createdAt: node.createdAt,
+                url: node.url,
+            };
+        case "PullRequestCommit": {
+            const commit = node.commit;
+            const authorUser = commit.author?.user;
+            return {
+                kind: "commit",
+                id: node.id,
+                createdAt: commit.committedDate,
+                author: {
+                    login: authorUser?.login ?? commit.author?.name ?? "ghost",
+                    avatarUrl: authorUser?.avatarUrl ?? null,
+                },
+                messageHeadline: commit.messageHeadline,
+                oid: commit.oid,
+                abbreviatedOid: commit.abbreviatedOid,
+                url: commit.url,
+                checkState: toCheckState(commit.statusCheckRollup?.state),
+            };
+        }
+        case "AssignedEvent":
+            return {
+                kind: "assigned",
+                id: node.id,
+                createdAt: node.createdAt,
+                actor: toTimelineActor(node.actor),
+                assignee: node.assignee?.login ?? "someone",
+            };
+        case "UnassignedEvent":
+            return {
+                kind: "unassigned",
+                id: node.id,
+                createdAt: node.createdAt,
+                actor: toTimelineActor(node.actor),
+                assignee: node.assignee?.login ?? "someone",
+            };
+        case "RenamedTitleEvent":
+            return {
+                kind: "renamed-title",
+                id: node.id,
+                createdAt: node.createdAt,
+                actor: toTimelineActor(node.actor),
+                previousTitle: node.previousTitle,
+                currentTitle: node.currentTitle,
+            };
+        case "LabeledEvent":
+            return {
+                kind: "labeled",
+                id: node.id,
+                createdAt: node.createdAt,
+                actor: toTimelineActor(node.actor),
+                label: node.label,
+            };
+        case "UnlabeledEvent":
+            return {
+                kind: "unlabeled",
+                id: node.id,
+                createdAt: node.createdAt,
+                actor: toTimelineActor(node.actor),
+                label: node.label,
+            };
+        case "ReviewRequestedEvent":
+            return {
+                kind: "review-requested",
+                id: node.id,
+                createdAt: node.createdAt,
+                actor: toTimelineActor(node.actor),
+                reviewer: toTimelineReviewer(node.requestedReviewer),
+            };
+        case "ReviewRequestRemovedEvent":
+            return {
+                kind: "review-request-removed",
+                id: node.id,
+                createdAt: node.createdAt,
+                actor: toTimelineActor(node.actor),
+                reviewer: toTimelineReviewer(node.requestedReviewer),
+            };
+        case "ReadyForReviewEvent":
+            return {
+                kind: "ready-for-review",
+                id: node.id,
+                createdAt: node.createdAt,
+                actor: toTimelineActor(node.actor),
+            };
+        case "ConvertToDraftEvent":
+            return {
+                kind: "convert-to-draft",
+                id: node.id,
+                createdAt: node.createdAt,
+                actor: toTimelineActor(node.actor),
+            };
+        case "ClosedEvent":
+            return {
+                kind: "closed",
+                id: node.id,
+                createdAt: node.createdAt,
+                actor: toTimelineActor(node.actor),
+            };
+        case "ReopenedEvent":
+            return {
+                kind: "reopened",
+                id: node.id,
+                createdAt: node.createdAt,
+                actor: toTimelineActor(node.actor),
+            };
+        case "MergedEvent":
+            return {
+                kind: "merged",
+                id: node.id,
+                createdAt: node.createdAt,
+                actor: toTimelineActor(node.actor),
+            };
+        case "PullRequestReview":
+            return {
+                kind: "review",
+                id: node.id,
+                createdAt: node.createdAt,
+                author: toTimelineActor(node.author),
+                state: toReviewState(node.state),
+                body: node.body,
+                url: node.url,
+            };
+        case "HeadRefForcePushedEvent":
+            return {
+                kind: "head-ref-force-pushed",
+                id: node.id,
+                createdAt: node.createdAt,
+                actor: toTimelineActor(node.actor),
+            };
+        case "BaseRefChangedEvent":
+            return {
+                kind: "base-ref-changed",
+                id: node.id,
+                createdAt: node.createdAt,
+                actor: toTimelineActor(node.actor),
+                previousRefName: node.previousRefName,
+                currentRefName: node.currentRefName,
+            };
+        default:
+            return null;
+    }
+}
 
 const PULL_REQUEST_REFS_QUERY = `
     query EasyReviewPullRequestRefs($owner: String!, $name: String!, $number: Int!) {
@@ -1031,8 +1738,50 @@ function toMergeableState(mergeable: PullRequestDetailNode["mergeable"]): Mergea
     }
 }
 
-function toPullRequestDetail(node: PullRequestDetailNode): PullRequestDetail {
+function toRequiredApprovingReviewCount(node: PullRequestDetailNode): number | null {
+    const rule = node.baseRef?.branchProtectionRule;
+    if (!rule?.requiresApprovingReviews) {
+        return null;
+    }
+
+    return rule.requiredApprovingReviewCount;
+}
+
+function toAllowedMergeMethods(settings: RepositoryMergeSettings): Array<MergeMethod> {
+    // Same order as GitHub's merge menu.
+    const methods: Array<MergeMethod> = [];
+    if (settings.mergeCommitAllowed) {
+        methods.push("merge");
+    }
+    if (settings.squashMergeAllowed) {
+        methods.push("squash");
+    }
+    if (settings.rebaseMergeAllowed) {
+        methods.push("rebase");
+    }
+    return methods;
+}
+
+function toDefaultMergeMethod(settings: RepositoryMergeSettings, allowed: Array<MergeMethod>): MergeMethod | null {
+    const preferred =
+        settings.viewerDefaultMergeMethod === "MERGE"
+            ? "merge"
+            : settings.viewerDefaultMergeMethod === "SQUASH"
+              ? "squash"
+              : settings.viewerDefaultMergeMethod === "REBASE"
+                ? "rebase"
+                : null;
+
+    if (preferred && allowed.includes(preferred)) {
+        return preferred;
+    }
+
+    return allowed[0] ?? null;
+}
+
+function toPullRequestDetail(node: PullRequestDetailNode, settings: RepositoryMergeSettings): PullRequestDetail {
     const commit = node.commits.nodes[0]?.commit;
+    const allowedMergeMethods = toAllowedMergeMethods(settings);
 
     return {
         ...toPullRequestSummary(node),
@@ -1045,6 +1794,10 @@ function toPullRequestDetail(node: PullRequestDetailNode): PullRequestDetail {
             .filter((context): context is NonNullable<CheckContextNode> => context !== null)
             .map(toCheckRun),
         mergeable: toMergeableState(node.mergeable),
+        requiredApprovingReviewCount: toRequiredApprovingReviewCount(node),
+        allowedMergeMethods,
+        defaultMergeMethod: toDefaultMergeMethod(settings, allowedMergeMethods),
+        commitCount: node.commits.totalCount,
     };
 }
 
@@ -1056,6 +1809,45 @@ type RestRepositoryNode = {
     pushed_at: string | null;
     owner: { login: string };
 };
+
+type RestUserNode = {
+    login: string;
+    name?: string | null;
+    avatar_url: string | null;
+};
+
+type BranchRuleNode = {
+    type: string;
+    parameters?: {
+        required_approving_review_count?: number;
+    } | null;
+};
+
+type RestLabelNode = {
+    name: string;
+    color: string;
+    description: string | null;
+};
+
+type RestIssueCommentNode = {
+    id: number;
+    node_id: string;
+    body: string;
+    created_at: string;
+    html_url: string;
+    user: { login: string; avatar_url: string | null } | null;
+};
+
+function toPullRequestComment(node: RestIssueCommentNode): PullRequestComment {
+    return {
+        id: node.node_id || String(node.id),
+        author: node.user?.login ?? "ghost",
+        authorAvatarUrl: node.user?.avatar_url ?? null,
+        body: node.body,
+        createdAt: node.created_at,
+        url: node.html_url,
+    };
+}
 
 /** Follow GitHub's Link header to the next REST page; returns a path relative to `REST_URL`. */
 function nextRestPath(linkHeader: string | null): string | null {

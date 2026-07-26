@@ -86,6 +86,15 @@ describe("file list", () => {
         await session.refreshPullRequestFiles("acme/api", 1);
 
         expect(session.getFileDiff("acme/api", 1, "src/a.ts").status).toBe("idle");
+        expect(session.getFileDiff("acme/api", 1, "src/a.ts").diff).toBeNull();
+
+        // Review UI must load the open file again after a list refresh (same selected path).
+        await session.loadFileDiff("acme/api", 1, "src/a.ts");
+        expect(session.getFileDiff("acme/api", 1, "src/a.ts").status).toBe("ready");
+        expect(session.getFileDiff("acme/api", 1, "src/a.ts").diff?.lines.some((line) => line.kind === "add")).toBe(
+            true,
+        );
+        expect(github.fileDiffQueries.filter((path) => path === "src/a.ts")).toHaveLength(2);
     });
 
     it("does not refetch a warm file list", async () => {

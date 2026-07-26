@@ -52,8 +52,9 @@ export function ActionsProvider({ children }: { children: React.ReactNode }) {
     function openReviewChanges(repository: string, number: number) {
         const [owner = "", repo = ""] = repository.split("/");
         void navigate({
-            to: "/pr/$owner/$repo/$number/files",
+            to: "/pr/$owner/$repo/$number",
             params: { owner, repo, number: String(number) },
+            hash: "review",
         });
     }
 

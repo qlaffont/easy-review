@@ -1,11 +1,19 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, redirect } from "@tanstack/react-router";
+import { z } from "zod";
 
-import { ReviewChanges } from "#/components/pr/review-changes.tsx";
+const filesSearchSchema = z.object({
+    path: z.string().optional(),
+});
 
-export const Route = createFileRoute("/pr/$owner/$repo/$number_/files")({ component: ReviewChangesPage });
-
-function ReviewChangesPage() {
-    const { owner, repo, number } = Route.useParams();
-
-    return <ReviewChanges repository={`${owner}/${repo}`} number={Number(number)} />;
-}
+/** Old `/files` URLs land on the overview review section. */
+export const Route = createFileRoute("/pr/$owner/$repo/$number_/files")({
+    validateSearch: filesSearchSchema,
+    beforeLoad: ({ params, search }) => {
+        throw redirect({
+            to: "/pr/$owner/$repo/$number",
+            params,
+            search: search.path ? { path: search.path } : {},
+            hash: "review",
+        });
+    },
+});

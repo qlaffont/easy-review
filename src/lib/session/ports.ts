@@ -2,10 +2,14 @@ import type {
     FileDiff,
     MergeMethod,
     PendingLineComment,
+    PullRequestComment,
     PullRequestDetail,
     PullRequestFile,
     PullRequestSummary,
+    PullRequestTimelineItem,
     Repository,
+    RepositoryLabel,
+    RepositoryUser,
     ReviewEvent,
     ReviewThread,
     ReviewThreadComment,
@@ -37,6 +41,10 @@ export type GithubClient = {
     listPullRequests(token: string, repositories: ReadonlyArray<string>): Promise<Array<PullRequestSummary>>;
     /** One pull request in full. Throws a `not-found` error when the token cannot see it. */
     getPullRequest(token: string, repository: string, number: number): Promise<PullRequestDetail>;
+    /** Users who can be assigned (and usually requested as reviewers) on the repository. */
+    listRepositoryAssignees(token: string, repository: string): Promise<Array<RepositoryUser>>;
+    /** Labels defined on the repository. */
+    listRepositoryLabels(token: string, repository: string): Promise<Array<RepositoryLabel>>;
     /** Changed paths only — never the patch text. */
     listPullRequestFiles(token: string, repository: string, number: number): Promise<Array<PullRequestFile>>;
     /** One file's diff. Callers open a file; this must not pull the rest of the change set. */
@@ -49,6 +57,12 @@ export type GithubClient = {
     ): Promise<FileDiff>;
     /** Open review threads on the pull request, oldest first within each thread. */
     listReviewThreads(token: string, repository: string, number: number): Promise<Array<ReviewThread>>;
+    /** Conversation comments on the pull request (issue comments), oldest first. */
+    listPullRequestComments(token: string, repository: string, number: number): Promise<Array<PullRequestComment>>;
+    /** Full conversation timeline (commits, assignments, renames, comments, …), oldest first. */
+    listPullRequestTimeline(token: string, repository: string, number: number): Promise<Array<PullRequestTimelineItem>>;
+    /** Post a conversation comment (not a review / line comment). */
+    addPullRequestComment(token: string, repository: string, number: number, body: string): Promise<PullRequestComment>;
     /** Publish one review that carries every pending line comment. */
     submitReview(
         token: string,

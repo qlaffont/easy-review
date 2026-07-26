@@ -201,3 +201,31 @@ describe("thread replies", () => {
         expect(session.getReviewThreads("acme/api", 1).items[0]?.comments.at(-1)?.body).toBe("Done in the next push.");
     });
 });
+
+describe("conversation comments", () => {
+    it("loads and posts a pull request comment without starting a review", async () => {
+        github.addConversationComment(TOKEN, "acme/api", 1, {
+            id: "issue-1",
+            author: "hubot",
+            authorAvatarUrl: null,
+            body: "Looks good overall.",
+            createdAt: "2026-07-01T00:00:00.000Z",
+            url: "https://github.com/acme/api/pull/1#issuecomment-1",
+        });
+
+        const session = await connectedWithPr();
+        await session.loadConversationComments("acme/api", 1);
+
+        expect(session.getConversationComments("acme/api", 1).items).toHaveLength(1);
+
+        await session.addPullRequestComment("acme/api", 1, "Ship it.");
+
+        const items = session.getConversationComments("acme/api", 1).items;
+        expect(items).toHaveLength(2);
+        expect(items.at(-1)).toMatchObject({ kind: "comment", body: "Ship it." });
+        expect(session.getPullRequestPage("acme/api", 1).detail?.commentCount).toBe(1);
+        expect(github.calls).toContain("listPullRequestTimeline");
+        expect(github.calls).toContain("addPullRequestComment");
+        expect(github.calls).not.toContain("submitReview");
+    });
+});

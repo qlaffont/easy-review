@@ -2,8 +2,8 @@ import { useSelector } from "@tanstack/react-store";
 import { useEffect, useState } from "react";
 
 import { Button } from "#/components/ui/button.tsx";
+import { RelativeTime } from "#/components/ui/relative-time.tsx";
 import { Textarea } from "#/components/ui/textarea.tsx";
-import { formatRelativeTime } from "#/lib/format.ts";
 import { useSession } from "#/lib/session/provider.tsx";
 
 export function ReviewThreadsPanel({
@@ -89,7 +89,7 @@ function ThreadCard({
                 {comments.map((comment) => (
                     <li key={comment.id}>
                         <span className="font-medium">{comment.author}</span>{" "}
-                        <span className="text-muted-foreground">{formatRelativeTime(comment.createdAt)}</span>
+                        <RelativeTime iso={comment.createdAt} className="text-muted-foreground" />
                         <p className="mt-0.5 whitespace-pre-wrap">{comment.body}</p>
                     </li>
                 ))}

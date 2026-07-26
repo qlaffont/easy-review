@@ -3,6 +3,7 @@ import { HeadContent, Outlet, Scripts, createRootRoute } from "@tanstack/react-r
 import { TanStackRouterDevtoolsPanel } from "@tanstack/react-router-devtools";
 
 import { SessionGate } from "#/components/session-gate.tsx";
+import { TooltipProvider } from "#/components/ui/tooltip.tsx";
 import { SessionProvider } from "#/lib/session/provider.tsx";
 
 import appCss from "../styles.css?url";
@@ -47,7 +48,9 @@ function RootDocument({ children }: { children: React.ReactNode }) {
                 <HeadContent />
             </head>
             <body>
-                <SessionProvider>{children}</SessionProvider>
+                <TooltipProvider delayDuration={400} skipDelayDuration={200}>
+                    <SessionProvider>{children}</SessionProvider>
+                </TooltipProvider>
                 <TanStackDevtools
                     config={{
                         position: "bottom-right",

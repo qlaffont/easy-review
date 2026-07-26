@@ -14,6 +14,7 @@ import {
     DialogHeader,
     DialogTitle,
 } from "#/components/ui/dialog.tsx";
+import { HelpTooltip } from "#/components/ui/help-tooltip.tsx";
 import { Input } from "#/components/ui/input.tsx";
 import { useSession, useSessionState } from "#/lib/session/provider.tsx";
 
@@ -92,15 +93,17 @@ function RepoPickerDialog({ open, onOpenChange }: { open: boolean; onOpenChange:
                         placeholder="Filter by owner or name"
                         aria-label="Filter repositories"
                     />
-                    <Button
-                        variant="outline"
-                        size="icon"
-                        aria-label="Refresh the list from GitHub"
-                        disabled={repos.refreshing}
-                        onClick={() => void session.refreshRepositories()}
-                    >
-                        <RefreshCw className={repos.refreshing ? "animate-spin" : undefined} />
-                    </Button>
+                    <HelpTooltip label="Refresh the list from GitHub">
+                        <Button
+                            variant="outline"
+                            size="icon"
+                            aria-label="Refresh the list from GitHub"
+                            disabled={repos.refreshing}
+                            onClick={() => void session.refreshRepositories()}
+                        >
+                            <RefreshCw className={repos.refreshing ? "animate-spin" : undefined} />
+                        </Button>
+                    </HelpTooltip>
                 </div>
 
                 {repos.error ? <p className="text-sm text-destructive">{repos.error.message}</p> : null}

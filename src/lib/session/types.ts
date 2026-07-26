@@ -46,6 +46,18 @@ export type Label = {
     color: string;
 };
 
+/** A label as listed from the repository (includes description for the picker). */
+export type RepositoryLabel = Label & {
+    description: string | null;
+};
+
+/** A user who can be assigned or asked to review on a repository. */
+export type RepositoryUser = {
+    login: string;
+    name: string | null;
+    avatarUrl: string | null;
+};
+
 /** One entry of the head commit's status rollup: a check run or a legacy commit status. */
 export type CheckRun = {
     name: string;
@@ -70,6 +82,17 @@ export type PullRequestDetail = PullRequestSummary & {
     assignees: Array<string>;
     checkRuns: Array<CheckRun>;
     mergeable: MergeableState;
+    /**
+     * From the base branch protection rule. `null` when the base has no (readable) approving-review
+     * requirement — never invent a count client-side.
+     */
+    requiredApprovingReviewCount: number | null;
+    /** Merge strategies the repository allows — never offer a method GitHub would reject. */
+    allowedMergeMethods: Array<MergeMethod>;
+    /** Repo default for the viewer, when GitHub reports one and it is still allowed. */
+    defaultMergeMethod: MergeMethod | null;
+    /** Commits on the pull request — used for merge-method copy. */
+    commitCount: number;
 };
 
 export type FileChangeStatus = "added" | "removed" | "modified" | "renamed";
@@ -151,6 +174,139 @@ export type ReviewThreadComment = {
     body: string;
     createdAt: string;
 };
+
+/** A conversation comment on the pull request (GitHub issue comment), not a diff review. */
+export type PullRequestComment = {
+    id: string;
+    author: string;
+    authorAvatarUrl: string | null;
+    body: string;
+    createdAt: string;
+    url: string;
+};
+
+type TimelineActor = {
+    login: string;
+    avatarUrl: string | null;
+};
+
+/** One entry in the pull request conversation timeline (GitHub `timelineItems`). */
+export type PullRequestTimelineItem =
+    | ({ kind: "comment" } & PullRequestComment)
+    | {
+          kind: "commit";
+          id: string;
+          createdAt: string;
+          author: TimelineActor;
+          messageHeadline: string;
+          oid: string;
+          abbreviatedOid: string;
+          url: string;
+          checkState: CheckState;
+      }
+    | {
+          kind: "assigned";
+          id: string;
+          createdAt: string;
+          actor: TimelineActor;
+          assignee: string;
+      }
+    | {
+          kind: "unassigned";
+          id: string;
+          createdAt: string;
+          actor: TimelineActor;
+          assignee: string;
+      }
+    | {
+          kind: "renamed-title";
+          id: string;
+          createdAt: string;
+          actor: TimelineActor;
+          previousTitle: string;
+          currentTitle: string;
+      }
+    | {
+          kind: "labeled";
+          id: string;
+          createdAt: string;
+          actor: TimelineActor;
+          label: Label;
+      }
+    | {
+          kind: "unlabeled";
+          id: string;
+          createdAt: string;
+          actor: TimelineActor;
+          label: Label;
+      }
+    | {
+          kind: "review-requested";
+          id: string;
+          createdAt: string;
+          actor: TimelineActor;
+          reviewer: string;
+      }
+    | {
+          kind: "review-request-removed";
+          id: string;
+          createdAt: string;
+          actor: TimelineActor;
+          reviewer: string;
+      }
+    | {
+          kind: "ready-for-review";
+          id: string;
+          createdAt: string;
+          actor: TimelineActor;
+      }
+    | {
+          kind: "convert-to-draft";
+          id: string;
+          createdAt: string;
+          actor: TimelineActor;
+      }
+    | {
+          kind: "closed";
+          id: string;
+          createdAt: string;
+          actor: TimelineActor;
+      }
+    | {
+          kind: "reopened";
+          id: string;
+          createdAt: string;
+          actor: TimelineActor;
+      }
+    | {
+          kind: "merged";
+          id: string;
+          createdAt: string;
+          actor: TimelineActor;
+      }
+    | {
+          kind: "review";
+          id: string;
+          createdAt: string;
+          author: TimelineActor;
+          state: ReviewState;
+          body: string;
+          url: string;
+      }
+    | {
+          kind: "head-ref-force-pushed";
+          id: string;
+          createdAt: string;
+          actor: TimelineActor;
+      }
+    | {
+          kind: "base-ref-changed";
+          id: string;
+          createdAt: string;
+          actor: TimelineActor;
+          previousRefName: string;
+          currentRefName: string;
+      };
 
 /** An existing conversation on the diff, loaded so the reviewer can reply in-product. */
 export type ReviewThread = {

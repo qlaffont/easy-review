@@ -11,7 +11,7 @@ import { emptySectionRow, PullRequestRow } from "#/components/inbox/pull-request
 import { SectionLayoutEditor } from "#/components/inbox/section-layout-editor.tsx";
 import { useOpenRepoPicker } from "#/components/repos/repo-picker.tsx";
 import { Button } from "#/components/ui/button.tsx";
-import { formatRelativeTime } from "#/lib/format.ts";
+import { RelativeTime } from "#/components/ui/relative-time.tsx";
 import { useSession, useSessionState } from "#/lib/session/provider.tsx";
 import { cn } from "#/lib/utils.ts";
 
@@ -140,11 +140,15 @@ export function InboxBoard() {
         <div className="flex flex-col gap-3">
             <div className="flex items-center justify-between gap-3">
                 <p className="text-xs text-muted-foreground">
-                    {inbox.refreshing
-                        ? "Syncing with GitHub…"
-                        : inbox.lastLoadedAt
-                          ? `Updated ${formatRelativeTime(inbox.lastLoadedAt)}`
-                          : "Not synced yet"}
+                    {inbox.refreshing ? (
+                        "Syncing with GitHub…"
+                    ) : inbox.lastLoadedAt ? (
+                        <span className="inline-flex items-center gap-1">
+                            Updated <RelativeTime iso={inbox.lastLoadedAt} />
+                        </span>
+                    ) : (
+                        "Not synced yet"
+                    )}
                     <span className="ml-2 hidden sm:inline">· j/k select · Enter open · ⌘K commands</span>
                 </p>
                 <div className="flex items-center gap-2">
@@ -205,7 +209,7 @@ function InboxSectionPanel({
                     type="button"
                     onClick={onToggle}
                     aria-expanded={isExpanded}
-                    className="flex w-full items-center gap-2 bg-muted/40 px-3 py-2 text-left text-sm font-medium hover:bg-muted"
+                    className="flex w-full cursor-pointer items-center gap-2 bg-muted/40 px-3 py-2 text-left text-sm font-medium hover:bg-muted"
                 >
                     <ChevronRight
                         aria-hidden="true"

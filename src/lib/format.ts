@@ -1,4 +1,8 @@
 const relativeTime = new Intl.RelativeTimeFormat("en", { numeric: "auto", style: "narrow" });
+const absoluteTime = new Intl.DateTimeFormat(undefined, {
+    dateStyle: "medium",
+    timeStyle: "short",
+});
 
 const UNITS: Array<{ unit: Intl.RelativeTimeFormatUnit; ms: number }> = [
     { unit: "year", ms: 365 * 24 * 60 * 60 * 1000 },
@@ -20,4 +24,9 @@ export function formatRelativeTime(iso: string, now: number = Date.now()): strin
     }
 
     return "just now";
+}
+
+/** Full local date for hover/tooltips on relative timestamps. */
+export function formatAbsoluteTime(iso: string): string {
+    return absoluteTime.format(new Date(iso));
 }

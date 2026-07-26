@@ -14,8 +14,8 @@
 
 ## Notes
 
-Route: `/pr/$owner/$repo/$number/files` (flat sibling via `number_.files`, so the overview
-does not need an `<Outlet>`).
+Review lives at the bottom of the PR overview (`#review`). Legacy
+`/pr/$owner/$repo/$number/files` redirects there (optional `?path=`).
 
 The file list is GraphQL metadata only. Opening a file fetches the base and head blobs over
 REST and builds a unified diff in the browser — so reviewing `src/a.ts` never requests

@@ -8,10 +8,14 @@ import type {
     FileDiff,
     MergeMethod,
     PendingLineComment,
+    PullRequestComment,
     PullRequestDetail,
     PullRequestFile,
     PullRequestSummary,
+    PullRequestTimelineItem,
     Repository,
+    RepositoryLabel,
+    RepositoryUser,
     ReviewDraft,
     ReviewEvent,
     ReviewThread,
@@ -121,6 +125,20 @@ export type ReviewThreadsState = {
     error: SessionError | null;
 };
 
+export type ConversationCommentsState = {
+    status: "idle" | "loading" | "ready" | "error";
+    /** Full PR timeline (comments, commits, assignments, …). */
+    items: Array<PullRequestTimelineItem>;
+    error: SessionError | null;
+};
+
+export type RepositoryMetadataState = {
+    status: "idle" | "loading" | "ready" | "error";
+    users: Array<RepositoryUser>;
+    labels: Array<RepositoryLabel>;
+    error: SessionError | null;
+};
+
 export type SessionState = {
     auth: AuthState;
     repos: RepositoriesState;
@@ -131,6 +149,10 @@ export type SessionState = {
     reviewDrafts: Record<string, ReviewDraft>;
     /** Existing threads keyed by `owner/repo#number`. */
     reviewThreads: Record<string, ReviewThreadsState>;
+    /** Conversation (issue) comments keyed by `owner/repo#number`. */
+    conversationComments: Record<string, ConversationCommentsState>;
+    /** Assignable users + labels keyed by `owner/repo`. */
+    repositoryMetadata: Record<string, RepositoryMetadataState>;
 };
 
 export type EasyReviewSessionDeps = {
@@ -206,6 +228,13 @@ type InboxCache = {
  */
 export function createEasyReviewSession({ github, store }: EasyReviewSessionDeps) {
     const initialThreadsState: ReviewThreadsState = { status: "idle", items: [], error: null };
+    const initialConversationState: ConversationCommentsState = { status: "idle", items: [], error: null };
+    const initialRepositoryMetadata: RepositoryMetadataState = {
+        status: "idle",
+        users: [],
+        labels: [],
+        error: null,
+    };
 
     const state = new Store<SessionState>({
         auth: initialAuthState,
@@ -214,6 +243,8 @@ export function createEasyReviewSession({ github, store }: EasyReviewSessionDeps
         pullRequests: {},
         reviewDrafts: {},
         reviewThreads: {},
+        conversationComments: {},
+        repositoryMetadata: {},
     });
 
     /** The verified token, kept out of the reactive state so the UI can never render it. */
@@ -231,6 +262,8 @@ export function createEasyReviewSession({ github, store }: EasyReviewSessionDeps
     const latestFileListLoads = new Map<string, number>();
     const latestFileDiffLoads = new Map<string, number>();
     const latestReviewThreadLoads = new Map<string, number>();
+    const latestConversationCommentLoads = new Map<string, number>();
+    const latestRepositoryMetadataLoads = new Map<string, number>();
     /** Last-write-wins for summary typing so overlapping persists cannot drop characters. */
     const latestDraftBodyWrites = new Map<string, number>();
 
@@ -341,7 +374,14 @@ export function createEasyReviewSession({ github, store }: EasyReviewSessionDeps
         ]);
         setRepos({ ...initialRepositoriesState });
         setInbox({ ...initialInboxState });
-        state.setState((prev) => ({ ...prev, pullRequests: {}, reviewDrafts: {}, reviewThreads: {} }));
+        state.setState((prev) => ({
+            ...prev,
+            pullRequests: {},
+            reviewDrafts: {},
+            reviewThreads: {},
+            conversationComments: {},
+            repositoryMetadata: {},
+        }));
     }
 
     /**
@@ -1088,6 +1128,103 @@ export function createEasyReviewSession({ github, store }: EasyReviewSessionDeps
         return reply;
     }
 
+    async function loadConversationComments(repository: string, number: number): Promise<void> {
+        const key = pullRequestKey(repository, number);
+        const attempt = (latestConversationCommentLoads.get(key) ?? 0) + 1;
+        latestConversationCommentLoads.set(key, attempt);
+
+        state.setState((prev) => ({
+            ...prev,
+            conversationComments: {
+                ...prev.conversationComments,
+                [key]: {
+                    status: "loading",
+                    items: prev.conversationComments[key]?.items ?? [],
+                    error: null,
+                },
+            },
+        }));
+
+        try {
+            const items = await github.listPullRequestTimeline(requireToken(), repository, number);
+            if (attempt !== latestConversationCommentLoads.get(key)) {
+                return;
+            }
+
+            state.setState((prev) => ({
+                ...prev,
+                conversationComments: {
+                    ...prev.conversationComments,
+                    [key]: { status: "ready", items, error: null },
+                },
+            }));
+        } catch (error) {
+            if (attempt !== latestConversationCommentLoads.get(key)) {
+                return;
+            }
+
+            state.setState((prev) => ({
+                ...prev,
+                conversationComments: {
+                    ...prev.conversationComments,
+                    [key]: {
+                        status: "error",
+                        items: prev.conversationComments[key]?.items ?? [],
+                        error: toSessionError(error),
+                    },
+                },
+            }));
+        }
+    }
+
+    function getConversationComments(repository: string, number: number): ConversationCommentsState {
+        return state.state.conversationComments[pullRequestKey(repository, number)] ?? initialConversationState;
+    }
+
+    async function addPullRequestComment(
+        repository: string,
+        number: number,
+        body: string,
+    ): Promise<PullRequestComment> {
+        const trimmed = body.trim();
+        if (!trimmed) {
+            throw new EasyReviewError("unknown", "Write a comment before posting.");
+        }
+
+        const comment = await github.addPullRequestComment(requireToken(), repository, number, trimmed);
+        const key = pullRequestKey(repository, number);
+        const timelineComment: PullRequestTimelineItem = { kind: "comment", ...comment };
+        state.setState((prev) => {
+            const current = prev.conversationComments[key] ?? initialConversationState;
+            const view = prev.pullRequests[key];
+            return {
+                ...prev,
+                conversationComments: {
+                    ...prev.conversationComments,
+                    [key]: {
+                        ...current,
+                        status: "ready",
+                        items: [...current.items, timelineComment],
+                        error: null,
+                    },
+                },
+                pullRequests: view?.detail
+                    ? {
+                          ...prev.pullRequests,
+                          [key]: {
+                              ...view,
+                              detail: {
+                                  ...view.detail,
+                                  commentCount: view.detail.commentCount + 1,
+                              },
+                          },
+                      }
+                    : prev.pullRequests,
+            };
+        });
+        return comment;
+    }
+
     /**
      * After a lifecycle mutation, re-fetch the PR and patch the Inbox row so section
      * classification and the overview stay aligned without a full inbox refresh.
@@ -1147,6 +1284,64 @@ export function createEasyReviewSession({ github, store }: EasyReviewSessionDeps
     async function setPullRequestDraft(repository: string, number: number, isDraft: boolean): Promise<void> {
         await github.setPullRequestDraft(requireToken(), repository, number, isDraft);
         await refreshAfterMutation(repository, number);
+    }
+
+    async function loadRepositoryMetadata(repository: string): Promise<void> {
+        const attempt = (latestRepositoryMetadataLoads.get(repository) ?? 0) + 1;
+        latestRepositoryMetadataLoads.set(repository, attempt);
+
+        state.setState((prev) => ({
+            ...prev,
+            repositoryMetadata: {
+                ...prev.repositoryMetadata,
+                [repository]: {
+                    status: "loading",
+                    users: prev.repositoryMetadata[repository]?.users ?? [],
+                    labels: prev.repositoryMetadata[repository]?.labels ?? [],
+                    error: null,
+                },
+            },
+        }));
+
+        try {
+            const [users, labels] = await Promise.all([
+                github.listRepositoryAssignees(requireToken(), repository),
+                github.listRepositoryLabels(requireToken(), repository),
+            ]);
+
+            if (attempt !== latestRepositoryMetadataLoads.get(repository)) {
+                return;
+            }
+
+            state.setState((prev) => ({
+                ...prev,
+                repositoryMetadata: {
+                    ...prev.repositoryMetadata,
+                    [repository]: { status: "ready", users, labels, error: null },
+                },
+            }));
+        } catch (error) {
+            if (attempt !== latestRepositoryMetadataLoads.get(repository)) {
+                return;
+            }
+
+            state.setState((prev) => ({
+                ...prev,
+                repositoryMetadata: {
+                    ...prev.repositoryMetadata,
+                    [repository]: {
+                        status: "error",
+                        users: prev.repositoryMetadata[repository]?.users ?? [],
+                        labels: prev.repositoryMetadata[repository]?.labels ?? [],
+                        error: toSessionError(error),
+                    },
+                },
+            }));
+        }
+    }
+
+    function getRepositoryMetadata(repository: string): RepositoryMetadataState {
+        return state.state.repositoryMetadata[repository] ?? initialRepositoryMetadata;
     }
 
     async function setPullRequestLabels(
@@ -1262,6 +1457,11 @@ export function createEasyReviewSession({ github, store }: EasyReviewSessionDeps
         loadReviewThreads,
         getReviewThreads,
         replyToReviewThread,
+        loadConversationComments,
+        getConversationComments,
+        addPullRequestComment,
+        loadRepositoryMetadata,
+        getRepositoryMetadata,
         setPullRequestDraft,
         setPullRequestLabels,
         setPullRequestAssignees,

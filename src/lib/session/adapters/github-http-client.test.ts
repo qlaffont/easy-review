@@ -40,6 +40,10 @@ describe("getPullRequest", () => {
             respondWith({
                 data: {
                     repository: {
+                        mergeCommitAllowed: true,
+                        squashMergeAllowed: true,
+                        rebaseMergeAllowed: false,
+                        viewerDefaultMergeMethod: "SQUASH",
                         pullRequest: {
                             number: 278,
                             title: "Ship checks",
@@ -64,9 +68,16 @@ describe("getPullRequest", () => {
                             baseRefOid: "base",
                             headRefOid: "head",
                             mergeable: "CONFLICTING",
+                            baseRef: {
+                                branchProtectionRule: {
+                                    requiresApprovingReviews: true,
+                                    requiredApprovingReviewCount: 2,
+                                },
+                            },
                             labels: { nodes: [] },
                             assignees: { nodes: [{ login: "qlaffont" }] },
                             commits: {
+                                totalCount: 3,
                                 nodes: [
                                     {
                                         commit: {
@@ -107,6 +118,60 @@ describe("getPullRequest", () => {
         expect(detail.title).toBe("Ship checks");
         expect(detail.checks).toBe("failure");
         expect(detail.checkRuns).toEqual([{ name: "CodeRabbit", state: "success", url: null }]);
+        expect(detail.requiredApprovingReviewCount).toBe(2);
+        expect(detail.allowedMergeMethods).toEqual(["merge", "squash"]);
+        expect(detail.defaultMergeMethod).toBe("squash");
+        expect(detail.commitCount).toBe(3);
+    });
+
+    it("reads required approving reviews from branch rulesets when classic protection is absent", async () => {
+        const github = createGithubHttpClient(async (input) => {
+            const url = String(input);
+
+            if (url.includes("/graphql")) {
+                return new Response(
+                    JSON.stringify({
+                        data: {
+                            repository: {
+                                mergeCommitAllowed: true,
+                                squashMergeAllowed: true,
+                                rebaseMergeAllowed: true,
+                                viewerDefaultMergeMethod: "MERGE",
+                                pullRequest: {
+                                    ...pullRequestNode("acme/api", 12),
+                                    reviewDecision: "REVIEW_REQUIRED",
+                                    body: "",
+                                    baseRefOid: "base",
+                                    headRefOid: "head",
+                                    mergeable: "MERGEABLE",
+                                    baseRef: { branchProtectionRule: null },
+                                    labels: { nodes: [] },
+                                    assignees: { nodes: [] },
+                                    commits: { totalCount: 1, nodes: [] },
+                                },
+                            },
+                        },
+                    }),
+                    { status: 200 },
+                );
+            }
+
+            expect(url).toContain("/repos/acme/api/rules/branches/main");
+            return new Response(
+                JSON.stringify([
+                    {
+                        type: "pull_request",
+                        parameters: { required_approving_review_count: 1 },
+                    },
+                ]),
+                { status: 200 },
+            );
+        });
+
+        const detail = await github.getPullRequest("token", "acme/api", 12);
+
+        expect(detail.requiredApprovingReviewCount).toBe(1);
+        expect(detail.reviewDecision).toBe("review-required");
     });
 });
 

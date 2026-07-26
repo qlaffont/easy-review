@@ -134,6 +134,40 @@ export function createSeededGithub(): GithubClient {
 
         github.setPullRequestFiles(DEV_TOKEN, repository, number, seedFiles(number));
 
+        const authorLogin = shape.author ?? DEV_LOGIN;
+        const createdAt = faker.date.recent({ days: 20 }).toISOString();
+        github.addTimelineItem(DEV_TOKEN, repository, number, {
+            kind: "commit",
+            id: `commit-${repository}-${number}`,
+            createdAt,
+            author: { login: authorLogin, avatarUrl: null },
+            messageHeadline: faker.git.commitMessage().slice(0, 72),
+            oid: faker.git.commitSha(),
+            abbreviatedOid: faker.string.hexadecimal({ length: 7, prefix: "" }).toLowerCase(),
+            url: `https://github.com/${repository}/commit/${faker.git.commitSha()}`,
+            checkState: checks,
+        });
+        if (number % 2 === 0) {
+            github.addTimelineItem(DEV_TOKEN, repository, number, {
+                kind: "assigned",
+                id: `assigned-${repository}-${number}`,
+                createdAt: faker.date.recent({ days: 18 }).toISOString(),
+                actor: { login: authorLogin, avatarUrl: null },
+                assignee: authorLogin,
+            });
+        }
+        if (number % 4 === 0) {
+            const previousTitle = faker.lorem.sentence({ min: 4, max: 10 });
+            github.addTimelineItem(DEV_TOKEN, repository, number, {
+                kind: "renamed-title",
+                id: `rename-${repository}-${number}`,
+                createdAt: faker.date.recent({ days: 14 }).toISOString(),
+                actor: { login: authorLogin, avatarUrl: null },
+                previousTitle,
+                currentTitle: `${previousTitle} [${faker.string.alphanumeric(8)}]`,
+            });
+        }
+
         if (number % 5 === 1) {
             github.addReviewThread(DEV_TOKEN, repository, number, {
                 id: `thread-${repository}-${number}`,
@@ -149,6 +183,17 @@ export function createSeededGithub(): GithubClient {
                         createdAt: faker.date.recent({ days: 3 }).toISOString(),
                     },
                 ],
+            });
+        }
+
+        if (number % 3 === 0) {
+            github.addConversationComment(DEV_TOKEN, repository, number, {
+                id: `issue-comment-${repository}-${number}`,
+                author: faker.internet.username().toLowerCase(),
+                authorAvatarUrl: null,
+                body: faker.lorem.paragraph(),
+                createdAt: faker.date.recent({ days: 5 }).toISOString(),
+                url: `https://github.com/${repository}/pull/${number}#issuecomment-${number}`,
             });
         }
     }
