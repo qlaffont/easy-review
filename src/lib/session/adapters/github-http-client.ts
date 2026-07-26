@@ -188,32 +188,37 @@ export function createGithubHttpClient(fetchImpl: typeof fetch = globalThis.fetc
         },
 
         async listRepositories(token) {
+            /**
+             * Prefer REST `/user/repos` over GraphQL `viewer.repositories`. Fine-grained PATs
+             * scoped to an organization see those org repos on REST, but GraphQL often returns
+             * only the user's personal repositories — which is exactly the empty-Inbox failure
+             * mode we hit with org resource-owner tokens.
+             */
             const repositories: Array<Repository> = [];
-            let cursor: string | null = null;
+            let path: string | null =
+                `/user/repos?per_page=${REPOSITORY_PAGE_SIZE}&sort=pushed&affiliation=owner,collaborator,organization_member`;
 
-            for (let page = 0; page < REPOSITORY_PAGE_LIMIT; page++) {
-                const data: RepositoriesQuery = await graphql<RepositoriesQuery>(token, REPOSITORIES_QUERY, {
-                    pageSize: REPOSITORY_PAGE_SIZE,
-                    cursor,
-                });
-                const { nodes, pageInfo } = data.viewer.repositories;
+            for (let page = 0; page < REPOSITORY_PAGE_LIMIT && path; page++) {
+                const response = await rest(token, path);
+
+                if (!response.ok) {
+                    throw errorForStatus(response);
+                }
+
+                const nodes = (await response.json()) as Array<RestRepositoryNode>;
 
                 for (const node of nodes) {
                     repositories.push({
-                        nameWithOwner: node.nameWithOwner,
+                        nameWithOwner: node.full_name,
                         owner: node.owner.login,
                         name: node.name,
-                        isPrivate: node.isPrivate,
-                        isArchived: node.isArchived,
-                        pushedAt: node.pushedAt,
+                        isPrivate: node.private,
+                        isArchived: node.archived,
+                        pushedAt: node.pushed_at,
                     });
                 }
 
-                if (!pageInfo.hasNextPage) {
-                    break;
-                }
-
-                cursor = pageInfo.endCursor;
+                path = nextRestPath(response.headers.get("link"));
             }
 
             return repositories;
@@ -1032,49 +1037,29 @@ function toPullRequestDetail(node: PullRequestDetailNode): PullRequestDetail {
     };
 }
 
-type RepositoriesQuery = {
-    viewer: {
-        repositories: {
-            nodes: Array<{
-                name: string;
-                nameWithOwner: string;
-                isPrivate: boolean;
-                isArchived: boolean;
-                pushedAt: string | null;
-                owner: { login: string };
-            }>;
-            pageInfo: { hasNextPage: boolean; endCursor: string | null };
-        };
-    };
+type RestRepositoryNode = {
+    full_name: string;
+    name: string;
+    private: boolean;
+    archived: boolean;
+    pushed_at: string | null;
+    owner: { login: string };
 };
 
-const REPOSITORIES_QUERY = `
-    query EasyReviewRepositories($pageSize: Int!, $cursor: String) {
-        viewer {
-            repositories(
-                first: $pageSize
-                after: $cursor
-                affiliations: [OWNER, COLLABORATOR, ORGANIZATION_MEMBER]
-                orderBy: { field: PUSHED_AT, direction: DESC }
-            ) {
-                nodes {
-                    name
-                    nameWithOwner
-                    isPrivate
-                    isArchived
-                    pushedAt
-                    owner {
-                        login
-                    }
-                }
-                pageInfo {
-                    hasNextPage
-                    endCursor
-                }
-            }
-        }
+/** Follow GitHub's Link header to the next REST page; returns a path relative to `REST_URL`. */
+function nextRestPath(linkHeader: string | null): string | null {
+    if (!linkHeader) {
+        return null;
     }
-`;
+
+    const match = /<([^>]+)>;\s*rel="next"/.exec(linkHeader);
+    if (!match?.[1]) {
+        return null;
+    }
+
+    const url = new URL(match[1]);
+    return `${url.pathname}${url.search}`;
+}
 
 type ReviewThreadCommentNode = {
     id: string;

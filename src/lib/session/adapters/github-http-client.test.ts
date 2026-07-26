@@ -34,6 +34,45 @@ function pullRequestNode(repository: string, number: number) {
     };
 }
 
+describe("listRepositories", () => {
+    it("uses REST /user/repos so org-scoped fine-grained tokens see organization repos", async () => {
+        const github = createGithubHttpClient(async (input) => {
+            const url = String(input);
+            expect(url).toContain("/user/repos");
+            expect(url).toContain("affiliation=owner,collaborator,organization_member");
+
+            return new Response(
+                JSON.stringify([
+                    {
+                        full_name: "latomate/medical-web",
+                        name: "medical-web",
+                        private: true,
+                        archived: false,
+                        pushed_at: "2026-07-20T00:00:00Z",
+                        owner: { login: "latomate" },
+                    },
+                    {
+                        full_name: "qlaffont/raycast-extensions",
+                        name: "raycast-extensions",
+                        private: false,
+                        archived: false,
+                        pushed_at: "2026-07-19T00:00:00Z",
+                        owner: { login: "qlaffont" },
+                    },
+                ]),
+                { status: 200, headers: { "content-type": "application/json" } },
+            );
+        });
+
+        const repositories = await github.listRepositories("token");
+
+        expect(repositories.map((repository) => repository.nameWithOwner)).toEqual([
+            "latomate/medical-web",
+            "qlaffont/raycast-extensions",
+        ]);
+    });
+});
+
 describe("listPullRequests", () => {
     it("keeps the repositories that resolved when one of them is unreadable", async () => {
         const github = createGithubHttpClient(
