@@ -170,6 +170,17 @@ export type SessionState = {
 export type EasyReviewSessionDeps = {
     github: GithubClient;
     store: KeyValueStore;
+    /**
+     * When set, `restore` probes GitHub with a session credential even without a stored PAT
+     * (OAuth cookie + same-origin proxy). `logout` clears the server session.
+     */
+    oauth?: {
+        /** Sentinel passed to `GithubClient` methods; the proxy attaches the real token. */
+        sessionCredential: string;
+        logout: () => Promise<void>;
+        /** Start the GitHub OAuth redirect (e.g. `location.assign("/api/auth/github")`). */
+        beginLogin: () => void;
+    };
 };
 
 const initialAuthState: AuthState = {
@@ -238,7 +249,7 @@ type InboxCache = {
  * The single application port the UI talks to. It owns credentials, browser persistence and
  * every GitHub interaction, so behaviour can be tested without a DOM or a real GitHub.
  */
-export function createEasyReviewSession({ github, store }: EasyReviewSessionDeps) {
+export function createEasyReviewSession({ github, store, oauth }: EasyReviewSessionDeps) {
     const initialThreadsState: ReviewThreadsState = { status: "idle", items: [], error: null };
     const initialConversationState: ConversationCommentsState = { status: "idle", items: [], error: null };
     const initialCommitsState: PullRequestCommitsState = { status: "idle", items: [], error: null };
@@ -438,33 +449,45 @@ export function createEasyReviewSession({ github, store }: EasyReviewSessionDeps
     }
 
     /**
-     * Load any previously stored token and check it is still accepted by GitHub. Stays in the
-     * `restoring` status throughout so the UI shows one boot state instead of flashing the
-     * connect screen at someone who is already signed in.
+     * Load any previously stored token (tests / legacy) or probe the OAuth session cookie via the
+     * proxy. Stays in `restoring` throughout so the UI shows one boot state.
      */
     async function restore(): Promise<void> {
         const attempt = ++latestAuthAttempt;
         const stored = await store.get(TOKEN_KEY);
+        const candidate = stored ?? (oauth ? oauth.sessionCredential : null);
 
         if (attempt !== latestAuthAttempt) {
             return;
         }
 
-        if (!stored) {
+        if (!candidate) {
             setAuth({ status: "unauthenticated", viewer: null, tokenStored: false, error: null });
             return;
         }
 
-        setAuth({ tokenStored: true });
+        setAuth({ tokenStored: Boolean(stored) || Boolean(oauth) });
 
         try {
-            const viewer = await github.getViewer(stored);
+            const viewer = await github.getViewer(candidate);
             if (attempt !== latestAuthAttempt) return;
-            token = stored;
+            token = candidate;
             await loadAccountPreferences(viewer.login);
             setAuth({ status: "authenticated", viewer, error: null });
         } catch (error) {
             if (attempt !== latestAuthAttempt) return;
+            if (!stored && oauth) {
+                const sessionError = toSessionError(error);
+                // Missing/expired cookie → quiet connect screen. Other failures stay visible.
+                if (sessionError.kind === "unauthorized") {
+                    setAuth({ status: "unauthenticated", viewer: null, tokenStored: false, error: null });
+                    return;
+                }
+
+                setAuth({ status: "unauthenticated", viewer: null, tokenStored: false, error: sessionError });
+                return;
+            }
+
             setAuth({ status: "unauthenticated", viewer: null, error: toSessionError(error) });
         }
     }
@@ -504,6 +527,26 @@ export function createEasyReviewSession({ github, store }: EasyReviewSessionDeps
         }
     }
 
+    /** Redirect the browser into the GitHub OAuth authorize flow. */
+    function beginOAuthLogin(): void {
+        if (!oauth) {
+            throw new Error("OAuth login is not configured for this session.");
+        }
+
+        setAuth({ status: "verifying", error: null });
+        oauth.beginLogin();
+    }
+
+    /** Apply an OAuth callback error surfaced via `?authError=` on the connect screen. */
+    function reportAuthError(message: string): void {
+        setAuth({
+            status: "unauthenticated",
+            viewer: null,
+            tokenStored: false,
+            error: { kind: "unauthorized", message },
+        });
+    }
+
     /** Abandon a verification in progress and go back to the state it started from. */
     function cancelConnect(): void {
         latestAuthAttempt++;
@@ -523,6 +566,13 @@ export function createEasyReviewSession({ github, store }: EasyReviewSessionDeps
         latestRepositoryLoad++;
         latestInboxLoad++;
         token = null;
+        if (oauth) {
+            try {
+                await oauth.logout();
+            } catch {
+                // Local wipe still proceeds if the logout endpoint is unreachable.
+            }
+        }
         await Promise.all([store.remove(TOKEN_KEY), forgetAccountData()]);
         setAuth({ status: "unauthenticated", viewer: null, tokenStored: false, error: null });
     }
@@ -835,9 +885,13 @@ export function createEasyReviewSession({ github, store }: EasyReviewSessionDeps
         const cached = state.state.pullRequests[key]?.diffs[path]?.diff ?? null;
 
         // A warm non-stubbed diff is reused unless the reviewer is forcing past a stub.
+        // Empty both-sides payloads are not "warm" — that used to mask Contents API 404s on
+        // fork PR head OIDs as "No textual changes".
+        const cachedHasContent =
+            cached != null && (cached.lines.length > 0 || Boolean(cached.beforeText) || Boolean(cached.afterText));
         if (
             !force &&
-            cached &&
+            cachedHasContent &&
             cached.stub === null &&
             state.state.pullRequests[key]?.diffs[path]?.status === "ready"
         ) {
@@ -1761,6 +1815,8 @@ export function createEasyReviewSession({ github, store }: EasyReviewSessionDeps
         state,
         restore,
         connect,
+        beginOAuthLogin,
+        reportAuthError,
         cancelConnect,
         disconnect,
         dismissError,

@@ -1,224 +1,101 @@
-Welcome to your new TanStack Start app!
+# Easy Review
 
-# Getting Started
+TanStack Start app for GitHub pull-request triage and review. The browser talks to this app’s server; the server proxies GitHub API calls and holds the OAuth client secret.
 
-To run this application:
+## Getting Started
 
 ```bash
 pnpm install
+cp .env.example .env
+# fill GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET
 pnpm dev
 ```
 
-# Building For Production
+Open [http://localhost:3000](http://localhost:3000) and use **Sign in with GitHub**.
 
-To build this application for production:
+### Fixture mode (no OAuth)
+
+```bash
+VITE_FAKE_GITHUB=1 pnpm dev
+```
+
+## GitHub OAuth setup
+
+Use a classic **OAuth App** (Client ID starts with `Iv1.`). A GitHub App’s user-to-server OAuth credentials (`Ov23…`) only see repositories where that app is **installed** — which is why org repos often look missing.
+
+1. Create an **OAuth App** under [GitHub Developer settings](https://github.com/settings/developers) → **OAuth Apps** → **New OAuth App** (not “GitHub Apps”).
+2. Set:
+   - **Homepage URL:** `http://localhost:3000` (or your deployed origin)
+   - **Authorization callback URL:** `http://localhost:3000/api/auth/github/callback` (same origin + `/api/auth/github/callback` in production)
+3. Copy the **Client ID** and generate a **Client secret**.
+4. Put them in `.env` (see `.env.example`):
+
+```env
+GITHUB_CLIENT_ID=Iv1.xxxxxxxx
+GITHUB_CLIENT_SECRET=xxxxxxxxxxxxxxxx
+```
+
+These variables are **server-only**. Do not use a `VITE_` prefix; the client never receives them.
+
+### Organization repositories
+
+After sign-in, `/user/repos` only returns org repos the token is allowed to see:
+
+- **OAuth App (`Iv1.`):** on the GitHub authorize screen, grant access to each org (or later open [Authorized OAuth Apps](https://github.com/settings/applications) → this app → **Organization access** → **Grant**). Orgs with [OAuth App access restrictions](https://docs.github.com/en/organizations/managing-oauth-access-to-your-organizations-data) need an org admin approval.
+- **GitHub App (`Ov23…`):** install the app on the org (and select the repos), with permissions for Contents + Pull requests. Prefer switching to an OAuth App for local solo use.
+
+Then sign out / sign in again (or refresh repositories) so a new token is issued with that access.
+
+### Scopes requested
+
+| Scope | Why |
+|---|---|
+| `repo` | Private repos, PRs, diffs, reviews, merge/close, reactions, apply suggestions |
+| `read:user` | Identify the signed-in user |
+| `read:org` | Team names on review requests (Inbox + timeline) |
+
+After changing scopes, sign out and **Sign in with GitHub** again so GitHub re-prompts and issues a token with the new set.
+
+### How auth + proxy works
+
+1. Browser → `GET /api/auth/github` → redirect to GitHub authorize.
+2. GitHub → `GET /api/auth/github/callback` → server exchanges `code` using **client id + client secret**, stores the access token in an HTTP-only cookie.
+3. All forge traffic goes through same-origin routes:
+   - `POST /api/github/graphql`
+   - `/api/github/*` (REST)
+4. The proxy reads the session cookie and adds `Authorization: Bearer …` before calling `https://api.github.com`.
+
+## Building For Production
 
 ```bash
 pnpm build
+node dist/server/index.mjs
 ```
 
-## Styling
-
-This project uses [Tailwind CSS](https://tailwindcss.com/) for styling.
-
-### Removing Tailwind CSS
-
-If you prefer not to use Tailwind CSS:
-
-1. Remove the demo pages in `src/routes/demo/`
-2. Replace the Tailwind import in `src/styles.css` with your own styles
-3. Remove `tailwindcss()` from the plugins array in `vite.config.ts`
-4. Remove `@tailwindcss/vite` and `tailwindcss` from `package.json`
-
+Set the same env vars on the host. Register the production callback URL on the OAuth App (`https://your-domain/api/auth/github/callback`).
 
 ## Deploy with Nitro
 
 This project uses Nitro as a generic server adapter, so it can run on any Node-compatible host.
 
 ```bash
-npm run build
+pnpm build
 node dist/server/index.mjs
 ```
 
-The build output is a self-contained Node server. To deploy, push the `dist/` directory to your host (Render, Fly.io, your own VPS, etc.) and run the server command above.
-
-For host-specific presets (Vercel, Netlify, Cloudflare, AWS Lambda, etc.) and tuning, see https://v3.nitro.build/deploy.
-
+For host-specific presets (Vercel, Netlify, Cloudflare, AWS Lambda, etc.), see https://v3.nitro.build/deploy.
 
 ## Shadcn
-
-Add components using the latest version of [Shadcn](https://ui.shadcn.com/).
 
 ```bash
 pnpm dlx shadcn@latest add button
 ```
 
+## Scripts
 
-## T3Env
-
-- You can use T3Env to add type safety to your environment variables.
-- Add Environment variables to the `src/env.mjs` file.
-- Use the environment variables in your code.
-
-### Usage
-
-```ts
-import { env } from "#/env";
-
-console.log(env.VITE_APP_TITLE);
-```
-
-
-
-
-
-
-## Routing
-
-This project uses [TanStack Router](https://tanstack.com/router) with file-based routing. Routes are managed as files in `src/routes`.
-
-### Adding A Route
-
-To add a new route to your application just add a new file in the `./src/routes` directory.
-
-TanStack will automatically generate the content of the route file for you.
-
-Now that you have two routes you can use a `Link` component to navigate between them.
-
-### Adding Links
-
-To use SPA (Single Page Application) navigation you will need to import the `Link` component from `@tanstack/react-router`.
-
-```tsx
-import { Link } from "@tanstack/react-router";
-```
-
-Then anywhere in your JSX you can use it like so:
-
-```tsx
-<Link to="/about">About</Link>
-```
-
-This will create a link that will navigate to the `/about` route.
-
-More information on the `Link` component can be found in the [Link documentation](https://tanstack.com/router/v1/docs/framework/react/api/router/linkComponent).
-
-### Using A Layout
-
-In the File Based Routing setup the layout is located in `src/routes/__root.tsx`. Anything you add to the root route will appear in all the routes. The route content will appear in the JSX where you render `{children}` in the `shellComponent`.
-
-Here is an example layout that includes a header:
-
-```tsx
-import { HeadContent, Scripts, createRootRoute } from '@tanstack/react-router'
-
-export const Route = createRootRoute({
-  head: () => ({
-    meta: [
-      { charSet: 'utf-8' },
-      { name: 'viewport', content: 'width=device-width, initial-scale=1' },
-      { title: 'My App' },
-    ],
-  }),
-  shellComponent: ({ children }) => (
-    <html lang="en">
-      <head>
-        <HeadContent />
-      </head>
-      <body>
-        <header>
-          <nav>
-            <Link to="/">Home</Link>
-            <Link to="/about">About</Link>
-          </nav>
-        </header>
-        {children}
-        <Scripts />
-      </body>
-    </html>
-  ),
-})
-```
-
-More information on layouts can be found in the [Layouts documentation](https://tanstack.com/router/latest/docs/framework/react/guide/routing-concepts#layouts).
-
-## Server Functions
-
-TanStack Start provides server functions that allow you to write server-side code that seamlessly integrates with your client components.
-
-```tsx
-import { createServerFn } from '@tanstack/react-start'
-
-const getServerTime = createServerFn({
-  method: 'GET',
-}).handler(async () => {
-  return new Date().toISOString()
-})
-
-// Use in a component
-function MyComponent() {
-  const [time, setTime] = useState('')
-  
-  useEffect(() => {
-    getServerTime().then(setTime)
-  }, [])
-  
-  return <div>Server time: {time}</div>
-}
-```
-
-## API Routes
-
-You can create API routes by using the `server` property in your route definitions:
-
-```tsx
-import { createFileRoute } from '@tanstack/react-router'
-import { json } from '@tanstack/react-start'
-
-export const Route = createFileRoute('/api/hello')({
-  server: {
-    handlers: {
-      GET: () => json({ message: 'Hello, World!' }),
-    },
-  },
-})
-```
-
-## Data Fetching
-
-There are multiple ways to fetch data in your application. You can use TanStack Query to fetch data from a server. But you can also use the `loader` functionality built into TanStack Router to load the data for a route before it's rendered.
-
-For example:
-
-```tsx
-import { createFileRoute } from '@tanstack/react-router'
-
-export const Route = createFileRoute('/people')({
-  loader: async () => {
-    const response = await fetch('https://swapi.dev/api/people')
-    return response.json()
-  },
-  component: PeopleComponent,
-})
-
-function PeopleComponent() {
-  const data = Route.useLoaderData()
-  return (
-    <ul>
-      {data.results.map((person) => (
-        <li key={person.name}>{person.name}</li>
-      ))}
-    </ul>
-  )
-}
-```
-
-Loaders simplify your data fetching logic dramatically. Check out more information in the [Loader documentation](https://tanstack.com/router/latest/docs/framework/react/guide/data-loading#loader-parameters).
-
-
-
-# Learn More
-
-You can learn more about all of the offerings from TanStack in the [TanStack documentation](https://tanstack.com).
-
-For TanStack Start specific documentation, visit [TanStack Start](https://tanstack.com/start).
+| Command | Purpose |
+|---|---|
+| `pnpm dev` | Dev server on port 3000 |
+| `pnpm build` | Production build |
+| `pnpm test` | Vitest |
+| `pnpm typecheck` | TypeScript |

@@ -1,105 +1,77 @@
-import { ExternalLink, ShieldCheck } from "lucide-react";
-import { useState } from "react";
+import { ExternalLink, Github, ShieldCheck } from "lucide-react";
+import { useEffect } from "react";
 
-import { TokenPermissions } from "#/components/auth/token-permissions.tsx";
 import { Alert, AlertDescription, AlertTitle } from "#/components/ui/alert.tsx";
 import { Button } from "#/components/ui/button.tsx";
-import { Input } from "#/components/ui/input.tsx";
-import { Label } from "#/components/ui/label.tsx";
+import { GITHUB_OAUTH_SCOPE_DEFS } from "#/lib/github/oauth-scopes.ts";
 import { usePageSeo } from "#/lib/seo.ts";
 import { useSession, useSessionState } from "#/lib/session/provider.tsx";
-import { notifyError, notifySuccess } from "#/lib/toast.ts";
-
-const NEW_TOKEN_URL = "https://github.com/settings/personal-access-tokens/new";
+import { notifyError } from "#/lib/toast.ts";
 
 const ERROR_TITLES: Record<string, string> = {
-    unauthorized: "GitHub did not accept this token",
-    forbidden: "This token is missing a permission",
+    unauthorized: "GitHub sign-in failed",
+    forbidden: "This session is missing a permission",
     "rate-limited": "GitHub rate limit reached",
     network: "Could not reach GitHub",
     "not-found": "GitHub could not find that resource",
     unknown: "Something went wrong",
 };
 
-/** `onClose` is only provided when replacing a token that already works. */
+/** `onClose` is only provided when reconnecting while already signed in. */
 export function ConnectTokenScreen({ onClose }: { onClose?: () => void }) {
     const session = useSession();
     const auth = useSessionState((state) => state.auth);
-    const [token, setToken] = useState("");
     const isReplacing = onClose !== undefined;
 
     usePageSeo({
-        title: isReplacing ? "Replace token" : "Connect",
+        title: isReplacing ? "Reconnect" : "Connect",
         description: isReplacing
-            ? "Replace your GitHub personal access token in Easy Review."
-            : "Connect a GitHub personal access token to start reviewing pull requests in Easy Review.",
+            ? "Reconnect your GitHub account to Easy Review."
+            : "Sign in with GitHub to start reviewing pull requests in Easy Review.",
     });
+
+    useEffect(() => {
+        const params = new URLSearchParams(window.location.search);
+        const authError = params.get("authError");
+        if (!authError) {
+            return;
+        }
+
+        session.reportAuthError(authError);
+        notifyError(authError);
+        params.delete("authError");
+        const next = `${window.location.pathname}${params.toString() ? `?${params}` : ""}${window.location.hash}`;
+        window.history.replaceState(null, "", next);
+    }, [session]);
 
     function handleCancel() {
         session.cancelConnect();
         onClose?.();
     }
 
-    function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
-        event.preventDefault();
-        void session.connect(token).then(() => {
-            if (session.state.state.auth.status === "authenticated") {
-                setToken("");
-                notifySuccess("Connected to GitHub");
-                onClose?.();
-                return;
-            }
-
-            const message = session.state.state.auth.error?.message;
-            if (message) {
-                notifyError(message);
-            }
-        });
-    }
-
     return (
         <div className="mx-auto flex w-full max-w-2xl flex-col gap-8 px-6 py-16">
             <header className="flex flex-col gap-2">
                 <h1 className="text-2xl font-semibold tracking-tight">
-                    {isReplacing ? "Replace your GitHub token" : "Connect Easy Review to GitHub"}
+                    {isReplacing ? "Reconnect GitHub" : "Connect Easy Review to GitHub"}
                 </h1>
                 <p className="text-sm text-muted-foreground">
-                    Easy Review talks to GitHub straight from this browser. Your token is stored here and is never sent
-                    to an Easy Review server.
+                    Sign in with a GitHub OAuth app. Easy Review’s server holds the client secret and proxies API calls;
+                    your access token stays in an HTTP-only cookie.
                 </p>
             </header>
 
-            <form onSubmit={handleSubmit} className="flex flex-col gap-3">
-                <Label htmlFor="github-token">Fine-grained personal access token</Label>
-                <div className="flex gap-2">
-                    <Input
-                        id="github-token"
-                        type="password"
-                        autoComplete="off"
-                        spellCheck={false}
-                        placeholder="github_pat_…"
-                        value={token}
-                        onChange={(event) => setToken(event.target.value)}
-                        aria-describedby="github-token-hint"
-                        className="font-mono"
-                    />
-                    <Button type="submit" disabled={auth.status === "verifying"}>
-                        {auth.status === "verifying" ? "Checking…" : "Connect"}
+            <div className="flex flex-wrap gap-2">
+                <Button type="button" disabled={auth.status === "verifying"} onClick={() => session.beginOAuthLogin()}>
+                    <Github aria-hidden="true" />
+                    {auth.status === "verifying" ? "Redirecting…" : "Sign in with GitHub"}
+                </Button>
+                {isReplacing ? (
+                    <Button type="button" variant="ghost" onClick={handleCancel}>
+                        Cancel
                     </Button>
-                    {isReplacing ? (
-                        <Button type="button" variant="ghost" onClick={handleCancel}>
-                            Cancel
-                        </Button>
-                    ) : null}
-                </div>
-                <p id="github-token-hint" className="text-sm text-muted-foreground">
-                    <a href={NEW_TOKEN_URL} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1">
-                        Create a token on GitHub
-                        <ExternalLink className="size-3.5" aria-hidden="true" />
-                    </a>{" "}
-                    with the permissions below.
-                </p>
-            </form>
+                ) : null}
+            </div>
 
             {auth.error ? (
                 <Alert variant="destructive">
@@ -109,16 +81,34 @@ export function ConnectTokenScreen({ onClose }: { onClose?: () => void }) {
             ) : null}
 
             <section className="flex flex-col gap-3">
-                <h2 className="text-sm font-medium">Permissions this token needs</h2>
-                <TokenPermissions />
+                <h2 className="text-sm font-medium">OAuth scopes this app requests</h2>
+                <dl className="divide-y divide-border overflow-hidden rounded-lg border text-sm">
+                    {GITHUB_OAUTH_SCOPE_DEFS.map((scope) => (
+                        <div key={scope.name} className="grid gap-1 px-3 py-2.5 sm:grid-cols-[11rem_1fr] sm:gap-3">
+                            <dt className="font-medium font-mono text-xs sm:text-sm">{scope.name}</dt>
+                            <dd className="text-muted-foreground">{scope.why}</dd>
+                        </div>
+                    ))}
+                </dl>
+                <p className="text-sm text-muted-foreground">
+                    <a
+                        href="https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/scopes-for-oauth-apps"
+                        target="_blank"
+                        rel="noreferrer"
+                        className="inline-flex items-center gap-1"
+                    >
+                        GitHub OAuth scope reference
+                        <ExternalLink className="size-3.5" aria-hidden="true" />
+                    </a>
+                </p>
             </section>
 
             <Alert>
                 <ShieldCheck aria-hidden="true" />
-                <AlertTitle>Where the token lives</AlertTitle>
+                <AlertTitle>Where credentials live</AlertTitle>
                 <AlertDescription>
-                    The token is kept in this browser profile only. Anyone who can use this profile — or any script
-                    injected into this page — can read it. Use a short expiry and revoke it on GitHub when you are done.
+                    The OAuth client secret never leaves the Easy Review server. Your user access token is stored in an
+                    HTTP-only cookie and is attached by the server when proxying requests to GitHub.
                 </AlertDescription>
             </Alert>
         </div>

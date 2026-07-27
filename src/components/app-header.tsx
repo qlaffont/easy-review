@@ -39,21 +39,21 @@ export function AppHeader({ onReplaceToken }: { onReplaceToken: () => void }) {
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end" className="w-56">
                     <DropdownMenuLabel className="text-muted-foreground font-normal">
-                        Signed in with a token stored in this browser
+                        Signed in with GitHub OAuth
                     </DropdownMenuLabel>
                     <DropdownMenuSeparator />
                     <DropdownMenuItem onSelect={onReplaceToken}>
                         <KeyRound aria-hidden="true" />
-                        Replace token…
+                        Reconnect GitHub…
                     </DropdownMenuItem>
                     <DropdownMenuItem
                         variant="destructive"
                         onSelect={() => {
-                            void session.disconnect().then(() => notifySuccess("Disconnected — token cleared"));
+                            void session.disconnect().then(() => notifySuccess("Disconnected — session cleared"));
                         }}
                     >
                         <LogOut aria-hidden="true" />
-                        Disconnect and clear token
+                        Sign out
                     </DropdownMenuItem>
                 </DropdownMenuContent>
             </DropdownMenu>

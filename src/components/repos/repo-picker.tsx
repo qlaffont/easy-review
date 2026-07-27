@@ -120,11 +120,19 @@ function RepoPickerDialog({ open, onOpenChange }: { open: boolean; onOpenChange:
                     {repos.status === "loading" ? (
                         <RepoPickerLoadingSkeleton />
                     ) : visible.length === 0 ? (
-                        <p className="py-8 text-center text-sm text-muted-foreground">
-                            {repos.available.length === 0
-                                ? "This token cannot see any repository."
-                                : "No repository matches that filter."}
-                        </p>
+                        <div className="flex flex-col gap-2 py-8 text-center text-sm text-muted-foreground">
+                            <p>
+                                {repos.available.length === 0
+                                    ? "This session cannot see any repository."
+                                    : "No repository matches that filter."}
+                            </p>
+                            {repos.available.length === 0 ? (
+                                <p>
+                                    Missing an org repo? Grant that organization access to the OAuth app (or install the
+                                    GitHub App on the org), then sign in again and refresh.
+                                </p>
+                            ) : null}
+                        </div>
                     ) : (
                         <ul className="flex flex-col">
                             {visible.map((repository) => (

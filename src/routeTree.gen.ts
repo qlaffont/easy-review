@@ -10,6 +10,11 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as ApiAuthGithubRouteImport } from './routes/api/auth/github'
+import { Route as ApiAuthLogoutRouteImport } from './routes/api/auth/logout'
+import { Route as ApiGithubSplatRouteImport } from './routes/api/github/$'
+import { Route as ApiGithubGraphqlRouteImport } from './routes/api/github/graphql'
+import { Route as ApiAuthGithubCallbackRouteImport } from './routes/api/auth/github.callback'
 import { Route as PrOwnerRepoNumberRouteImport } from './routes/pr.$owner.$repo.$number'
 import { Route as PrOwnerRepoNumberFilesRouteImport } from './routes/pr.$owner.$repo.$number_.files'
 
@@ -17,6 +22,31 @@ const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
   getParentRoute: () => rootRouteImport,
+} as any)
+const ApiAuthGithubRoute = ApiAuthGithubRouteImport.update({
+  id: '/api/auth/github',
+  path: '/api/auth/github',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiAuthLogoutRoute = ApiAuthLogoutRouteImport.update({
+  id: '/api/auth/logout',
+  path: '/api/auth/logout',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiGithubSplatRoute = ApiGithubSplatRouteImport.update({
+  id: '/api/github/$',
+  path: '/api/github/$',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiGithubGraphqlRoute = ApiGithubGraphqlRouteImport.update({
+  id: '/api/github/graphql',
+  path: '/api/github/graphql',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiAuthGithubCallbackRoute = ApiAuthGithubCallbackRouteImport.update({
+  id: '/callback',
+  path: '/callback',
+  getParentRoute: () => ApiAuthGithubRoute,
 } as any)
 const PrOwnerRepoNumberRoute = PrOwnerRepoNumberRouteImport.update({
   id: '/pr/$owner/$repo/$number',
@@ -31,34 +61,74 @@ const PrOwnerRepoNumberFilesRoute = PrOwnerRepoNumberFilesRouteImport.update({
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/api/auth/github': typeof ApiAuthGithubRouteWithChildren
+  '/api/auth/logout': typeof ApiAuthLogoutRoute
+  '/api/github/$': typeof ApiGithubSplatRoute
+  '/api/github/graphql': typeof ApiGithubGraphqlRoute
+  '/api/auth/github/callback': typeof ApiAuthGithubCallbackRoute
   '/pr/$owner/$repo/$number': typeof PrOwnerRepoNumberRoute
   '/pr/$owner/$repo/$number/files': typeof PrOwnerRepoNumberFilesRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/api/auth/github': typeof ApiAuthGithubRouteWithChildren
+  '/api/auth/logout': typeof ApiAuthLogoutRoute
+  '/api/github/$': typeof ApiGithubSplatRoute
+  '/api/github/graphql': typeof ApiGithubGraphqlRoute
+  '/api/auth/github/callback': typeof ApiAuthGithubCallbackRoute
   '/pr/$owner/$repo/$number': typeof PrOwnerRepoNumberRoute
   '/pr/$owner/$repo/$number/files': typeof PrOwnerRepoNumberFilesRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/api/auth/github': typeof ApiAuthGithubRouteWithChildren
+  '/api/auth/logout': typeof ApiAuthLogoutRoute
+  '/api/github/$': typeof ApiGithubSplatRoute
+  '/api/github/graphql': typeof ApiGithubGraphqlRoute
+  '/api/auth/github/callback': typeof ApiAuthGithubCallbackRoute
   '/pr/$owner/$repo/$number': typeof PrOwnerRepoNumberRoute
   '/pr/$owner/$repo/$number_/files': typeof PrOwnerRepoNumberFilesRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/pr/$owner/$repo/$number' | '/pr/$owner/$repo/$number/files'
+  fullPaths:
+    | '/'
+    | '/api/auth/github'
+    | '/api/auth/logout'
+    | '/api/github/$'
+    | '/api/github/graphql'
+    | '/api/auth/github/callback'
+    | '/pr/$owner/$repo/$number'
+    | '/pr/$owner/$repo/$number/files'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/pr/$owner/$repo/$number' | '/pr/$owner/$repo/$number/files'
+  to:
+    | '/'
+    | '/api/auth/github'
+    | '/api/auth/logout'
+    | '/api/github/$'
+    | '/api/github/graphql'
+    | '/api/auth/github/callback'
+    | '/pr/$owner/$repo/$number'
+    | '/pr/$owner/$repo/$number/files'
   id:
     | '__root__'
     | '/'
+    | '/api/auth/github'
+    | '/api/auth/logout'
+    | '/api/github/$'
+    | '/api/github/graphql'
+    | '/api/auth/github/callback'
     | '/pr/$owner/$repo/$number'
     | '/pr/$owner/$repo/$number_/files'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  ApiAuthGithubRoute: typeof ApiAuthGithubRouteWithChildren
+  ApiAuthLogoutRoute: typeof ApiAuthLogoutRoute
+  ApiGithubSplatRoute: typeof ApiGithubSplatRoute
+  ApiGithubGraphqlRoute: typeof ApiGithubGraphqlRoute
   PrOwnerRepoNumberRoute: typeof PrOwnerRepoNumberRoute
   PrOwnerRepoNumberFilesRoute: typeof PrOwnerRepoNumberFilesRoute
 }
@@ -71,6 +141,41 @@ declare module '@tanstack/react-router' {
       fullPath: '/'
       preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
+    }
+    '/api/auth/github': {
+      id: '/api/auth/github'
+      path: '/api/auth/github'
+      fullPath: '/api/auth/github'
+      preLoaderRoute: typeof ApiAuthGithubRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/auth/logout': {
+      id: '/api/auth/logout'
+      path: '/api/auth/logout'
+      fullPath: '/api/auth/logout'
+      preLoaderRoute: typeof ApiAuthLogoutRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/github/$': {
+      id: '/api/github/$'
+      path: '/api/github/$'
+      fullPath: '/api/github/$'
+      preLoaderRoute: typeof ApiGithubSplatRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/github/graphql': {
+      id: '/api/github/graphql'
+      path: '/api/github/graphql'
+      fullPath: '/api/github/graphql'
+      preLoaderRoute: typeof ApiGithubGraphqlRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/auth/github/callback': {
+      id: '/api/auth/github/callback'
+      path: '/callback'
+      fullPath: '/api/auth/github/callback'
+      preLoaderRoute: typeof ApiAuthGithubCallbackRouteImport
+      parentRoute: typeof ApiAuthGithubRoute
     }
     '/pr/$owner/$repo/$number': {
       id: '/pr/$owner/$repo/$number'
@@ -89,8 +194,24 @@ declare module '@tanstack/react-router' {
   }
 }
 
+interface ApiAuthGithubRouteChildren {
+  ApiAuthGithubCallbackRoute: typeof ApiAuthGithubCallbackRoute
+}
+
+const ApiAuthGithubRouteChildren: ApiAuthGithubRouteChildren = {
+  ApiAuthGithubCallbackRoute: ApiAuthGithubCallbackRoute,
+}
+
+const ApiAuthGithubRouteWithChildren = ApiAuthGithubRoute._addFileChildren(
+  ApiAuthGithubRouteChildren,
+)
+
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  ApiAuthGithubRoute: ApiAuthGithubRouteWithChildren,
+  ApiAuthLogoutRoute: ApiAuthLogoutRoute,
+  ApiGithubSplatRoute: ApiGithubSplatRoute,
+  ApiGithubGraphqlRoute: ApiGithubGraphqlRoute,
   PrOwnerRepoNumberRoute: PrOwnerRepoNumberRoute,
   PrOwnerRepoNumberFilesRoute: PrOwnerRepoNumberFilesRoute,
 }

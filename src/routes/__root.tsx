@@ -47,11 +47,11 @@ function RootLayout() {
 
 function RootDocument({ children }: { children: React.ReactNode }) {
     return (
-        <html lang="en">
+        <html lang="en" suppressHydrationWarning>
             <head>
                 <HeadContent />
             </head>
-            <body>
+            <body suppressHydrationWarning>
                 <TooltipProvider delayDuration={400} skipDelayDuration={200}>
                     <SessionProvider>{children}</SessionProvider>
                     <Toaster />

@@ -31,8 +31,24 @@ import { buildFileDiff } from "#/lib/session/build-file-diff.ts";
 import { HUGE_FILE_BYTES, stubForPath } from "#/lib/session/diff-policy.ts";
 import { EasyReviewError } from "#/lib/session/errors.ts";
 
-const GRAPHQL_URL = "https://api.github.com/graphql";
-const REST_URL = "https://api.github.com";
+const DEFAULT_GRAPHQL_URL = "https://api.github.com/graphql";
+const DEFAULT_REST_URL = "https://api.github.com";
+
+/**
+ * Credential passed from the session layer when auth is an HTTP-only OAuth cookie.
+ * The GitHub HTTP client omits `Authorization`; the same-origin proxy attaches the token.
+ */
+export const GITHUB_SESSION_CREDENTIAL = "session";
+
+export type GithubHttpClientOptions = {
+    /** Base URL for REST (`/repos/...`). Defaults to `https://api.github.com`. */
+    restBaseUrl?: string;
+    /** GraphQL endpoint. Defaults to `https://api.github.com/graphql`. */
+    graphqlUrl?: string;
+    /** Forward cookies (required for the OAuth proxy). */
+    credentials?: RequestCredentials;
+};
+
 const REPOSITORY_PAGE_SIZE = 100;
 /** Stops a runaway account with thousands of repos from burning the rate limit in one go. */
 const REPOSITORY_PAGE_LIMIT = 10;
@@ -55,7 +71,7 @@ type GraphqlResponse<TData> = {
 
 function rateLimitedError(retryAt: string | undefined): EasyReviewError {
     const when = retryAt ? ` Try again after ${new Date(retryAt).toLocaleTimeString()}.` : "";
-    return new EasyReviewError("rate-limited", `GitHub rate limit reached for this token.${when}`, { retryAt });
+    return new EasyReviewError("rate-limited", `GitHub rate limit reached for this session.${when}`, { retryAt });
 }
 
 function resetHeaderToIso(headers: Headers): string | undefined {
@@ -76,7 +92,7 @@ function errorForStatus(response: Response): EasyReviewError {
     if (response.status === 401) {
         return new EasyReviewError(
             "unauthorized",
-            "GitHub rejected this token. Check that it is a valid fine-grained token and has not expired.",
+            "GitHub rejected this session. Sign in again, or check that the OAuth app still has access.",
         );
     }
 
@@ -88,7 +104,7 @@ function errorForStatus(response: Response): EasyReviewError {
 
         return new EasyReviewError(
             "forbidden",
-            "This token is missing a permission GitHub requires for that action. Review the permissions below and regenerate it.",
+            "This GitHub session is missing a permission required for that action. Reconnect with the repo scope.",
         );
     }
 
@@ -131,7 +147,21 @@ function errorForGraphqlErrors(errors: NonNullable<GraphqlResponse<unknown>["err
     return new EasyReviewError("unknown", message);
 }
 
-export function createGithubHttpClient(fetchImpl: typeof fetch = globalThis.fetch): GithubClient {
+function authorizationHeaders(token: string): HeadersInit {
+    if (token === GITHUB_SESSION_CREDENTIAL) {
+        return {};
+    }
+
+    return { authorization: `Bearer ${token}` };
+}
+
+export function createGithubHttpClient(
+    fetchImpl: typeof fetch = globalThis.fetch,
+    options: GithubHttpClientOptions = {},
+): GithubClient {
+    const REST_URL = options.restBaseUrl ?? DEFAULT_REST_URL;
+    const GRAPHQL_URL = options.graphqlUrl ?? DEFAULT_GRAPHQL_URL;
+    const credentials = options.credentials;
     /**
      * `keepPartial` is for queries that ask about many things at once: GitHub answers the fields it
      * can and reports the rest as errors, and one unreadable repository should not empty the Inbox.
@@ -148,10 +178,11 @@ export function createGithubHttpClient(fetchImpl: typeof fetch = globalThis.fetc
             response = await fetchImpl(GRAPHQL_URL, {
                 method: "POST",
                 headers: {
-                    authorization: `Bearer ${token}`,
+                    ...authorizationHeaders(token),
                     "content-type": "application/json",
                 },
                 body: JSON.stringify({ query, variables }),
+                credentials,
             });
         } catch (cause) {
             throw new EasyReviewError("network", "Could not reach GitHub. Check your connection and try again.", {
@@ -425,9 +456,12 @@ export function createGithubHttpClient(fetchImpl: typeof fetch = globalThis.fetc
             }
 
             const beforePath = options?.previousPath || path;
+            // Prefer the virtual pull-request ref for the head side. Raw head OIDs 404 on the
+            // Contents API for cross-fork PRs; `refs/pull/N/head` always resolves on the base repo.
+            const headRef = `refs/pull/${number}/head`;
             const [before, after] = await Promise.all([
                 readBlob(token, owner, name, beforePath, pullRequest.baseRefOid, force),
-                readBlob(token, owner, name, path, pullRequest.headRefOid, force),
+                readBlob(token, owner, name, path, headRef, force),
             ]);
 
             if (before?.stub || after?.stub) {
@@ -439,6 +473,13 @@ export function createGithubHttpClient(fetchImpl: typeof fetch = globalThis.fetc
                     beforeText: null,
                     afterText: null,
                 };
+            }
+
+            if (!before?.bytes && !after?.bytes) {
+                throw new EasyReviewError(
+                    "not-found",
+                    `Could not read ${path} on this pull request. The file may have been removed, or GitHub could not resolve the head commit.`,
+                );
             }
 
             return buildFileDiff({ path, before: before?.bytes ?? null, after: after?.bytes ?? null }, { force });
@@ -933,11 +974,12 @@ export function createGithubHttpClient(fetchImpl: typeof fetch = globalThis.fetc
             response = await fetchImpl(`${REST_URL}${path}`, {
                 method,
                 headers: {
-                    authorization: `Bearer ${token}`,
+                    ...authorizationHeaders(token),
                     accept: "application/vnd.github+json",
                     ...(body === undefined ? {} : { "content-type": "application/json" }),
                 },
                 body: body === undefined ? undefined : JSON.stringify(body),
+                credentials,
             });
         } catch (cause) {
             throw new EasyReviewError("network", "Could not reach GitHub. Check your connection and try again.", {
@@ -956,13 +998,14 @@ export function createGithubHttpClient(fetchImpl: typeof fetch = globalThis.fetc
         return response.json();
     }
 
-    async function rest(token: string, path: string): Promise<Response> {
+    async function rest(token: string, path: string, accept = "application/vnd.github+json"): Promise<Response> {
         try {
             return await fetchImpl(`${REST_URL}${path}`, {
                 headers: {
-                    authorization: `Bearer ${token}`,
-                    accept: "application/vnd.github+json",
+                    ...authorizationHeaders(token),
+                    accept,
                 },
+                credentials,
             });
         } catch (cause) {
             throw new EasyReviewError("network", "Could not reach GitHub. Check your connection and try again.", {
@@ -1004,8 +1047,8 @@ export function createGithubHttpClient(fetchImpl: typeof fetch = globalThis.fetc
     /**
      * Raw file bytes at one commit. `null` means the path does not exist there (added or removed
      * files). Directories and Git LFS pointers are treated as missing content for diff purposes.
-     * When GitHub omits inline content (blobs over ~1 MB), we either stub as huge or follow
-     * `download_url` if the reviewer forced the load.
+     * When GitHub omits inline content (blobs over ~1 MB), we either stub as huge or fetch the
+     * raw Contents API representation through the same REST base (proxy-friendly).
      */
     async function readBlob(
         token: string,
@@ -1056,17 +1099,10 @@ export function createGithubHttpClient(fetchImpl: typeof fetch = globalThis.fetc
             return { bytes: new TextEncoder().encode(payload.content) };
         }
 
-        if (!payload.download_url) {
-            return size > HUGE_FILE_BYTES ? { stub: "huge" } : null;
-        }
-
-        if (!force && size > HUGE_FILE_BYTES) {
-            return { stub: "huge" };
-        }
-
-        const download = await fetchImpl(payload.download_url, {
-            headers: { authorization: `Bearer ${token}` },
-        });
+        // Prefer the Contents API raw media type so large blobs stay on the same-origin proxy
+        // instead of hitting raw.githubusercontent.com with a browser-held token.
+        const contentsPath = `/repos/${owner}/${name}/contents/${encodePath(path)}?ref=${encodeURIComponent(ref)}`;
+        const download = await rest(token, contentsPath, "application/vnd.github.raw");
 
         if (!download.ok) {
             throw errorForStatus(download);

@@ -261,3 +261,60 @@ describe("listPullRequests", () => {
         await expect(github.listPullRequests("token", ["acme/gone"])).rejects.toBeInstanceOf(EasyReviewError);
     });
 });
+
+describe("getPullRequestFileDiff", () => {
+    it("reads the head side via refs/pull/N/head so fork PR commits resolve", async () => {
+        const requests: Array<string> = [];
+        const github = createGithubHttpClient(async (input, init) => {
+            const url = String(input);
+            requests.push(url);
+
+            if (init?.method === "POST" || url.includes("/graphql")) {
+                return new Response(
+                    JSON.stringify({
+                        data: {
+                            repository: {
+                                pullRequest: { baseRefOid: "baseoid", headRefOid: "headoid" },
+                            },
+                        },
+                    }),
+                    { status: 200, headers: { "content-type": "application/json" } },
+                );
+            }
+
+            if (url.includes("ref=headoid")) {
+                return new Response("{}", { status: 404 });
+            }
+
+            if (url.includes(`ref=${encodeURIComponent("refs/pull/278/head")}`)) {
+                return new Response(
+                    JSON.stringify({
+                        type: "file",
+                        encoding: "base64",
+                        size: 6,
+                        content: btoa("a\nb\nc\n"),
+                    }),
+                    { status: 200, headers: { "content-type": "application/json" } },
+                );
+            }
+
+            if (url.includes("ref=baseoid")) {
+                return new Response("{}", { status: 404 });
+            }
+
+            throw new Error(`unexpected request: ${url}`);
+        });
+
+        const diff = await github.getPullRequestFileDiff(
+            "token",
+            "latomate/medical-web",
+            278,
+            "app/features/Prescriptions/Prescriptions.tsx",
+        );
+
+        expect(requests.some((url) => url.includes(encodeURIComponent("refs/pull/278/head")))).toBe(true);
+        expect(diff.stub).toBeNull();
+        expect(diff.lines.some((line) => line.kind === "add" && line.text === "a")).toBe(true);
+        expect(diff.lines.filter((line) => line.kind === "add")).toHaveLength(3);
+    });
+});
