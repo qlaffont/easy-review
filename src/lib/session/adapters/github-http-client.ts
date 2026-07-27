@@ -109,7 +109,7 @@ function errorForStatus(response: Response): EasyReviewError {
     }
 
     if (response.status === 404) {
-        return new EasyReviewError("not-found", "GitHub could not find that resource, or this token cannot see it.");
+        return new EasyReviewError("not-found", "GitHub could not find that resource, or this session cannot see it.");
     }
 
     return new EasyReviewError("unknown", `GitHub replied with an unexpected status (${response.status}).`);
@@ -123,10 +123,19 @@ function isFatalGraphqlError(error: { type?: string }): boolean {
     return error.type === "RATE_LIMITED" || error.type === "UNAUTHORIZED";
 }
 
+/** Rewrite GitHub copy that still says “personal access token” for OAuth sessions. */
+function humanizeGithubMessage(message: string): string {
+    if (/personal access token/i.test(message)) {
+        return "This GitHub session is missing a permission required for that action. Reconnect and grant organization access if needed.";
+    }
+
+    return message;
+}
+
 function errorForGraphqlErrors(errors: NonNullable<GraphqlResponse<unknown>["errors"]>): EasyReviewError {
     const first = errors[0];
     const type = first?.type;
-    const message = first?.message ?? "GitHub rejected the query.";
+    const message = humanizeGithubMessage(first?.message ?? "GitHub rejected the query.");
 
     if (type === "RATE_LIMITED") {
         return rateLimitedError(undefined);
@@ -235,10 +244,10 @@ export function createGithubHttpClient(
 
         async listRepositories(token) {
             /**
-             * Prefer REST `/user/repos` over GraphQL `viewer.repositories`. Fine-grained PATs
-             * scoped to an organization see those org repos on REST, but GraphQL often returns
-             * only the user's personal repositories — which is exactly the empty-Inbox failure
-             * mode we hit with org resource-owner tokens.
+             * Prefer REST `/user/repos` over GraphQL `viewer.repositories`. Org-scoped
+             * credentials often see organization repos on REST, while GraphQL returns only
+             * personal repositories — which is exactly the empty-Inbox failure mode we hit
+             * when org access is limited.
              */
             const repositories: Array<Repository> = [];
             let path: string | null =
@@ -297,9 +306,9 @@ export function createGithubHttpClient(
 
         async getPullRequest(token, repository, number) {
             const [owner = "", name = ""] = repository.split("/");
-            // Fine-grained PATs cannot read CheckRun nodes (no Checks permission exists for
-            // them), so GitHub returns FORBIDDEN on those context slots while still returning
-            // the PR and any StatusContext rows. Keep the partial payload.
+            // Some credentials cannot read CheckRun nodes, so GitHub returns FORBIDDEN on those
+            // context slots while still returning the PR and any StatusContext rows. Keep the
+            // partial payload.
             const data = await graphql<PullRequestQuery>(
                 token,
                 PULL_REQUEST_QUERY,
@@ -311,7 +320,7 @@ export function createGithubHttpClient(
             if (!node) {
                 throw new EasyReviewError(
                     "not-found",
-                    `${repository}#${number} does not exist, or this token cannot see it.`,
+                    `${repository}#${number} does not exist, or this session cannot see it.`,
                 );
             }
 
@@ -406,7 +415,7 @@ export function createGithubHttpClient(
                 if (!connection) {
                     throw new EasyReviewError(
                         "not-found",
-                        `${repository}#${number} does not exist, or this token cannot see it.`,
+                        `${repository}#${number} does not exist, or this session cannot see it.`,
                     );
                 }
 
@@ -451,7 +460,7 @@ export function createGithubHttpClient(
             if (!pullRequest) {
                 throw new EasyReviewError(
                     "not-found",
-                    `${repository}#${number} does not exist, or this token cannot see it.`,
+                    `${repository}#${number} does not exist, or this session cannot see it.`,
                 );
             }
 
@@ -502,7 +511,7 @@ export function createGithubHttpClient(
                 if (!connection) {
                     throw new EasyReviewError(
                         "not-found",
-                        `${repository}#${number} does not exist, or this token cannot see it.`,
+                        `${repository}#${number} does not exist, or this session cannot see it.`,
                     );
                 }
 
@@ -566,7 +575,7 @@ export function createGithubHttpClient(
                 if (!connection) {
                     throw new EasyReviewError(
                         "not-found",
-                        `${repository}#${number} does not exist, or this token cannot see it.`,
+                        `${repository}#${number} does not exist, or this session cannot see it.`,
                     );
                 }
 
@@ -609,7 +618,7 @@ export function createGithubHttpClient(
                 if (!connection) {
                     throw new EasyReviewError(
                         "not-found",
-                        `${repository}#${number} does not exist, or this token cannot see it.`,
+                        `${repository}#${number} does not exist, or this session cannot see it.`,
                     );
                 }
 
@@ -2297,8 +2306,8 @@ function toCheckRunState(status: string, conclusion: string | null): CheckState 
 
 /**
  * GitHub’s Checks-tab badge counts CheckRuns only (not legacy StatusContexts like CodeRabbit).
- * Fine-grained PATs null out CheckRun context slots while leaving StatusContext rows — count
- * those nulls as redacted CheckRuns so the badge still matches GitHub.
+ * When CheckRun context slots are forbidden, GitHub nulls them out while leaving StatusContext
+ * rows — count those nulls as redacted CheckRuns so the badge still matches GitHub.
  */
 function toCheckCount(
     commit:

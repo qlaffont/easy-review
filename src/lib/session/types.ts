@@ -120,7 +120,8 @@ export type PullRequestDetail = PullRequestSummary & {
     checkRuns: Array<CheckRun>;
     /**
      * GitHub Checks-tab badge: check-run count from suites (excludes legacy commit statuses).
-     * Prefer this over `checkRuns.length` — fine-grained PATs often omit CheckRun nodes.
+     * Prefer this over `checkRuns.length` — GitHub often omits CheckRun nodes depending on
+     * credential permissions (classic OAuth vs limited scopes).
      */
     checkCount: number;
     mergeable: MergeableState;

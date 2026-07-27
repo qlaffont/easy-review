@@ -171,8 +171,8 @@ export type EasyReviewSessionDeps = {
     github: GithubClient;
     store: KeyValueStore;
     /**
-     * When set, `restore` probes GitHub with a session credential even without a stored PAT
-     * (OAuth cookie + same-origin proxy). `logout` clears the server session.
+     * When set, `restore` probes GitHub with a session credential (OAuth cookie + same-origin
+     * proxy) instead of a client-stored secret. `logout` clears the server session.
      */
     oauth?: {
         /** Sentinel passed to `GithubClient` methods; the proxy attaches the real token. */
@@ -500,7 +500,7 @@ export function createEasyReviewSession({ github, store, oauth }: EasyReviewSess
             setAuth({
                 error: {
                     kind: "unauthorized",
-                    message: "Paste a fine-grained personal access token to continue.",
+                    message: "Sign in with GitHub to continue.",
                 },
             });
             return;
@@ -581,7 +581,7 @@ export function createEasyReviewSession({ github, store, oauth }: EasyReviewSess
         setAuth({ error: null });
     }
 
-    /** Ask GitHub which repositories this token can see. */
+    /** Ask GitHub which repositories this session can see. */
     async function refreshRepositories(): Promise<void> {
         const attempt = ++latestRepositoryLoad;
         const cached = state.state.repos.available;

@@ -281,7 +281,7 @@ export function createFakeGithub(): FakeGithub {
         if (!found) {
             throw new EasyReviewError(
                 "not-found",
-                `${repository}#${number} does not exist, or this token cannot see it.`,
+                `${repository}#${number} does not exist, or this session cannot see it.`,
             );
         }
 

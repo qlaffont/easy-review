@@ -21,13 +21,13 @@ export class EasyReviewError extends Error {
 }
 
 export function unauthorized(
-    message = "GitHub rejected this token. Check that it is valid and has not expired.",
+    message = "GitHub rejected this session. Sign in again, or check that the OAuth app still has access.",
 ): EasyReviewError {
     return new EasyReviewError("unauthorized", message);
 }
 
 export function missingToken(): EasyReviewError {
-    return new EasyReviewError("unauthorized", "Connect a GitHub token before running this action.");
+    return new EasyReviewError("unauthorized", "Sign in with GitHub before running this action.");
 }
 
 export function toSessionError(error: unknown): SessionError {

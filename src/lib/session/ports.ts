@@ -42,7 +42,7 @@ export type GithubClient = {
     listRepositories(token: string): Promise<Array<Repository>>;
     /** Open and recently merged pull requests across the given repositories, in one batch. */
     listPullRequests(token: string, repositories: ReadonlyArray<string>): Promise<Array<PullRequestSummary>>;
-    /** One pull request in full. Throws a `not-found` error when the token cannot see it. */
+    /** One pull request in full. Throws a `not-found` error when the session cannot see it. */
     getPullRequest(token: string, repository: string, number: number): Promise<PullRequestDetail>;
     /** Users who can be assigned (and usually requested as reviewers) on the repository. */
     listRepositoryAssignees(token: string, repository: string): Promise<Array<RepositoryUser>>;

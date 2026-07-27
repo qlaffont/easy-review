@@ -56,7 +56,7 @@ export function CommitChecksMenu({ state, runs }: { state: CheckState; runs: Arr
                 </div>
                 {sorted.length === 0 ? (
                     <p className="px-3 py-3 text-xs text-muted-foreground">
-                        Individual jobs aren’t available for this token — open the commit on GitHub for details.
+                        Individual jobs aren’t listed here — open the commit on GitHub for details.
                     </p>
                 ) : (
                     <ul className="max-h-80 overflow-y-auto py-1">

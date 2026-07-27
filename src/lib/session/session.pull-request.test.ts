@@ -100,7 +100,7 @@ describe("loading a pull request", () => {
 });
 
 describe("errors", () => {
-    it("reports a pull request this token cannot see", async () => {
+    it("reports a pull request this session cannot see", async () => {
         const session = await connectedSession();
 
         await session.loadPullRequest("acme/api", 404);

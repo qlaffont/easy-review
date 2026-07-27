@@ -35,7 +35,7 @@ function pullRequestNode(repository: string, number: number) {
 }
 
 describe("getPullRequest", () => {
-    it("keeps the pull request when CheckRun contexts are forbidden to fine-grained PATs", async () => {
+    it("keeps the pull request when CheckRun contexts are forbidden", async () => {
         const github = createGithubHttpClient(
             respondWith({
                 data: {
@@ -124,7 +124,7 @@ describe("getPullRequest", () => {
         expect(detail.title).toBe("Ship checks");
         expect(detail.checks).toBe("failure");
         expect(detail.checkRuns).toEqual([{ name: "CodeRabbit", state: "success", url: null, summary: null }]);
-        // Suite totals, not readable StatusContext-only nodes (fine-grained PATs strip CheckRuns).
+        // Suite totals, not readable StatusContext-only nodes (forbidden CheckRuns strip out).
         expect(detail.checkCount).toBe(6);
         expect(detail.requiredApprovingReviewCount).toBe(2);
         expect(detail.allowedMergeMethods).toEqual(["merge", "squash"]);
@@ -185,7 +185,7 @@ describe("getPullRequest", () => {
 });
 
 describe("listRepositories", () => {
-    it("uses REST /user/repos so org-scoped fine-grained tokens see organization repos", async () => {
+    it("uses REST /user/repos so org-scoped credentials see organization repos", async () => {
         const github = createGithubHttpClient(async (input) => {
             const url = String(input);
             expect(url).toContain("/user/repos");
