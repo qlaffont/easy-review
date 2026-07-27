@@ -4,6 +4,7 @@ import { useState } from "react";
 
 import type { InboxSectionLayoutEntry } from "#/lib/session/inbox-sections.ts";
 
+import { SECTION_VISUALS } from "#/components/inbox/section-visuals.ts";
 import { Button } from "#/components/ui/button.tsx";
 import {
     Dialog,
@@ -17,6 +18,8 @@ import {
 import { Input } from "#/components/ui/input.tsx";
 import { Switch } from "#/components/ui/switch.tsx";
 import { useSession } from "#/lib/session/provider.tsx";
+import { notifySuccess } from "#/lib/toast.ts";
+import { cn } from "#/lib/utils.ts";
 
 export function SectionLayoutEditor() {
     const session = useSession();
@@ -47,8 +50,24 @@ export function SectionLayoutEditor() {
                             isFirst={index === 0}
                             isLast={index === layout.length - 1}
                             onLabel={(label) => void session.setSectionLabel(entry.id, label)}
-                            onHidden={(hidden) => void session.setSectionHidden(entry.id, hidden)}
-                            onMove={(direction) => void session.moveSection(entry.id, direction)}
+                            onHidden={(hidden) => {
+                                void session
+                                    .setSectionHidden(entry.id, hidden)
+                                    .then(() =>
+                                        notifySuccess(hidden ? `Hidden "${entry.label}"` : `Showing "${entry.label}"`),
+                                    );
+                            }}
+                            onMove={(direction) => {
+                                void session
+                                    .moveSection(entry.id, direction)
+                                    .then(() =>
+                                        notifySuccess(
+                                            direction === "up"
+                                                ? `Moved "${entry.label}" up`
+                                                : `Moved "${entry.label}" down`,
+                                        ),
+                                    );
+                            }}
                         />
                     ))}
                 </ul>
@@ -57,7 +76,7 @@ export function SectionLayoutEditor() {
                     <Button
                         variant="outline"
                         onClick={() => {
-                            void session.resetSectionLayout();
+                            void session.resetSectionLayout().then(() => notifySuccess("Sections reset to defaults"));
                         }}
                     >
                         Reset to defaults
@@ -83,9 +102,15 @@ function SectionLayoutRow({
     onHidden: (hidden: boolean) => void;
     onMove: (direction: "up" | "down") => void;
 }) {
+    const visual = SECTION_VISUALS[entry.id];
+    const Icon = visual.icon;
+
     return (
-        <li className="flex flex-col gap-2 rounded-md border px-3 py-2">
+        <li className={cn("flex flex-col gap-2 rounded-md border border-l-[3px] px-3 py-2", visual.accentClass)}>
             <div className="flex items-center gap-2">
+                <span className={cn("grid size-7 shrink-0 place-items-center rounded-md", visual.chipClass)}>
+                    <Icon className={cn("size-3.5", visual.iconClass)} aria-hidden="true" />
+                </span>
                 <Input
                     value={entry.label}
                     aria-label={`Name for ${entry.id}`}

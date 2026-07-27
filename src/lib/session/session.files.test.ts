@@ -160,3 +160,30 @@ describe("lazy file diffs", () => {
         expect(github.fileDiffQueries).toEqual(["src/a.ts"]);
     });
 });
+
+describe("applySuggestions", () => {
+    it("commits a suggestion onto the head file and refreshes the diff", async () => {
+        const session = await connectedSession();
+        await session.loadPullRequest("acme/api", 1);
+        await session.loadFileDiff("acme/api", 1, "src/a.ts");
+
+        await session.applySuggestions("acme/api", 1, {
+            message: "Update src/a.ts",
+            changes: [
+                {
+                    path: "src/a.ts",
+                    startLine: 1,
+                    endLine: 1,
+                    replacement: "console.log(3)",
+                    original: "console.log(2)",
+                },
+            ],
+        });
+
+        expect(github.calls).toContain("applySuggestions");
+        expect(session.getFileDiff("acme/api", 1, "src/a.ts").status).toBe("idle");
+
+        await session.loadFileDiff("acme/api", 1, "src/a.ts");
+        expect(session.getFileDiff("acme/api", 1, "src/a.ts").diff?.afterText).toBe("console.log(3)\n");
+    });
+});

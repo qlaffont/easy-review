@@ -16,7 +16,9 @@ import {
 } from "#/components/ui/dialog.tsx";
 import { HelpTooltip } from "#/components/ui/help-tooltip.tsx";
 import { Input } from "#/components/ui/input.tsx";
+import { RepoPickerLoadingSkeleton } from "#/components/ui/loading.tsx";
 import { useSession, useSessionState } from "#/lib/session/provider.tsx";
+import { notifyAction, notifySuccess } from "#/lib/toast.ts";
 
 const RepoPickerContext = createContext<(() => void) | null>(null);
 
@@ -99,7 +101,13 @@ function RepoPickerDialog({ open, onOpenChange }: { open: boolean; onOpenChange:
                             size="icon"
                             aria-label="Refresh the list from GitHub"
                             disabled={repos.refreshing}
-                            onClick={() => void session.refreshRepositories()}
+                            onClick={() =>
+                                void notifyAction(() => session.refreshRepositories(), {
+                                    loading: "Refreshing repositories…",
+                                    success: "Repositories refreshed",
+                                    error: "Could not refresh repositories.",
+                                })
+                            }
                         >
                             <RefreshCw className={repos.refreshing ? "animate-spin" : undefined} />
                         </Button>
@@ -110,7 +118,7 @@ function RepoPickerDialog({ open, onOpenChange }: { open: boolean; onOpenChange:
 
                 <div className="-mx-1 min-h-0 flex-1 overflow-y-auto px-1">
                     {repos.status === "loading" ? (
-                        <p className="py-8 text-center text-sm text-muted-foreground">Asking GitHub…</p>
+                        <RepoPickerLoadingSkeleton />
                     ) : visible.length === 0 ? (
                         <p className="py-8 text-center text-sm text-muted-foreground">
                             {repos.available.length === 0
@@ -124,12 +132,18 @@ function RepoPickerDialog({ open, onOpenChange }: { open: boolean; onOpenChange:
                                     <label className="flex cursor-pointer items-center gap-3 rounded-md px-2 py-2 text-sm hover:bg-accent">
                                         <Checkbox
                                             checked={selected.has(repository.nameWithOwner)}
-                                            onCheckedChange={(checked) =>
-                                                void session.toggleRepository(
-                                                    repository.nameWithOwner,
-                                                    checked === true,
-                                                )
-                                            }
+                                            onCheckedChange={(checked) => {
+                                                const selectedNext = checked === true;
+                                                void session
+                                                    .toggleRepository(repository.nameWithOwner, selectedNext)
+                                                    .then(() =>
+                                                        notifySuccess(
+                                                            selectedNext
+                                                                ? `Added ${repository.nameWithOwner}`
+                                                                : `Removed ${repository.nameWithOwner}`,
+                                                        ),
+                                                    );
+                                            }}
                                         />
                                         <span className="truncate">{repository.nameWithOwner}</span>
                                         {repository.isPrivate ? (

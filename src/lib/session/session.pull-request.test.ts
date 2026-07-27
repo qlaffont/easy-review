@@ -40,7 +40,7 @@ beforeEach(() => {
         body: "## Why\n\nWebhooks were dropped on the floor.",
         labels: [{ name: "bug", color: "d73a4a" }],
         assignees: ["hubot"],
-        checkRuns: [{ name: "build", state: "failure", url: "https://ci.example/build" }],
+        checkRuns: [{ name: "build", state: "failure", url: "https://ci.example/build", summary: "Failing after 1m" }],
         mergeable: "conflicting",
     });
 });

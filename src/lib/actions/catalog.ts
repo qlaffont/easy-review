@@ -1,6 +1,8 @@
 import type { EasyReviewSession } from "#/lib/session/session.ts";
 import type { PullRequestState } from "#/lib/session/types.ts";
 
+import { notifyAction } from "#/lib/toast.ts";
+
 /**
  * The pull request the keyboard selection or the open page is focused on. Copy and lifecycle
  * actions read from this rather than scraping the DOM.
@@ -87,7 +89,11 @@ export const APP_ACTIONS: ReadonlyArray<AppAction> = [
         group: "Inbox",
         when: () => true,
         run: async (context) => {
-            await context.session.refreshInbox();
+            await notifyAction(() => context.session.refreshInbox(), {
+                loading: "Refreshing inbox…",
+                success: "Inbox refreshed",
+                error: "Could not refresh the inbox.",
+            });
         },
     },
     {
@@ -151,7 +157,14 @@ export const APP_ACTIONS: ReadonlyArray<AppAction> = [
         when: hasTarget,
         run: async (context) => {
             if (!context.target) return;
-            await context.session.refreshPullRequest(context.target.repository, context.target.number);
+            await notifyAction(
+                () => context.session.refreshPullRequest(context.target!.repository, context.target!.number),
+                {
+                    loading: "Refreshing pull request…",
+                    success: "Pull request refreshed",
+                    error: "Could not refresh the pull request.",
+                },
+            );
         },
     },
     {
@@ -161,7 +174,14 @@ export const APP_ACTIONS: ReadonlyArray<AppAction> = [
         when: (context) => hasOpenTarget(context) && context.target.isDraft,
         run: async (context) => {
             if (!context.target) return;
-            await context.session.setPullRequestDraft(context.target.repository, context.target.number, false);
+            await notifyAction(
+                () => context.session.setPullRequestDraft(context.target!.repository, context.target!.number, false),
+                {
+                    loading: "Marking ready for review…",
+                    success: "Marked ready for review",
+                    error: "Could not update draft status.",
+                },
+            );
         },
     },
     {
@@ -171,7 +191,14 @@ export const APP_ACTIONS: ReadonlyArray<AppAction> = [
         when: (context) => hasOpenTarget(context) && !context.target.isDraft,
         run: async (context) => {
             if (!context.target) return;
-            await context.session.setPullRequestDraft(context.target.repository, context.target.number, true);
+            await notifyAction(
+                () => context.session.setPullRequestDraft(context.target!.repository, context.target!.number, true),
+                {
+                    loading: "Converting to draft…",
+                    success: "Converted to draft",
+                    error: "Could not update draft status.",
+                },
+            );
         },
     },
     {
@@ -184,7 +211,14 @@ export const APP_ACTIONS: ReadonlyArray<AppAction> = [
             if (!context.confirm(`Close ${context.target.repository}#${context.target.number}?`)) {
                 return;
             }
-            await context.session.closePullRequest(context.target.repository, context.target.number);
+            await notifyAction(
+                () => context.session.closePullRequest(context.target!.repository, context.target!.number),
+                {
+                    loading: "Closing pull request…",
+                    success: "Pull request closed",
+                    error: "Could not close the pull request.",
+                },
+            );
         },
     },
     {
@@ -198,7 +232,14 @@ export const APP_ACTIONS: ReadonlyArray<AppAction> = [
             if (!context.confirm(`Squash-merge ${context.target.repository}#${context.target.number}?`)) {
                 return;
             }
-            await context.session.mergePullRequest(context.target.repository, context.target.number, "squash");
+            await notifyAction(
+                () => context.session.mergePullRequest(context.target!.repository, context.target!.number, "squash"),
+                {
+                    loading: "Merging pull request…",
+                    success: "Pull request merged",
+                    error: "Could not merge the pull request.",
+                },
+            );
         },
     },
     {
@@ -208,8 +249,17 @@ export const APP_ACTIONS: ReadonlyArray<AppAction> = [
         when: hasOpenTarget,
         run: async (context) => {
             if (!context.target) return;
-            await context.session.setReviewEvent(context.target.repository, context.target.number, "comment");
-            await context.session.submitReview(context.target.repository, context.target.number);
+            await notifyAction(
+                async () => {
+                    await context.session.setReviewEvent(context.target!.repository, context.target!.number, "comment");
+                    await context.session.submitReview(context.target!.repository, context.target!.number);
+                },
+                {
+                    loading: "Submitting review…",
+                    success: "Review submitted",
+                    error: "Could not submit the review.",
+                },
+            );
         },
     },
 ];

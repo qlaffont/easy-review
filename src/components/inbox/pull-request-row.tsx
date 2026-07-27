@@ -1,5 +1,12 @@
 import { Link } from "@tanstack/react-router";
-import { CircleDashed, GitPullRequestDraft, MessageSquare } from "lucide-react";
+import {
+    CircleDashed,
+    GitMerge,
+    GitPullRequest,
+    GitPullRequestClosed,
+    GitPullRequestDraft,
+    MessageSquare,
+} from "lucide-react";
 import { memo } from "react";
 
 import type { PullRequestSummary } from "#/lib/session/types.ts";
@@ -15,7 +22,7 @@ function ReviewProgress({ pullRequest }: { pullRequest: PullRequestSummary }) {
     const pending = pullRequest.reviewRequests.length;
 
     if (changesRequested) {
-        return <span className="text-red-600 dark:text-red-400">Changes requested</span>;
+        return <span className="text-rose-600 dark:text-rose-400">Changes requested</span>;
     }
 
     if (approvals > 0) {
@@ -27,10 +34,30 @@ function ReviewProgress({ pullRequest }: { pullRequest: PullRequestSummary }) {
     }
 
     if (pending > 0) {
-        return <span>{pending} pending</span>;
+        return <span className="text-sky-700 dark:text-sky-300">{pending} pending</span>;
     }
 
     return <span>No reviewers</span>;
+}
+
+function PullRequestStateIcon({ pullRequest }: { pullRequest: PullRequestSummary }) {
+    if (pullRequest.state === "merged") {
+        return <GitMerge className="size-3.5 shrink-0 text-violet-600 dark:text-violet-400" aria-label="Merged" />;
+    }
+
+    if (pullRequest.state === "closed") {
+        return (
+            <GitPullRequestClosed className="size-3.5 shrink-0 text-rose-600 dark:text-rose-400" aria-label="Closed" />
+        );
+    }
+
+    if (pullRequest.isDraft) {
+        return (
+            <GitPullRequestDraft className="size-3.5 shrink-0 text-slate-500 dark:text-slate-400" aria-label="Draft" />
+        );
+    }
+
+    return <GitPullRequest className="size-3.5 shrink-0 text-emerald-600 dark:text-emerald-400" aria-label="Open" />;
 }
 
 export const PullRequestRow = memo(function PullRequestRow({
@@ -57,9 +84,7 @@ export const PullRequestRow = memo(function PullRequestRow({
 
             <span className="flex min-w-0 flex-col gap-0.5">
                 <span className="flex min-w-0 items-center gap-2">
-                    {pullRequest.isDraft ? (
-                        <GitPullRequestDraft className="size-3.5 shrink-0 text-muted-foreground" aria-label="Draft" />
-                    ) : null}
+                    <PullRequestStateIcon pullRequest={pullRequest} />
                     <span className="truncate font-medium text-foreground">{pullRequest.title}</span>
                 </span>
                 <span className="flex min-w-0 items-center gap-2 text-xs text-muted-foreground">

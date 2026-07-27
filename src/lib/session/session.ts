@@ -1,5 +1,6 @@
 import { Store } from "@tanstack/store";
 
+import type { SuggestionChange } from "#/lib/session/apply-suggestion.ts";
 import type { SessionError } from "#/lib/session/errors.ts";
 import type { InboxSection, InboxSectionId, InboxSectionLayoutEntry } from "#/lib/session/inbox-sections.ts";
 import type { GithubClient, GithubViewer, KeyValueStore } from "#/lib/session/ports.ts";
@@ -9,6 +10,7 @@ import type {
     MergeMethod,
     PendingLineComment,
     PullRequestComment,
+    PullRequestCommit,
     PullRequestDetail,
     PullRequestFile,
     PullRequestSummary,
@@ -16,13 +18,15 @@ import type {
     Repository,
     RepositoryLabel,
     RepositoryUser,
+    ReactionContent,
+    ReactionGroup,
     ReviewDraft,
     ReviewEvent,
     ReviewThread,
     ReviewThreadComment,
 } from "#/lib/session/types.ts";
 
-import { EasyReviewError, missingToken, toSessionError } from "#/lib/session/errors.ts";
+import { EasyReviewError, missingToken, toSessionError, unauthorized } from "#/lib/session/errors.ts";
 import {
     defaultSectionLayout,
     groupIntoSections,
@@ -132,6 +136,12 @@ export type ConversationCommentsState = {
     error: SessionError | null;
 };
 
+export type PullRequestCommitsState = {
+    status: "idle" | "loading" | "ready" | "error";
+    items: Array<PullRequestCommit>;
+    error: SessionError | null;
+};
+
 export type RepositoryMetadataState = {
     status: "idle" | "loading" | "ready" | "error";
     users: Array<RepositoryUser>;
@@ -151,6 +161,8 @@ export type SessionState = {
     reviewThreads: Record<string, ReviewThreadsState>;
     /** Conversation (issue) comments keyed by `owner/repo#number`. */
     conversationComments: Record<string, ConversationCommentsState>;
+    /** Commits tab list keyed by `owner/repo#number`. */
+    pullRequestCommits: Record<string, PullRequestCommitsState>;
     /** Assignable users + labels keyed by `owner/repo`. */
     repositoryMetadata: Record<string, RepositoryMetadataState>;
 };
@@ -229,6 +241,7 @@ type InboxCache = {
 export function createEasyReviewSession({ github, store }: EasyReviewSessionDeps) {
     const initialThreadsState: ReviewThreadsState = { status: "idle", items: [], error: null };
     const initialConversationState: ConversationCommentsState = { status: "idle", items: [], error: null };
+    const initialCommitsState: PullRequestCommitsState = { status: "idle", items: [], error: null };
     const initialRepositoryMetadata: RepositoryMetadataState = {
         status: "idle",
         users: [],
@@ -244,6 +257,7 @@ export function createEasyReviewSession({ github, store }: EasyReviewSessionDeps
         reviewDrafts: {},
         reviewThreads: {},
         conversationComments: {},
+        pullRequestCommits: {},
         repositoryMetadata: {},
     });
 
@@ -263,6 +277,7 @@ export function createEasyReviewSession({ github, store }: EasyReviewSessionDeps
     const latestFileDiffLoads = new Map<string, number>();
     const latestReviewThreadLoads = new Map<string, number>();
     const latestConversationCommentLoads = new Map<string, number>();
+    const latestPullRequestCommitLoads = new Map<string, number>();
     const latestRepositoryMetadataLoads = new Map<string, number>();
     /** Last-write-wins for summary typing so overlapping persists cannot drop characters. */
     const latestDraftBodyWrites = new Map<string, number>();
@@ -380,6 +395,7 @@ export function createEasyReviewSession({ github, store }: EasyReviewSessionDeps
             reviewDrafts: {},
             reviewThreads: {},
             conversationComments: {},
+            pullRequestCommits: {},
             repositoryMetadata: {},
         }));
     }
@@ -713,6 +729,7 @@ export function createEasyReviewSession({ github, store }: EasyReviewSessionDeps
                 error: null,
             });
             await syncDraftWithHead(detail);
+            await refreshSecondaryPullRequestViews(repository, number);
         } catch (error) {
             if (attempt !== latestPullRequestLoads.get(key)) return;
             setPullRequest(key, {
@@ -1048,7 +1065,35 @@ export function createEasyReviewSession({ github, store }: EasyReviewSessionDeps
         });
 
         await persistDraft(emptyDraft(repository, number, detail.headSha));
-        await loadReviewThreads(repository, number);
+        await Promise.all([loadReviewThreads(repository, number), loadConversationComments(repository, number)]);
+    }
+
+    /** Publish one line comment immediately as a Comment review (does not touch the staged draft). */
+    async function addSingleLineComment(
+        repository: string,
+        number: number,
+        input: { path: string; line: number; side: DiffSide; body: string },
+    ): Promise<void> {
+        const detail = state.state.pullRequests[pullRequestKey(repository, number)]?.detail;
+        if (!detail) {
+            throw new EasyReviewError("unknown", "Load the pull request before commenting.");
+        }
+
+        const body = input.body.trim();
+        if (!body) {
+            throw new EasyReviewError("unknown", "Comment body is required.");
+        }
+
+        await github.submitReview(requireToken(), {
+            repository,
+            number,
+            headSha: detail.headSha,
+            event: "comment",
+            body: "",
+            comments: [{ path: input.path, line: input.line, side: input.side, body }],
+        });
+
+        await Promise.all([loadReviewThreads(repository, number), loadConversationComments(repository, number)]);
     }
 
     async function loadReviewThreads(repository: string, number: number): Promise<void> {
@@ -1128,6 +1173,31 @@ export function createEasyReviewSession({ github, store }: EasyReviewSessionDeps
         return reply;
     }
 
+    async function setReviewThreadResolved(
+        repository: string,
+        number: number,
+        threadId: string,
+        resolved: boolean,
+    ): Promise<void> {
+        await github.setReviewThreadResolved(requireToken(), threadId, resolved);
+        const key = pullRequestKey(repository, number);
+        state.setState((prev) => {
+            const current = prev.reviewThreads[key] ?? initialThreadsState;
+            return {
+                ...prev,
+                reviewThreads: {
+                    ...prev.reviewThreads,
+                    [key]: {
+                        ...current,
+                        items: current.items.map((thread) =>
+                            thread.id === threadId ? { ...thread, isResolved: resolved } : thread,
+                        ),
+                    },
+                },
+            };
+        });
+    }
+
     async function loadConversationComments(repository: string, number: number): Promise<void> {
         const key = pullRequestKey(repository, number);
         const attempt = (latestConversationCommentLoads.get(key) ?? 0) + 1;
@@ -1179,6 +1249,64 @@ export function createEasyReviewSession({ github, store }: EasyReviewSessionDeps
 
     function getConversationComments(repository: string, number: number): ConversationCommentsState {
         return state.state.conversationComments[pullRequestKey(repository, number)] ?? initialConversationState;
+    }
+
+    async function loadPullRequestCommits(repository: string, number: number): Promise<void> {
+        const key = pullRequestKey(repository, number);
+        const current = state.state.pullRequestCommits[key];
+        if (current?.status === "ready" || current?.status === "loading") {
+            return;
+        }
+
+        const attempt = (latestPullRequestCommitLoads.get(key) ?? 0) + 1;
+        latestPullRequestCommitLoads.set(key, attempt);
+
+        state.setState((prev) => ({
+            ...prev,
+            pullRequestCommits: {
+                ...prev.pullRequestCommits,
+                [key]: {
+                    status: "loading",
+                    items: prev.pullRequestCommits[key]?.items ?? [],
+                    error: null,
+                },
+            },
+        }));
+
+        try {
+            const items = await github.listPullRequestCommits(requireToken(), repository, number);
+            if (attempt !== latestPullRequestCommitLoads.get(key)) {
+                return;
+            }
+
+            state.setState((prev) => ({
+                ...prev,
+                pullRequestCommits: {
+                    ...prev.pullRequestCommits,
+                    [key]: { status: "ready", items, error: null },
+                },
+            }));
+        } catch (error) {
+            if (attempt !== latestPullRequestCommitLoads.get(key)) {
+                return;
+            }
+
+            state.setState((prev) => ({
+                ...prev,
+                pullRequestCommits: {
+                    ...prev.pullRequestCommits,
+                    [key]: {
+                        status: "error",
+                        items: prev.pullRequestCommits[key]?.items ?? [],
+                        error: toSessionError(error),
+                    },
+                },
+            }));
+        }
+    }
+
+    function getPullRequestCommits(repository: string, number: number): PullRequestCommitsState {
+        return state.state.pullRequestCommits[pullRequestKey(repository, number)] ?? initialCommitsState;
     }
 
     async function addPullRequestComment(
@@ -1269,6 +1397,11 @@ export function createEasyReviewSession({ github, store }: EasyReviewSessionDeps
             }
 
             await syncDraftWithHead(detail);
+            // Mutations always create timeline events (ready/draft, labels, renames, …).
+            await loadConversationComments(repository, number);
+            if (state.state.reviewThreads[key]?.status !== "idle") {
+                await loadReviewThreads(repository, number);
+            }
         } catch (error) {
             if (attempt !== latestPullRequestLoads.get(key)) {
                 return;
@@ -1279,6 +1412,20 @@ export function createEasyReviewSession({ github, store }: EasyReviewSessionDeps
                 error: toSessionError(error),
             });
         }
+    }
+
+    /** Soft-refresh conversation/threads when a PR overview refresh already loaded them. */
+    async function refreshSecondaryPullRequestViews(repository: string, number: number): Promise<void> {
+        const key = pullRequestKey(repository, number);
+        const conversation = state.state.conversationComments[key];
+        const threads = state.state.reviewThreads[key];
+
+        await Promise.all([
+            conversation && conversation.status !== "idle"
+                ? loadConversationComments(repository, number)
+                : Promise.resolve(),
+            threads && threads.status !== "idle" ? loadReviewThreads(repository, number) : Promise.resolve(),
+        ]);
     }
 
     async function setPullRequestDraft(repository: string, number: number, isDraft: boolean): Promise<void> {
@@ -1397,6 +1544,200 @@ export function createEasyReviewSession({ github, store }: EasyReviewSessionDeps
         await refreshAfterMutation(repository, number);
     }
 
+    async function dismissReview(
+        repository: string,
+        number: number,
+        reviewId: number,
+        message = "Dismissed via Easy Review",
+    ): Promise<void> {
+        await github.dismissReview(requireToken(), repository, number, reviewId, message);
+        await refreshAfterMutation(repository, number);
+    }
+
+    async function updatePullRequestBody(repository: string, number: number, body: string): Promise<void> {
+        await github.updatePullRequestBody(requireToken(), repository, number, body);
+        await refreshAfterMutation(repository, number);
+    }
+
+    async function applySuggestions(
+        repository: string,
+        number: number,
+        input: {
+            message: string;
+            changes: ReadonlyArray<SuggestionChange>;
+        },
+    ): Promise<void> {
+        const detail = getPullRequestPage(repository, number).detail;
+        if (!detail) {
+            throw new EasyReviewError("unknown", "Pull request is not loaded.");
+        }
+        if (detail.state !== "open") {
+            throw new EasyReviewError("unknown", "Suggestions can only be applied on open pull requests.");
+        }
+        const message = input.message.trim();
+        if (!message) {
+            throw new EasyReviewError("unknown", "Commit message cannot be empty.");
+        }
+        if (input.changes.length === 0) {
+            throw new EasyReviewError("unknown", "No suggestions to apply.");
+        }
+        await github.applySuggestions(requireToken(), {
+            repository,
+            number,
+            headRefName: detail.headRefName,
+            headSha: detail.headSha,
+            message,
+            changes: input.changes,
+        });
+        await refreshAfterMutation(repository, number);
+        // Head moved — drop cached diffs so the viewer reloads the committed content.
+        await refreshPullRequestFiles(repository, number);
+        const commitsKey = pullRequestKey(repository, number);
+        latestPullRequestCommitLoads.set(commitsKey, (latestPullRequestCommitLoads.get(commitsKey) ?? 0) + 1);
+        state.setState((prev) => ({
+            ...prev,
+            pullRequestCommits: { ...prev.pullRequestCommits, [commitsKey]: initialCommitsState },
+        }));
+    }
+
+    async function updatePullRequest(
+        repository: string,
+        number: number,
+        input: { title?: string; base?: string },
+    ): Promise<void> {
+        const title = input.title?.trim();
+        const base = input.base?.trim();
+        if (title !== undefined && title.length === 0) {
+            throw new EasyReviewError("unknown", "Title cannot be empty.");
+        }
+        await github.updatePullRequest(requireToken(), repository, number, {
+            ...(title !== undefined ? { title } : {}),
+            ...(base !== undefined ? { base } : {}),
+        });
+        await refreshAfterMutation(repository, number);
+    }
+
+    async function listRepositoryBranches(repository: string): Promise<Array<string>> {
+        return github.listRepositoryBranches(requireToken(), repository);
+    }
+
+    function patchReactionGroups(
+        groups: Array<ReactionGroup>,
+        content: ReactionContent,
+        reacted: boolean,
+    ): Array<ReactionGroup> {
+        const existing = groups.find((group) => group.content === content);
+        if (reacted) {
+            if (existing) {
+                return groups.map((group) =>
+                    group.content === content
+                        ? { ...group, count: group.count + (group.viewerHasReacted ? 0 : 1), viewerHasReacted: true }
+                        : group,
+                );
+            }
+            return [...groups, { content, count: 1, viewerHasReacted: true }];
+        }
+        if (!existing) {
+            return groups;
+        }
+        if (existing.count <= 1) {
+            return groups.filter((group) => group.content !== content);
+        }
+        return groups.map((group) =>
+            group.content === content ? { ...group, count: group.count - 1, viewerHasReacted: false } : group,
+        );
+    }
+
+    async function toggleIssueReaction(repository: string, number: number, content: ReactionContent): Promise<void> {
+        const token = requireToken();
+        const viewerLogin = state.state.auth.viewer?.login;
+        if (!viewerLogin) {
+            throw unauthorized();
+        }
+
+        const key = pullRequestKey(repository, number);
+        const detail = state.state.pullRequests[key]?.detail;
+        const already = detail?.reactionGroups.some((group) => group.content === content && group.viewerHasReacted);
+
+        if (already) {
+            const reactionId = await github.findIssueReactionId(token, repository, number, content, viewerLogin);
+            if (reactionId != null) {
+                await github.deleteIssueReaction(token, repository, number, reactionId);
+            }
+        } else {
+            await github.createIssueReaction(token, repository, number, content);
+        }
+
+        if (detail) {
+            setPullRequest(key, {
+                status: "ready",
+                refreshing: false,
+                detail: {
+                    ...detail,
+                    reactionGroups: patchReactionGroups(detail.reactionGroups, content, !already),
+                },
+                lastLoadedAt: new Date().toISOString(),
+                error: null,
+            });
+        }
+    }
+
+    async function toggleIssueCommentReaction(
+        repository: string,
+        number: number,
+        commentId: number,
+        content: ReactionContent,
+    ): Promise<void> {
+        const token = requireToken();
+        const viewerLogin = state.state.auth.viewer?.login;
+        if (!viewerLogin) {
+            throw unauthorized();
+        }
+
+        const key = pullRequestKey(repository, number);
+        const conversation = state.state.conversationComments[key] ?? initialConversationState;
+        const item = conversation.items.find((entry) => entry.kind === "comment" && entry.databaseId === commentId);
+        const already =
+            item?.kind === "comment" &&
+            item.reactionGroups.some((group) => group.content === content && group.viewerHasReacted);
+
+        if (already) {
+            const reactionId = await github.findIssueCommentReactionId(
+                token,
+                repository,
+                commentId,
+                content,
+                viewerLogin,
+            );
+            if (reactionId != null) {
+                await github.deleteIssueCommentReaction(token, repository, commentId, reactionId);
+            }
+        } else {
+            await github.createIssueCommentReaction(token, repository, commentId, content);
+        }
+
+        state.setState((prev) => {
+            const current = prev.conversationComments[key] ?? initialConversationState;
+            return {
+                ...prev,
+                conversationComments: {
+                    ...prev.conversationComments,
+                    [key]: {
+                        ...current,
+                        items: current.items.map((entry) =>
+                            entry.kind === "comment" && entry.databaseId === commentId
+                                ? {
+                                      ...entry,
+                                      reactionGroups: patchReactionGroups(entry.reactionGroups, content, !already),
+                                  }
+                                : entry,
+                        ),
+                    },
+                },
+            };
+        });
+    }
+
     async function mergePullRequest(repository: string, number: number, method: MergeMethod): Promise<void> {
         await github.mergePullRequest(requireToken(), repository, number, method);
         await refreshAfterMutation(repository, number);
@@ -1450,6 +1791,7 @@ export function createEasyReviewSession({ github, store }: EasyReviewSessionDeps
         setReviewEvent,
         setReviewBody,
         addPendingComment,
+        addSingleLineComment,
         updatePendingComment,
         removePendingComment,
         discardReviewDraft,
@@ -1457,8 +1799,11 @@ export function createEasyReviewSession({ github, store }: EasyReviewSessionDeps
         loadReviewThreads,
         getReviewThreads,
         replyToReviewThread,
+        setReviewThreadResolved,
         loadConversationComments,
         getConversationComments,
+        loadPullRequestCommits,
+        getPullRequestCommits,
         addPullRequestComment,
         loadRepositoryMetadata,
         getRepositoryMetadata,
@@ -1467,6 +1812,13 @@ export function createEasyReviewSession({ github, store }: EasyReviewSessionDeps
         setPullRequestAssignees,
         setReviewRequests,
         reRequestReview,
+        dismissReview,
+        updatePullRequestBody,
+        applySuggestions,
+        updatePullRequest,
+        listRepositoryBranches,
+        toggleIssueReaction,
+        toggleIssueCommentReaction,
         mergePullRequest,
         closePullRequest,
     };

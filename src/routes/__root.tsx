@@ -3,7 +3,9 @@ import { HeadContent, Outlet, Scripts, createRootRoute } from "@tanstack/react-r
 import { TanStackRouterDevtoolsPanel } from "@tanstack/react-router-devtools";
 
 import { SessionGate } from "#/components/session-gate.tsx";
+import { Toaster } from "#/components/ui/sonner.tsx";
 import { TooltipProvider } from "#/components/ui/tooltip.tsx";
+import { buildHead, siteName } from "#/lib/seo.ts";
 import { SessionProvider } from "#/lib/session/provider.tsx";
 
 import appCss from "../styles.css?url";
@@ -18,9 +20,11 @@ export const Route = createRootRoute({
                 name: "viewport",
                 content: "width=device-width, initial-scale=1",
             },
-            {
-                title: "Easy Review",
-            },
+            ...buildHead({
+                title: siteName(),
+                description:
+                    "Triage GitHub pull requests, review diffs, and submit staged reviews without leaving Easy Review.",
+            }).meta,
         ],
         links: [
             {
@@ -50,6 +54,7 @@ function RootDocument({ children }: { children: React.ReactNode }) {
             <body>
                 <TooltipProvider delayDuration={400} skipDelayDuration={200}>
                     <SessionProvider>{children}</SessionProvider>
+                    <Toaster />
                 </TooltipProvider>
                 <TanStackDevtools
                     config={{

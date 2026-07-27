@@ -50,14 +50,16 @@ describe("classifyPullRequest", () => {
     it("puts a re-requested review back in Needs your review even after you reviewed", () => {
         const subject = pullRequest({
             reviewRequests: [VIEWER],
-            reviewers: [{ login: VIEWER, state: "approved" }],
+            reviewers: [{ login: VIEWER, state: "approved", reviewId: 1 }],
         });
 
         expect(classifyPullRequest(subject, VIEWER)).toBe("needs-your-review");
     });
 
     it("puts a pull request you already reviewed in Waiting for author", () => {
-        const subject = pullRequest({ reviewers: [{ login: VIEWER, state: "changes-requested" }] });
+        const subject = pullRequest({
+            reviewers: [{ login: VIEWER, state: "changes-requested", reviewId: 2 }],
+        });
 
         expect(classifyPullRequest(subject, VIEWER)).toBe("waiting-for-author");
     });

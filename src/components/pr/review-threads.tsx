@@ -5,6 +5,7 @@ import { Button } from "#/components/ui/button.tsx";
 import { RelativeTime } from "#/components/ui/relative-time.tsx";
 import { Textarea } from "#/components/ui/textarea.tsx";
 import { useSession } from "#/lib/session/provider.tsx";
+import { notifyAction } from "#/lib/toast.ts";
 
 export function ReviewThreadsPanel({
     repository,
@@ -73,8 +74,14 @@ function ThreadCard({
 
         setSending(true);
         try {
-            await session.replyToReviewThread(repository, number, threadId, reply);
+            await notifyAction(() => session.replyToReviewThread(repository, number, threadId, reply), {
+                loading: "Sending reply…",
+                success: "Reply posted",
+                error: "Could not post the reply.",
+            });
             setReply("");
+        } catch {
+            // Toast already reports the failure.
         } finally {
             setSending(false);
         }

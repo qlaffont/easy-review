@@ -35,15 +35,19 @@ beforeEach(() => {
     github.addReviewThread(TOKEN, "acme/api", 1, {
         id: "thread-1",
         path: "src/a.ts",
+        startLine: null,
         line: 1,
         side: "RIGHT",
         isResolved: false,
+        diffHunk: "@@ -1,1 +1,1 @@\n-one\n+two",
         comments: [
             {
                 id: "c1",
                 author: "hubot",
+                authorAvatarUrl: null,
                 body: "Please rename this.",
                 createdAt: "2026-07-01T00:00:00.000Z",
+                url: "https://github.com/acme/api/pull/1#discussion_r1",
             },
         ],
     });
@@ -98,6 +102,38 @@ describe("staged review drafts", () => {
 
         expect(session.getReviewDraft("acme/api", 1).stale).toBe(true);
         await expect(session.submitReview("acme/api", 1)).rejects.toMatchObject({ kind: "unknown" });
+    });
+
+    it("posts a single line comment immediately without touching the staged draft", async () => {
+        const session = await connectedWithPr();
+        await session.addPendingComment("acme/api", 1, {
+            path: "src/a.ts",
+            line: 1,
+            side: "RIGHT",
+            body: "staged",
+        });
+
+        await session.addSingleLineComment("acme/api", 1, {
+            path: "src/a.ts",
+            line: 2,
+            side: "RIGHT",
+            body: "ship it now",
+        });
+
+        expect(github.submittedReviews).toEqual([
+            {
+                repository: "acme/api",
+                number: 1,
+                headSha: "sha-aaa",
+                event: "comment",
+                body: "",
+                comments: [{ path: "src/a.ts", line: 2, side: "RIGHT", body: "ship it now" }],
+            },
+        ]);
+        expect(session.getReviewDraft("acme/api", 1).comments).toHaveLength(1);
+        const threads = session.getReviewThreads("acme/api", 1).items;
+        expect(threads).toHaveLength(2);
+        expect(threads.some((thread) => thread.comments.some((comment) => comment.body === "ship it now"))).toBe(true);
     });
 
     it("submits one review with every pending comment and clears the draft", async () => {
@@ -206,11 +242,17 @@ describe("conversation comments", () => {
     it("loads and posts a pull request comment without starting a review", async () => {
         github.addConversationComment(TOKEN, "acme/api", 1, {
             id: "issue-1",
+            databaseId: 1,
             author: "hubot",
             authorAvatarUrl: null,
             body: "Looks good overall.",
             createdAt: "2026-07-01T00:00:00.000Z",
             url: "https://github.com/acme/api/pull/1#issuecomment-1",
+            lastEditedAt: null,
+            editor: null,
+            editCount: 0,
+            edits: [],
+            reactionGroups: [],
         });
 
         const session = await connectedWithPr();

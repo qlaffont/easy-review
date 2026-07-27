@@ -10,6 +10,8 @@ export type PullRequestState = "open" | "merged" | "closed";
 export type ReviewerStatus = {
     login: string;
     state: ReviewState;
+    /** GitHub review database id — required to dismiss the review. */
+    reviewId: number;
 };
 
 /** Everything an Inbox row needs. Deliberately flat so it can be cached as JSON. */
@@ -37,6 +39,7 @@ export type PullRequestSummary = {
     additions: number;
     deletions: number;
     changedFiles: number;
+    /** Issue + review comments — GitHub Conversation tab badge (`totalCommentsCount`). */
     commentCount: number;
 };
 
@@ -63,6 +66,8 @@ export type CheckRun = {
     name: string;
     state: CheckState;
     url: string | null;
+    /** Short status line under the name, e.g. "Failing after 1m" / "Successful in 6s". */
+    summary: string | null;
 };
 
 /** Whether GitHub thinks the branches can still be combined. */
@@ -71,16 +76,53 @@ export type MergeableState = "mergeable" | "conflicting" | "unknown";
 /** How GitHub should combine the head into the base when merging. */
 export type MergeMethod = "merge" | "squash" | "rebase";
 
+/** GitHub reaction content values used on issues and comments. */
+export type ReactionContent = "+1" | "-1" | "laugh" | "confused" | "heart" | "hooray" | "rocket" | "eyes";
+
+/** Aggregated reaction counts for a subject (PR description or comment). */
+export type ReactionGroup = {
+    content: ReactionContent;
+    count: number;
+    viewerHasReacted: boolean;
+};
+
+/** Who last edited a description or comment body (GitHub `editor` / edit history). */
+export type ContentEditor = {
+    login: string;
+    avatarUrl: string | null;
+    isBot: boolean;
+};
+
+export type ContentEdit = {
+    editedAt: string;
+    editor: ContentEditor | null;
+};
+
 /** What the overview page needs on top of an Inbox row. */
 export type PullRequestDetail = PullRequestSummary & {
     /** Raw markdown, rendered client-side. Empty when the author wrote no description. */
     body: string;
+    /** When the description was last edited; null if never edited after creation. */
+    lastEditedAt: string | null;
+    /** Last editor of the description (often a bot like CodeRabbit). */
+    editor: ContentEditor | null;
+    /** Total edit count from GitHub; may exceed `edits.length`. */
+    editCount: number;
+    /** Recent body edits, newest first. */
+    edits: Array<ContentEdit>;
+    /** Reactions on the pull request description (GitHub issue). */
+    reactionGroups: Array<ReactionGroup>;
     headSha: string;
     /** Base tip the pull request wants to land on — used to fetch the left side of a file diff. */
     baseSha: string;
     labels: Array<Label>;
     assignees: Array<string>;
     checkRuns: Array<CheckRun>;
+    /**
+     * GitHub Checks-tab badge: check-run count from suites (excludes legacy commit statuses).
+     * Prefer this over `checkRuns.length` — fine-grained PATs often omit CheckRun nodes.
+     */
+    checkCount: number;
     mergeable: MergeableState;
     /**
      * From the base branch protection rule. `null` when the base has no (readable) approving-review
@@ -93,6 +135,18 @@ export type PullRequestDetail = PullRequestSummary & {
     defaultMergeMethod: MergeMethod | null;
     /** Commits on the pull request — used for merge-method copy. */
     commitCount: number;
+};
+
+/** One commit on a pull request (the Commits tab list). */
+export type PullRequestCommit = {
+    oid: string;
+    abbreviatedOid: string;
+    messageHeadline: string;
+    committedAt: string;
+    authorLogin: string;
+    authorAvatarUrl: string | null;
+    url: string;
+    checkState: CheckState;
 };
 
 export type FileChangeStatus = "added" | "removed" | "modified" | "renamed";
@@ -114,13 +168,29 @@ export type PullRequestFile = {
     stub: FileStubReason | null;
 };
 
-export type DiffLineKind = "context" | "add" | "del" | "hunk";
+export type DiffLineKind = "context" | "add" | "del" | "hunk" | "gap";
+
+/** Collapsed unchanged region between hunks — expand to reveal more context. */
+export type DiffGap = {
+    /** Stable id of the full equal-run this hole belongs to (used for expand state). */
+    id: string;
+    oldStart: number;
+    oldEnd: number;
+    newStart: number;
+    newEnd: number;
+    /** Peel lines from the top of the hole (toward a hunk above). False at file start. */
+    expandDown: boolean;
+    /** Peel lines from the bottom of the hole (toward a hunk below). False at file end. */
+    expandUp: boolean;
+};
 
 export type DiffLine = {
     kind: DiffLineKind;
     text: string;
     oldNumber: number | null;
     newNumber: number | null;
+    /** Set when `kind === "gap"`. */
+    gap?: DiffGap;
 };
 
 /** The body of one file, fetched only when that file is opened. */
@@ -131,6 +201,12 @@ export type FileDiff = {
     truncated: boolean;
     /** Present when the load stopped short of producing lines (binary, huge without force, …). */
     stub: FileStubReason | null;
+    /**
+     * Decoded sides kept so the viewer can rematerialize (expand context, hide whitespace,
+     * show full file) without another network round-trip. Null when stubbed.
+     */
+    beforeText: string | null;
+    afterText: string | null;
 };
 
 /** What GitHub receives when the staged review is submitted. */
@@ -171,23 +247,43 @@ export type ReviewDraft = {
 export type ReviewThreadComment = {
     id: string;
     author: string;
+    authorAvatarUrl: string | null;
     body: string;
     createdAt: string;
+    /** Permalink on GitHub (`…#discussion_r…`). */
+    url: string;
 };
 
 /** A conversation comment on the pull request (GitHub issue comment), not a diff review. */
 export type PullRequestComment = {
     id: string;
+    /** Numeric REST id — required for reaction create/delete. */
+    databaseId: number;
     author: string;
     authorAvatarUrl: string | null;
     body: string;
     createdAt: string;
     url: string;
+    lastEditedAt: string | null;
+    editor: ContentEditor | null;
+    editCount: number;
+    edits: Array<ContentEdit>;
+    reactionGroups: Array<ReactionGroup>;
 };
 
 type TimelineActor = {
     login: string;
     avatarUrl: string | null;
+};
+
+/** Commit signing details from GitHub (`commit.signature`). */
+export type CommitSignature = {
+    verified: boolean;
+    /** GPG key id, SSH fingerprint, or null when the payload did not include one. */
+    keyId: string | null;
+    signerLogin: string | null;
+    signerName: string | null;
+    signerAvatarUrl: string | null;
 };
 
 /** One entry in the pull request conversation timeline (GitHub `timelineItems`). */
@@ -203,6 +299,10 @@ export type PullRequestTimelineItem =
           abbreviatedOid: string;
           url: string;
           checkState: CheckState;
+          /** Individual jobs behind `checkState` — empty when none, or when the token cannot read Checks. */
+          checkRuns: Array<CheckRun>;
+          /** Present when GitHub reported a signature; `verified` is true for a valid one. */
+          signature: CommitSignature | null;
       }
     | {
           kind: "assigned";
@@ -312,9 +412,13 @@ export type PullRequestTimelineItem =
 export type ReviewThread = {
     id: string;
     path: string;
+    /** First line of a multi-line comment range (GitHub `startLine`), when set. */
+    startLine: number | null;
     line: number | null;
     side: DiffSide | null;
     isResolved: boolean;
+    /** Unified diff snippet from the first review comment (GitHub `diffHunk`), when available. */
+    diffHunk: string | null;
     comments: Array<ReviewThreadComment>;
 };
 

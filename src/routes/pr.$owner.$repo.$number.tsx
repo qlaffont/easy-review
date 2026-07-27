@@ -2,6 +2,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { z } from "zod";
 
 import { PullRequestOverview } from "#/components/pr/pull-request-overview.tsx";
+import { pullRequestHead } from "#/lib/seo.ts";
 
 const searchSchema = z.object({
     path: z.string().optional(),
@@ -9,6 +10,12 @@ const searchSchema = z.object({
 
 export const Route = createFileRoute("/pr/$owner/$repo/$number")({
     validateSearch: searchSchema,
+    head: ({ params }) =>
+        pullRequestHead({
+            owner: params.owner,
+            repo: params.repo,
+            number: params.number,
+        }),
     component: PullRequestPage,
 });
 

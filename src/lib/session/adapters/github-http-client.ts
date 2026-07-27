@@ -2,14 +2,20 @@ import type { GithubClient, GithubViewer } from "#/lib/session/ports.ts";
 import type {
     CheckRun,
     CheckState,
+    CommitSignature,
+    ContentEdit,
+    ContentEditor,
     FileChangeStatus,
     MergeableState,
     MergeMethod,
     PullRequestComment,
+    PullRequestCommit,
     PullRequestDetail,
     PullRequestFile,
     PullRequestSummary,
     PullRequestTimelineItem,
+    ReactionContent,
+    ReactionGroup,
     Repository,
     RepositoryLabel,
     RepositoryUser,
@@ -20,6 +26,7 @@ import type {
     ReviewThreadComment,
 } from "#/lib/session/types.ts";
 
+import { applySuggestionsToFile, type SuggestionChange } from "#/lib/session/apply-suggestion.ts";
 import { buildFileDiff } from "#/lib/session/build-file-diff.ts";
 import { HUGE_FILE_BYTES, stubForPath } from "#/lib/session/diff-policy.ts";
 import { EasyReviewError } from "#/lib/session/errors.ts";
@@ -38,6 +45,8 @@ const FILES_PAGE_SIZE = 100;
 const FILES_PAGE_LIMIT = 20;
 const TIMELINE_PAGE_SIZE = 100;
 const TIMELINE_PAGE_LIMIT = 5;
+const COMMITS_PAGE_SIZE = 100;
+const COMMITS_PAGE_LIMIT = 5;
 
 type GraphqlResponse<TData> = {
     data?: TData;
@@ -397,7 +406,7 @@ export function createGithubHttpClient(fetchImpl: typeof fetch = globalThis.fetc
 
             // Binary path stubs never expand. Generated / huge-from-path can with force.
             if (pathStub === "binary" || (pathStub && !force)) {
-                return { path, lines: [], truncated: false, stub: pathStub };
+                return { path, lines: [], truncated: false, stub: pathStub, beforeText: null, afterText: null };
             }
 
             const [owner = "", name = ""] = repository.split("/");
@@ -422,7 +431,14 @@ export function createGithubHttpClient(fetchImpl: typeof fetch = globalThis.fetc
             ]);
 
             if (before?.stub || after?.stub) {
-                return { path, lines: [], truncated: false, stub: before?.stub ?? after?.stub ?? "huge" };
+                return {
+                    path,
+                    lines: [],
+                    truncated: false,
+                    stub: before?.stub ?? after?.stub ?? "huge",
+                    beforeText: null,
+                    afterText: null,
+                };
             }
 
             return buildFileDiff({ path, before: before?.bytes ?? null, after: after?.bytes ?? null }, { force });
@@ -492,13 +508,19 @@ export function createGithubHttpClient(fetchImpl: typeof fetch = globalThis.fetc
             let cursor: string | null = null;
 
             for (let page = 0; page < TIMELINE_PAGE_LIMIT; page++) {
-                const data: PullRequestTimelineQuery = await graphql(token, PULL_REQUEST_TIMELINE_QUERY, {
-                    owner,
-                    name,
-                    number,
-                    pageSize: TIMELINE_PAGE_SIZE,
-                    cursor,
-                });
+                // Same CheckRun FORBIDDEN caveat as getPullRequest — keep StatusContext rows.
+                const data: PullRequestTimelineQuery = await graphql(
+                    token,
+                    PULL_REQUEST_TIMELINE_QUERY,
+                    {
+                        owner,
+                        name,
+                        number,
+                        pageSize: TIMELINE_PAGE_SIZE,
+                        cursor,
+                    },
+                    { keepPartial: true },
+                );
                 const connection = data.repository?.pullRequest?.timelineItems;
                 if (!connection) {
                     throw new EasyReviewError(
@@ -522,6 +544,60 @@ export function createGithubHttpClient(fetchImpl: typeof fetch = globalThis.fetc
             }
 
             return items;
+        },
+
+        async listPullRequestCommits(token, repository, number) {
+            const [owner = "", name = ""] = repository.split("/");
+            const commits: Array<PullRequestCommit> = [];
+            let cursor: string | null = null;
+
+            for (let page = 0; page < COMMITS_PAGE_LIMIT; page++) {
+                const data: PullRequestCommitsQuery = await graphql(
+                    token,
+                    PULL_REQUEST_COMMITS_QUERY,
+                    {
+                        owner,
+                        name,
+                        number,
+                        pageSize: COMMITS_PAGE_SIZE,
+                        cursor,
+                    },
+                    { keepPartial: true },
+                );
+                const connection = data.repository?.pullRequest?.commits;
+                if (!connection) {
+                    throw new EasyReviewError(
+                        "not-found",
+                        `${repository}#${number} does not exist, or this token cannot see it.`,
+                    );
+                }
+
+                for (const node of connection.nodes) {
+                    const commit = node?.commit;
+                    if (!commit) {
+                        continue;
+                    }
+                    const authorUser = commit.author?.user;
+                    commits.push({
+                        oid: commit.oid,
+                        abbreviatedOid: commit.abbreviatedOid,
+                        messageHeadline: commit.messageHeadline,
+                        committedAt: commit.committedDate,
+                        authorLogin: authorUser?.login ?? commit.author?.name ?? "ghost",
+                        authorAvatarUrl: authorUser?.avatarUrl ?? null,
+                        url: commit.url,
+                        checkState: toCheckState(commit.statusCheckRollup?.state),
+                    });
+                }
+
+                if (!connection.pageInfo.hasNextPage || !connection.pageInfo.endCursor) {
+                    break;
+                }
+
+                cursor = connection.pageInfo.endCursor;
+            }
+
+            return commits;
         },
 
         async addPullRequestComment(token, repository, number, body) {
@@ -558,9 +634,69 @@ export function createGithubHttpClient(fetchImpl: typeof fetch = globalThis.fetc
             return toThreadComment(data.addPullRequestReviewThreadReply.comment);
         },
 
+        async setReviewThreadResolved(token, threadId, resolved) {
+            await graphql(token, resolved ? RESOLVE_THREAD_MUTATION : UNRESOLVE_THREAD_MUTATION, { threadId });
+        },
+
         async setPullRequestDraft(token, repository, number, isDraft) {
             const [owner = "", name = ""] = repository.split("/");
-            await restJson(token, "PATCH", `/repos/${owner}/${name}/pulls/${number}`, { draft: isDraft });
+            // REST PATCH `draft` is ignored by GitHub — ready/draft flips need GraphQL mutations.
+            const lookup = await graphql<{
+                repository: { pullRequest: { id: string; isDraft: boolean } | null } | null;
+            }>(
+                token,
+                `
+                    query EasyReviewPullRequestId($owner: String!, $name: String!, $number: Int!) {
+                        repository(owner: $owner, name: $name) {
+                            pullRequest(number: $number) {
+                                id
+                                isDraft
+                            }
+                        }
+                    }
+                `,
+                { owner, name, number },
+            );
+
+            const pullRequest = lookup.repository?.pullRequest;
+            if (!pullRequest) {
+                throw new EasyReviewError("not-found", "That pull request could not be found.");
+            }
+
+            if (pullRequest.isDraft === isDraft) {
+                return;
+            }
+
+            if (isDraft) {
+                await graphql(
+                    token,
+                    `
+                        mutation EasyReviewConvertToDraft($pullRequestId: ID!) {
+                            convertPullRequestToDraft(input: { pullRequestId: $pullRequestId }) {
+                                pullRequest {
+                                    isDraft
+                                }
+                            }
+                        }
+                    `,
+                    { pullRequestId: pullRequest.id },
+                );
+                return;
+            }
+
+            await graphql(
+                token,
+                `
+                    mutation EasyReviewMarkReadyForReview($pullRequestId: ID!) {
+                        markPullRequestReadyForReview(input: { pullRequestId: $pullRequestId }) {
+                            pullRequest {
+                                isDraft
+                            }
+                        }
+                    }
+                `,
+                { pullRequestId: pullRequest.id },
+            );
         },
 
         async setPullRequestLabels(token, repository, number, labels) {
@@ -625,6 +761,14 @@ export function createGithubHttpClient(fetchImpl: typeof fetch = globalThis.fetc
             }
         },
 
+        async dismissReview(token, repository, number, reviewId, message) {
+            const [owner = "", name = ""] = repository.split("/");
+            await restJson(token, "PUT", `/repos/${owner}/${name}/pulls/${number}/reviews/${reviewId}/dismissals`, {
+                message,
+                event: "DISMISS",
+            });
+        },
+
         async mergePullRequest(token, repository, number, method: MergeMethod) {
             const [owner = "", name = ""] = repository.split("/");
             await restJson(token, "PUT", `/repos/${owner}/${name}/pulls/${number}/merge`, {
@@ -636,9 +780,153 @@ export function createGithubHttpClient(fetchImpl: typeof fetch = globalThis.fetc
             const [owner = "", name = ""] = repository.split("/");
             await restJson(token, "PATCH", `/repos/${owner}/${name}/pulls/${number}`, { state: "closed" });
         },
+
+        async updatePullRequestBody(token, repository, number, body) {
+            const [owner = "", name = ""] = repository.split("/");
+            await restJson(token, "PATCH", `/repos/${owner}/${name}/pulls/${number}`, { body });
+        },
+
+        async applySuggestions(token, input) {
+            const [owner = "", name = ""] = input.repository.split("/");
+            if (input.changes.length === 0) {
+                throw new EasyReviewError("unknown", "No suggestions to apply.");
+            }
+
+            const byPath = new Map<string, Array<SuggestionChange>>();
+            for (const change of input.changes) {
+                const list = byPath.get(change.path) ?? [];
+                list.push(change);
+                byPath.set(change.path, list);
+            }
+
+            const commit = (await restJson(token, "GET", `/repos/${owner}/${name}/git/commits/${input.headSha}`)) as {
+                tree: { sha: string };
+            };
+            const baseTreeSha = commit.tree.sha;
+
+            const tree: Array<{ path: string; mode: "100644"; type: "blob"; sha: string }> = [];
+            for (const [path, changes] of byPath) {
+                const blob = await readBlob(token, owner, name, path, input.headSha, true);
+                if (!blob?.bytes) {
+                    throw new EasyReviewError("unknown", `Could not read ${path} on the head branch.`);
+                }
+                const text = new TextDecoder().decode(blob.bytes);
+                const next = applySuggestionsToFile(text, changes);
+                const created = (await restJson(token, "POST", `/repos/${owner}/${name}/git/blobs`, {
+                    content: next,
+                    encoding: "utf-8",
+                })) as { sha: string };
+                tree.push({ path, mode: "100644", type: "blob", sha: created.sha });
+            }
+
+            const newTree = (await restJson(token, "POST", `/repos/${owner}/${name}/git/trees`, {
+                base_tree: baseTreeSha,
+                tree,
+            })) as { sha: string };
+
+            const newCommit = (await restJson(token, "POST", `/repos/${owner}/${name}/git/commits`, {
+                message: input.message,
+                tree: newTree.sha,
+                parents: [input.headSha],
+            })) as { sha: string };
+
+            const ref = `heads/${input.headRefName}`;
+            await restJson(token, "PATCH", `/repos/${owner}/${name}/git/refs/${encodePath(ref)}`, {
+                sha: newCommit.sha,
+            });
+        },
+
+        async updatePullRequest(token, repository, number, input) {
+            const [owner = "", name = ""] = repository.split("/");
+            const body: Record<string, string> = {};
+            if (input.title !== undefined) {
+                body.title = input.title;
+            }
+            if (input.base !== undefined) {
+                body.base = input.base;
+            }
+            if (Object.keys(body).length === 0) {
+                return;
+            }
+            await restJson(token, "PATCH", `/repos/${owner}/${name}/pulls/${number}`, body);
+        },
+
+        async listRepositoryBranches(token, repository) {
+            const [owner = "", name = ""] = repository.split("/");
+            const names: Array<string> = [];
+            let page = 1;
+            while (page <= 5) {
+                const rows = (await restJson(
+                    token,
+                    "GET",
+                    `/repos/${owner}/${name}/branches?per_page=100&page=${page}`,
+                )) as Array<{ name: string }>;
+                for (const row of rows) {
+                    names.push(row.name);
+                }
+                if (rows.length < 100) {
+                    break;
+                }
+                page += 1;
+            }
+            return names;
+        },
+
+        async createIssueReaction(token, repository, number, content) {
+            const [owner = "", name = ""] = repository.split("/");
+            const created = (await restJson(token, "POST", `/repos/${owner}/${name}/issues/${number}/reactions`, {
+                content,
+            })) as { id: number };
+            return created.id;
+        },
+
+        async deleteIssueReaction(token, repository, number, reactionId) {
+            const [owner = "", name = ""] = repository.split("/");
+            await restJson(token, "DELETE", `/repos/${owner}/${name}/issues/${number}/reactions/${reactionId}`);
+        },
+
+        async findIssueReactionId(token, repository, number, content, viewerLogin) {
+            const [owner = "", name = ""] = repository.split("/");
+            const rows = (await restJson(
+                token,
+                "GET",
+                `/repos/${owner}/${name}/issues/${number}/reactions?content=${encodeURIComponent(content)}&per_page=100`,
+            )) as Array<{ id: number; user: { login: string } | null; content: string }>;
+            return rows.find((row) => row.user?.login === viewerLogin)?.id ?? null;
+        },
+
+        async createIssueCommentReaction(token, repository, commentId, content) {
+            const [owner = "", name = ""] = repository.split("/");
+            const created = (await restJson(
+                token,
+                "POST",
+                `/repos/${owner}/${name}/issues/comments/${commentId}/reactions`,
+                { content },
+            )) as { id: number };
+            return created.id;
+        },
+
+        async deleteIssueCommentReaction(token, repository, commentId, reactionId) {
+            const [owner = "", name = ""] = repository.split("/");
+            await restJson(
+                token,
+                "DELETE",
+                `/repos/${owner}/${name}/issues/comments/${commentId}/reactions/${reactionId}`,
+            );
+        },
+
+        async findIssueCommentReactionId(token, repository, commentId, content, viewerLogin) {
+            const [owner = "", name = ""] = repository.split("/");
+            const rows = (await restJson(
+                token,
+                "GET",
+                `/repos/${owner}/${name}/issues/comments/${commentId}/reactions?content=${encodeURIComponent(content)}&per_page=100`,
+            )) as Array<{ id: number; user: { login: string } | null; content: string }>;
+            return rows.find((row) => row.user?.login === viewerLogin)?.id ?? null;
+        },
     };
 
-    async function restJson(token: string, method: string, path: string, body: unknown): Promise<unknown> {
+    async function restJson(token: string, method: string, path: string, body?: unknown): Promise<unknown> {
         let response: Response;
 
         try {
@@ -647,9 +935,9 @@ export function createGithubHttpClient(fetchImpl: typeof fetch = globalThis.fetc
                 headers: {
                     authorization: `Bearer ${token}`,
                     accept: "application/vnd.github+json",
-                    "content-type": "application/json",
+                    ...(body === undefined ? {} : { "content-type": "application/json" }),
                 },
-                body: JSON.stringify(body),
+                body: body === undefined ? undefined : JSON.stringify(body),
             });
         } catch (cause) {
             throw new EasyReviewError("network", "Could not reach GitHub. Check your connection and try again.", {
@@ -813,11 +1101,14 @@ type PullRequestNode = {
     reviewDecision: "APPROVED" | "CHANGES_REQUESTED" | "REVIEW_REQUIRED" | null;
     author: { login: string; avatarUrl: string | null } | null;
     repository: { nameWithOwner: string };
-    comments: { totalCount: number };
+    /** Issue comments + review comments — matches GitHub’s Conversation tab badge. */
+    totalCommentsCount: number | null;
     reviewRequests: {
         nodes: Array<{ requestedReviewer: { login?: string; name?: string } | null }>;
     };
-    latestReviews: { nodes: Array<{ author: { login: string } | null; state: string }> };
+    latestReviews: {
+        nodes: Array<{ databaseId: number | null; author: { login: string } | null; state: string }>;
+    };
     commits: { nodes: Array<{ commit: { statusCheckRollup: { state: string } | null } }> };
 };
 
@@ -896,13 +1187,21 @@ function toPullRequestSummary(node: PullRequestNode): PullRequestSummary {
             return name ? [name] : [];
         }),
         reviewers: node.latestReviews.nodes.flatMap((review) =>
-            review.author ? [{ login: review.author.login, state: toReviewState(review.state) }] : [],
+            review.author && review.databaseId != null
+                ? [
+                      {
+                          login: review.author.login,
+                          state: toReviewState(review.state),
+                          reviewId: review.databaseId,
+                      },
+                  ]
+                : [],
         ),
         checks: toCheckState(node.commits.nodes[0]?.commit.statusCheckRollup?.state),
         additions: node.additions,
         deletions: node.deletions,
         changedFiles: node.changedFiles,
-        commentCount: node.comments.totalCount,
+        commentCount: node.totalCommentsCount ?? 0,
     };
 }
 
@@ -961,9 +1260,7 @@ const PULL_REQUEST_FIELDS = `
     repository {
         nameWithOwner
     }
-    comments {
-        totalCount
-    }
+    totalCommentsCount
     reviewRequests(first: 10) {
         nodes {
             requestedReviewer {
@@ -978,6 +1275,7 @@ const PULL_REQUEST_FIELDS = `
     }
     latestReviews(first: 20) {
         nodes {
+            databaseId
             author {
                 login
             }
@@ -1002,6 +1300,8 @@ type CheckContextNode =
           status: string;
           conclusion: string | null;
           detailsUrl: string | null;
+          startedAt: string | null;
+          completedAt: string | null;
       }
     | { __typename: "StatusContext"; context: string; state: string; targetUrl: string | null }
     | null;
@@ -1011,8 +1311,37 @@ type CheckContextNode =
  * room for. GraphQL merges the two `commits` selections, so the head SHA and the individual
  * check runs arrive alongside the rollup the row already used.
  */
+type ReactionGroupNode = {
+    content: string;
+    viewerHasReacted: boolean;
+    reactors: { totalCount: number };
+};
+
+type ContentEditorNode = {
+    __typename?: string;
+    login: string;
+    avatarUrl?: string | null;
+} | null;
+
+type ContentEditNode = {
+    /** Prefer this; fall back to `createdAt` on older schema responses. */
+    editedAt?: string | null;
+    createdAt?: string | null;
+    editor: ContentEditorNode;
+};
+
+type UserContentEditsNode = {
+    totalCount: number;
+    nodes: Array<ContentEditNode | null>;
+};
+
 type PullRequestDetailNode = Omit<PullRequestNode, "commits"> & {
     body: string;
+    lastEditedAt: string | null;
+    includesCreatedEdit: boolean;
+    editor: ContentEditorNode;
+    userContentEdits: UserContentEditsNode | null;
+    reactionGroups: Array<ReactionGroupNode>;
     baseRefOid: string;
     headRefOid: string;
     mergeable: "MERGEABLE" | "CONFLICTING" | "UNKNOWN";
@@ -1029,7 +1358,10 @@ type PullRequestDetailNode = Omit<PullRequestNode, "commits"> & {
         nodes: Array<{
             commit: {
                 oid: string;
-                statusCheckRollup: { state: string; contexts: { nodes: Array<CheckContextNode> } } | null;
+                statusCheckRollup: {
+                    state: string;
+                    contexts: { totalCount?: number; nodes: Array<CheckContextNode> };
+                } | null;
             };
         }>;
     };
@@ -1078,6 +1410,32 @@ const PULL_REQUEST_QUERY = `
             pullRequest(number: $number) {
                 ${PULL_REQUEST_FIELDS}
                 body
+                lastEditedAt
+                includesCreatedEdit
+                editor {
+                    __typename
+                    login
+                    avatarUrl
+                }
+                userContentEdits(last: 20) {
+                    totalCount
+                    nodes {
+                        editedAt
+                        createdAt
+                        editor {
+                            __typename
+                            login
+                            avatarUrl
+                        }
+                    }
+                }
+                reactionGroups {
+                    content
+                    viewerHasReacted
+                    reactors {
+                        totalCount
+                    }
+                }
                 baseRefOid
                 headRefOid
                 mergeable
@@ -1105,6 +1463,7 @@ const PULL_REQUEST_QUERY = `
                             oid
                             statusCheckRollup {
                                 contexts(first: 50) {
+                                    totalCount
                                     nodes {
                                         __typename
                                         ... on CheckRun {
@@ -1112,6 +1471,8 @@ const PULL_REQUEST_QUERY = `
                                             status
                                             conclusion
                                             detailsUrl
+                                            startedAt
+                                            completedAt
                                         }
                                         ... on StatusContext {
                                             context
@@ -1176,6 +1537,70 @@ const TIMELINE_ITEM_TYPES = [
     "BASE_REF_CHANGED_EVENT",
 ] as const;
 
+type PullRequestCommitsQuery = {
+    repository: {
+        pullRequest: {
+            commits: {
+                nodes: Array<{
+                    commit: {
+                        oid: string;
+                        abbreviatedOid: string;
+                        messageHeadline: string;
+                        committedDate: string;
+                        url: string;
+                        author: {
+                            name: string | null;
+                            user: { login: string; avatarUrl: string | null } | null;
+                        } | null;
+                        statusCheckRollup: { state: string } | null;
+                    };
+                } | null>;
+                pageInfo: { hasNextPage: boolean; endCursor: string | null };
+            } | null;
+        } | null;
+    } | null;
+};
+
+const PULL_REQUEST_COMMITS_QUERY = `
+    query EasyReviewPullRequestCommits(
+        $owner: String!
+        $name: String!
+        $number: Int!
+        $pageSize: Int!
+        $cursor: String
+    ) {
+        repository(owner: $owner, name: $name) {
+            pullRequest(number: $number) {
+                commits(first: $pageSize, after: $cursor) {
+                    nodes {
+                        commit {
+                            oid
+                            abbreviatedOid
+                            messageHeadline
+                            committedDate
+                            url
+                            author {
+                                name
+                                user {
+                                    login
+                                    avatarUrl
+                                }
+                            }
+                            statusCheckRollup {
+                                state
+                            }
+                        }
+                    }
+                    pageInfo {
+                        hasNextPage
+                        endCursor
+                    }
+                }
+            }
+        }
+    }
+`;
+
 const PULL_REQUEST_TIMELINE_QUERY = `
     query EasyReviewPullRequestTimeline(
         $owner: String!
@@ -1199,12 +1624,39 @@ const PULL_REQUEST_TIMELINE_QUERY = `
                         __typename
                         ... on IssueComment {
                             id
+                            databaseId
                             body
                             createdAt
                             url
+                            lastEditedAt
+                            includesCreatedEdit
                             author {
                                 login
                                 avatarUrl
+                            }
+                            editor {
+                                __typename
+                                login
+                                avatarUrl
+                            }
+                            userContentEdits(last: 20) {
+                                totalCount
+                                nodes {
+                                    editedAt
+                                    createdAt
+                                    editor {
+                                        __typename
+                                        login
+                                        avatarUrl
+                                    }
+                                }
+                            }
+                            reactionGroups {
+                                content
+                                viewerHasReacted
+                                reactors {
+                                    totalCount
+                                }
                             }
                         }
                         ... on PullRequestCommit {
@@ -1222,8 +1674,42 @@ const PULL_REQUEST_TIMELINE_QUERY = `
                                     }
                                     name
                                 }
+                                signature {
+                                    __typename
+                                    isValid
+                                    email
+                                    signer {
+                                        login
+                                        name
+                                        avatarUrl
+                                    }
+                                    ... on GpgSignature {
+                                        keyId
+                                    }
+                                    ... on SshSignature {
+                                        keyFingerprint
+                                    }
+                                }
                                 statusCheckRollup {
                                     state
+                                    contexts(first: 50) {
+                                        nodes {
+                                            __typename
+                                            ... on CheckRun {
+                                                name
+                                                status
+                                                conclusion
+                                                detailsUrl
+                                                startedAt
+                                                completedAt
+                                            }
+                                            ... on StatusContext {
+                                                context
+                                                state
+                                                targetUrl
+                                            }
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -1401,10 +1887,16 @@ type TimelineNode =
     | {
           __typename: "IssueComment";
           id: string;
+          databaseId: number | null;
           body: string;
           createdAt: string;
           url: string;
+          lastEditedAt: string | null;
+          includesCreatedEdit: boolean;
           author: TimelineActorNode;
+          editor: ContentEditorNode;
+          userContentEdits: UserContentEditsNode | null;
+          reactionGroups: Array<ReactionGroupNode>;
       }
     | {
           __typename: "PullRequestCommit";
@@ -1416,7 +1908,18 @@ type TimelineNode =
               committedDate: string;
               url: string;
               author: { user: TimelineActorNode; name: string | null } | null;
-              statusCheckRollup: { state: string } | null;
+              signature: {
+                  __typename: string;
+                  isValid: boolean;
+                  email: string | null;
+                  signer: { login: string; name: string | null; avatarUrl: string | null } | null;
+                  keyId?: string | null;
+                  keyFingerprint?: string | null;
+              } | null;
+              statusCheckRollup: {
+                  state: string;
+                  contexts: { nodes: Array<CheckContextNode> } | null;
+              } | null;
           };
       }
     | {
@@ -1501,22 +2004,59 @@ function toTimelineReviewer(reviewer: { login?: string; name?: string } | null):
     return reviewer?.login ?? reviewer?.name ?? "someone";
 }
 
+function toCommitSignature(
+    signature: {
+        isValid: boolean;
+        signer: { login: string; name: string | null; avatarUrl: string | null } | null;
+        keyId?: string | null;
+        keyFingerprint?: string | null;
+    } | null,
+): CommitSignature | null {
+    if (!signature) {
+        return null;
+    }
+
+    return {
+        verified: signature.isValid,
+        keyId: signature.keyId ?? signature.keyFingerprint ?? null,
+        signerLogin: signature.signer?.login ?? null,
+        signerName: signature.signer?.name ?? null,
+        signerAvatarUrl: signature.signer?.avatarUrl ?? null,
+    };
+}
+
 function toTimelineItem(node: TimelineNode): PullRequestTimelineItem | null {
     if (!node) {
         return null;
     }
 
     switch (node.__typename) {
-        case "IssueComment":
+        case "IssueComment": {
+            if (node.databaseId == null) {
+                return null;
+            }
+            const { editCount, edits } = toContentEdits(node.userContentEdits, {
+                includesCreatedEdit: node.includesCreatedEdit,
+                createdAt: node.createdAt,
+                fallback:
+                    node.lastEditedAt && node.editor ? { editedAt: node.lastEditedAt, editor: node.editor } : null,
+            });
             return {
                 kind: "comment",
                 id: node.id,
+                databaseId: node.databaseId,
                 author: node.author?.login ?? "ghost",
                 authorAvatarUrl: node.author?.avatarUrl ?? null,
                 body: node.body,
                 createdAt: node.createdAt,
                 url: node.url,
+                lastEditedAt: node.lastEditedAt ?? null,
+                editor: toContentEditor(node.editor),
+                editCount,
+                edits,
+                reactionGroups: toReactionGroups(node.reactionGroups),
             };
+        }
         case "PullRequestCommit": {
             const commit = node.commit;
             const authorUser = commit.author?.user;
@@ -1533,6 +2073,10 @@ function toTimelineItem(node: TimelineNode): PullRequestTimelineItem | null {
                 abbreviatedOid: commit.abbreviatedOid,
                 url: commit.url,
                 checkState: toCheckState(commit.statusCheckRollup?.state),
+                checkRuns: (commit.statusCheckRollup?.contexts?.nodes ?? [])
+                    .filter((context): context is NonNullable<CheckContextNode> => context !== null)
+                    .map(toCheckRun),
+                signature: toCommitSignature(commit.signature),
             };
         }
         case "AssignedEvent":
@@ -1715,16 +2259,93 @@ function toCheckRunState(status: string, conclusion: string | null): CheckState 
     }
 }
 
+/**
+ * GitHub’s Checks-tab badge counts CheckRuns only (not legacy StatusContexts like CodeRabbit).
+ * Fine-grained PATs null out CheckRun context slots while leaving StatusContext rows — count
+ * those nulls as redacted CheckRuns so the badge still matches GitHub.
+ */
+function toCheckCount(
+    commit:
+        | {
+              statusCheckRollup: { contexts: { nodes: Array<CheckContextNode> } } | null;
+          }
+        | undefined,
+): number {
+    const nodes = commit?.statusCheckRollup?.contexts.nodes ?? [];
+    let checkRuns = 0;
+    let redacted = 0;
+    for (const context of nodes) {
+        if (context === null) {
+            redacted += 1;
+        } else if (context.__typename === "CheckRun") {
+            checkRuns += 1;
+        }
+    }
+    return checkRuns + redacted;
+}
+
 function toCheckRun(context: NonNullable<CheckContextNode>): CheckRun {
     if (context.__typename === "CheckRun") {
+        const state = toCheckRunState(context.status, context.conclusion);
         return {
             name: context.name,
-            state: toCheckRunState(context.status, context.conclusion),
+            state,
             url: context.detailsUrl,
+            summary: checkRunSummary(state, context.startedAt, context.completedAt),
         };
     }
 
-    return { name: context.context, state: toCheckState(context.state), url: context.targetUrl };
+    return {
+        name: context.context,
+        state: toCheckState(context.state),
+        url: context.targetUrl,
+        summary: null,
+    };
+}
+
+function checkRunSummary(state: CheckState, startedAt: string | null, completedAt: string | null): string | null {
+    const duration = formatCheckDuration(startedAt, completedAt);
+
+    if (state === "failure") {
+        return duration ? `Failing after ${duration}` : "Failing";
+    }
+
+    if (state === "success") {
+        return duration ? `Successful in ${duration}` : "Successful";
+    }
+
+    if (state === "pending") {
+        return duration ? `Running for ${duration}` : "Pending";
+    }
+
+    return null;
+}
+
+function formatCheckDuration(startedAt: string | null, completedAt: string | null): string | null {
+    if (!startedAt) {
+        return null;
+    }
+
+    const start = Date.parse(startedAt);
+    const end = completedAt ? Date.parse(completedAt) : Date.now();
+    if (!Number.isFinite(start) || !Number.isFinite(end) || end < start) {
+        return null;
+    }
+
+    const seconds = Math.round((end - start) / 1000);
+    if (seconds < 60) {
+        return `${Math.max(seconds, 1)}s`;
+    }
+
+    const minutes = Math.floor(seconds / 60);
+    const remainder = seconds % 60;
+    if (minutes < 60) {
+        return remainder === 0 ? `${minutes}m` : `${minutes}m ${remainder}s`;
+    }
+
+    const hours = Math.floor(minutes / 60);
+    const remMinutes = minutes % 60;
+    return remMinutes === 0 ? `${hours}h` : `${hours}h ${remMinutes}m`;
 }
 
 function toMergeableState(mergeable: PullRequestDetailNode["mergeable"]): MergeableState {
@@ -1779,13 +2400,125 @@ function toDefaultMergeMethod(settings: RepositoryMergeSettings, allowed: Array<
     return allowed[0] ?? null;
 }
 
+function toReactionContent(content: string): ReactionContent | null {
+    switch (content) {
+        case "THUMBS_UP":
+        case "+1":
+            return "+1";
+        case "THUMBS_DOWN":
+        case "-1":
+            return "-1";
+        case "LAUGH":
+        case "laugh":
+            return "laugh";
+        case "HOORAY":
+        case "hooray":
+            return "hooray";
+        case "CONFUSED":
+        case "confused":
+            return "confused";
+        case "HEART":
+        case "heart":
+            return "heart";
+        case "ROCKET":
+        case "rocket":
+            return "rocket";
+        case "EYES":
+        case "eyes":
+            return "eyes";
+        default:
+            return null;
+    }
+}
+
+function toReactionGroups(nodes: Array<ReactionGroupNode> | null | undefined): Array<ReactionGroup> {
+    const groups: Array<ReactionGroup> = [];
+    for (const node of nodes ?? []) {
+        const content = toReactionContent(node.content);
+        if (!content || node.reactors.totalCount === 0) {
+            continue;
+        }
+        groups.push({
+            content,
+            count: node.reactors.totalCount,
+            viewerHasReacted: node.viewerHasReacted,
+        });
+    }
+    return groups;
+}
+
+function toContentEditor(node: ContentEditorNode): ContentEditor | null {
+    if (!node?.login) {
+        return null;
+    }
+    return {
+        login: node.login,
+        avatarUrl: node.avatarUrl ?? null,
+        isBot: node.__typename === "Bot" || /\[bot\]$/i.test(node.login),
+    };
+}
+
+function toContentEdits(
+    edits: UserContentEditsNode | null | undefined,
+    options: {
+        includesCreatedEdit?: boolean;
+        createdAt?: string;
+        fallback?: { editedAt: string; editor: ContentEditorNode } | null;
+    } = {},
+): {
+    editCount: number;
+    edits: Array<ContentEdit>;
+} {
+    const nodes = (edits?.nodes ?? []).filter((node): node is ContentEditNode => node != null);
+    let mapped = nodes.flatMap((node) => {
+        const editedAt = node.editedAt ?? node.createdAt;
+        if (!editedAt) {
+            return [];
+        }
+        return [{ editedAt, editor: toContentEditor(node.editor) }];
+    });
+
+    // GitHub often embeds the original “created” row in this connection — the popover shows that
+    // separately, so drop it when GitHub says it is present.
+    if (options.includesCreatedEdit && options.createdAt) {
+        mapped = mapped.filter((edit) => edit.editedAt !== options.createdAt);
+    }
+
+    mapped = [...mapped].sort((a, b) => b.editedAt.localeCompare(a.editedAt));
+
+    if (mapped.length === 0 && options.fallback?.editedAt) {
+        mapped = [
+            {
+                editedAt: options.fallback.editedAt,
+                editor: toContentEditor(options.fallback.editor),
+            },
+        ];
+    }
+
+    const total = edits?.totalCount ?? mapped.length;
+    const withoutCreated = options.includesCreatedEdit && total > 0 ? Math.max(0, total - 1) : total;
+    const editCount = mapped.length > 0 ? mapped.length : withoutCreated;
+
+    return { editCount, edits: mapped };
+}
+
 function toPullRequestDetail(node: PullRequestDetailNode, settings: RepositoryMergeSettings): PullRequestDetail {
     const commit = node.commits.nodes[0]?.commit;
     const allowedMergeMethods = toAllowedMergeMethods(settings);
+    const { editCount, edits } = toContentEdits(node.userContentEdits, {
+        includesCreatedEdit: node.includesCreatedEdit,
+        createdAt: node.createdAt,
+        fallback: node.lastEditedAt && node.editor ? { editedAt: node.lastEditedAt, editor: node.editor } : null,
+    });
 
     return {
         ...toPullRequestSummary(node),
         body: node.body,
+        lastEditedAt: node.lastEditedAt ?? null,
+        editor: toContentEditor(node.editor),
+        editCount,
+        edits,
+        reactionGroups: toReactionGroups(node.reactionGroups),
         headSha: node.headRefOid || commit?.oid || "",
         baseSha: node.baseRefOid,
         labels: node.labels?.nodes ?? [],
@@ -1793,6 +2526,7 @@ function toPullRequestDetail(node: PullRequestDetailNode, settings: RepositoryMe
         checkRuns: (commit?.statusCheckRollup?.contexts.nodes ?? [])
             .filter((context): context is NonNullable<CheckContextNode> => context !== null)
             .map(toCheckRun),
+        checkCount: toCheckCount(commit),
         mergeable: toMergeableState(node.mergeable),
         requiredApprovingReviewCount: toRequiredApprovingReviewCount(node),
         allowedMergeMethods,
@@ -1841,11 +2575,17 @@ type RestIssueCommentNode = {
 function toPullRequestComment(node: RestIssueCommentNode): PullRequestComment {
     return {
         id: node.node_id || String(node.id),
+        databaseId: node.id,
         author: node.user?.login ?? "ghost",
         authorAvatarUrl: node.user?.avatar_url ?? null,
         body: node.body,
         createdAt: node.created_at,
         url: node.html_url,
+        lastEditedAt: null,
+        editor: null,
+        editCount: 0,
+        edits: [],
+        reactionGroups: [],
     };
 }
 
@@ -1866,15 +2606,18 @@ function nextRestPath(linkHeader: string | null): string | null {
 
 type ReviewThreadCommentNode = {
     id: string;
+    url: string;
     body: string;
     createdAt: string;
-    author: { login: string } | null;
+    diffHunk?: string | null;
+    author: { login: string; avatarUrl: string | null } | null;
 };
 
 type ReviewThreadNode = {
     id: string;
     isResolved: boolean;
     path: string;
+    startLine: number | null;
     line: number | null;
     diffSide: "LEFT" | "RIGHT" | null;
     comments: { nodes: Array<ReviewThreadCommentNode> };
@@ -1900,15 +2643,19 @@ const REVIEW_THREADS_QUERY = `
                         id
                         isResolved
                         path
+                        startLine
                         line
                         diffSide
                         comments(first: 50) {
                             nodes {
                                 id
+                                url
                                 body
                                 createdAt
+                                diffHunk
                                 author {
                                     login
+                                    avatarUrl
                                 }
                             }
                         }
@@ -1928,11 +2675,35 @@ const REPLY_TO_THREAD_MUTATION = `
         addPullRequestReviewThreadReply(input: { pullRequestReviewThreadId: $threadId, body: $body }) {
             comment {
                 id
+                url
                 body
                 createdAt
                 author {
                     login
+                    avatarUrl
                 }
+            }
+        }
+    }
+`;
+
+const RESOLVE_THREAD_MUTATION = `
+    mutation EasyReviewResolveThread($threadId: ID!) {
+        resolveReviewThread(input: { threadId: $threadId }) {
+            thread {
+                id
+                isResolved
+            }
+        }
+    }
+`;
+
+const UNRESOLVE_THREAD_MUTATION = `
+    mutation EasyReviewUnresolveThread($threadId: ID!) {
+        unresolveReviewThread(input: { threadId: $threadId }) {
+            thread {
+                id
+                isResolved
             }
         }
     }
@@ -1953,18 +2724,23 @@ function toThreadComment(node: ReviewThreadCommentNode): ReviewThreadComment {
     return {
         id: node.id,
         author: node.author?.login ?? "ghost",
+        authorAvatarUrl: node.author?.avatarUrl ?? null,
         body: node.body,
         createdAt: node.createdAt,
+        url: node.url,
     };
 }
 
 function toReviewThread(node: ReviewThreadNode): ReviewThread {
+    const comments = node.comments.nodes;
     return {
         id: node.id,
         path: node.path,
+        startLine: node.startLine,
         line: node.line,
         side: node.diffSide,
         isResolved: node.isResolved,
-        comments: node.comments.nodes.map(toThreadComment),
+        diffHunk: comments[0]?.diffHunk ?? null,
+        comments: comments.map(toThreadComment),
     };
 }

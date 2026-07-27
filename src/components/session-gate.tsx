@@ -1,3 +1,4 @@
+import { useRouterState } from "@tanstack/react-router";
 import { useState } from "react";
 
 import { ActionsProvider } from "#/components/actions/actions-provider.tsx";
@@ -5,15 +6,15 @@ import { AppHeader } from "#/components/app-header.tsx";
 import { ConnectTokenScreen } from "#/components/auth/connect-token-screen.tsx";
 import { CommandPalette } from "#/components/command-palette.tsx";
 import { RepoPickerProvider } from "#/components/repos/repo-picker.tsx";
+import { BootLoadingScreen } from "#/components/ui/loading.tsx";
 import { useSessionState } from "#/lib/session/provider.tsx";
 
-const bootScreen = (
-    <div className="grid min-h-svh place-items-center text-sm text-muted-foreground">Loading Easy Review…</div>
-);
+const bootScreen = <BootLoadingScreen />;
 
 /** Decides between the boot state, the token screen and the signed-in app shell. */
 export function SessionGate({ children }: { children: React.ReactNode }) {
     const auth = useSessionState((state) => state.auth);
+    const isInbox = useRouterState({ select: (state) => state.location.pathname === "/" });
     const [replacingToken, setReplacingToken] = useState(false);
 
     if (auth.status === "restoring") {
@@ -32,7 +33,7 @@ export function SessionGate({ children }: { children: React.ReactNode }) {
         <RepoPickerProvider>
             <ActionsProvider>
                 <div className="flex min-h-svh flex-col">
-                    <AppHeader onReplaceToken={() => setReplacingToken(true)} />
+                    {isInbox ? <AppHeader onReplaceToken={() => setReplacingToken(true)} /> : null}
                     <main className="flex-1">{children}</main>
                 </div>
                 <CommandPalette />

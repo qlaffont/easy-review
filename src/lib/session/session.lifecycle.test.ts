@@ -75,6 +75,26 @@ describe("pull request lifecycle", () => {
         expect(session.getPullRequestPage("acme/api", 1).detail?.reviewRequests).toContain("mona");
     });
 
+    it("dismisses a review by id", async () => {
+        github.addPullRequest(TOKEN, {
+            repository: "acme/api",
+            number: 2,
+            author: "octocat",
+            reviewers: [{ login: "hubot", state: "approved", reviewId: 42 }],
+        });
+        const session = createEasyReviewSession({ github, store });
+        await session.connect(TOKEN);
+        await session.setSelectedRepositories(["acme/api"]);
+        await session.loadPullRequest("acme/api", 2);
+
+        await session.dismissReview("acme/api", 2, 42);
+
+        expect(github.calls).toContain("dismissReview");
+        expect(session.getPullRequestPage("acme/api", 2).detail?.reviewers).toEqual([
+            { login: "hubot", state: "dismissed", reviewId: 42 },
+        ]);
+    });
+
     it("merges an open pull request and reflects merged state in the inbox", async () => {
         const session = await connectedWithPr();
         await session.setPullRequestDraft("acme/api", 1, false);

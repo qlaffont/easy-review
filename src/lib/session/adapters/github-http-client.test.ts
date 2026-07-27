@@ -27,7 +27,7 @@ function pullRequestNode(repository: string, number: number) {
         reviewDecision: null,
         author: { login: "octocat", avatarUrl: null },
         repository: { nameWithOwner: repository },
-        comments: { totalCount: 0 },
+        totalCommentsCount: 0,
         reviewRequests: { nodes: [] },
         latestReviews: { nodes: [] },
         commits: { nodes: [] },
@@ -61,10 +61,11 @@ describe("getPullRequest", () => {
                             reviewDecision: "REVIEW_REQUIRED",
                             author: { login: "qlaffont", avatarUrl: null },
                             repository: { nameWithOwner: "latomate/medical-web" },
-                            comments: { totalCount: 0 },
+                            totalCommentsCount: 7,
                             reviewRequests: { nodes: [] },
                             latestReviews: { nodes: [] },
                             body: "",
+                            reactionGroups: [],
                             baseRefOid: "base",
                             headRefOid: "head",
                             mergeable: "CONFLICTING",
@@ -85,7 +86,12 @@ describe("getPullRequest", () => {
                                             statusCheckRollup: {
                                                 state: "FAILURE",
                                                 contexts: {
+                                                    totalCount: 7,
                                                     nodes: [
+                                                        null,
+                                                        null,
+                                                        null,
+                                                        null,
                                                         null,
                                                         null,
                                                         {
@@ -117,11 +123,14 @@ describe("getPullRequest", () => {
 
         expect(detail.title).toBe("Ship checks");
         expect(detail.checks).toBe("failure");
-        expect(detail.checkRuns).toEqual([{ name: "CodeRabbit", state: "success", url: null }]);
+        expect(detail.checkRuns).toEqual([{ name: "CodeRabbit", state: "success", url: null, summary: null }]);
+        // Suite totals, not readable StatusContext-only nodes (fine-grained PATs strip CheckRuns).
+        expect(detail.checkCount).toBe(6);
         expect(detail.requiredApprovingReviewCount).toBe(2);
         expect(detail.allowedMergeMethods).toEqual(["merge", "squash"]);
         expect(detail.defaultMergeMethod).toBe("squash");
         expect(detail.commitCount).toBe(3);
+        expect(detail.commentCount).toBe(7);
     });
 
     it("reads required approving reviews from branch rulesets when classic protection is absent", async () => {

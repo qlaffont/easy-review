@@ -11,13 +11,14 @@ import {
     DropdownMenuTrigger,
 } from "#/components/ui/dropdown-menu.tsx";
 import { useSession, useSessionState } from "#/lib/session/provider.tsx";
+import { notifySuccess } from "#/lib/toast.ts";
 
 export function AppHeader({ onReplaceToken }: { onReplaceToken: () => void }) {
     const session = useSession();
     const viewer = useSessionState((state) => state.auth.viewer);
 
     return (
-        <header className="sticky top-0 z-30 flex h-12 items-center justify-between gap-4 border-b bg-background/95 px-4 backdrop-blur">
+        <header className="flex h-12 items-center justify-between gap-4 border-b bg-background px-4">
             <div className="flex items-center gap-3">
                 <span className="text-sm font-semibold tracking-tight">Easy Review</span>
                 <RepoPickerTrigger />
@@ -45,7 +46,12 @@ export function AppHeader({ onReplaceToken }: { onReplaceToken: () => void }) {
                         <KeyRound aria-hidden="true" />
                         Replace token…
                     </DropdownMenuItem>
-                    <DropdownMenuItem variant="destructive" onSelect={() => void session.disconnect()}>
+                    <DropdownMenuItem
+                        variant="destructive"
+                        onSelect={() => {
+                            void session.disconnect().then(() => notifySuccess("Disconnected — token cleared"));
+                        }}
+                    >
                         <LogOut aria-hidden="true" />
                         Disconnect and clear token
                     </DropdownMenuItem>

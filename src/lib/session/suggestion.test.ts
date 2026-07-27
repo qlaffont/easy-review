@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { buildSuggestionComment } from "#/lib/session/suggestion.ts";
+import { buildSuggestionComment, hasSuggestionFence, stripSuggestionFence } from "#/lib/session/suggestion.ts";
 
 describe("buildSuggestionComment", () => {
     it("wraps the replacement in a GitHub suggestion fence", () => {
@@ -15,5 +15,13 @@ describe("buildSuggestionComment", () => {
 
     it("strips a trailing newline from the suggested code", () => {
         expect(buildSuggestionComment("", "a\n")).toBe("```suggestion\na\n```");
+    });
+});
+
+describe("suggestion fence helpers", () => {
+    it("detects and removes a suggestion fence", () => {
+        const body = "Note.\n\n```suggestion\nreturn true;\n```";
+        expect(hasSuggestionFence(body)).toBe(true);
+        expect(stripSuggestionFence(body)).toBe("Note.");
     });
 });

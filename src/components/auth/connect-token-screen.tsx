@@ -6,7 +6,9 @@ import { Alert, AlertDescription, AlertTitle } from "#/components/ui/alert.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import { Input } from "#/components/ui/input.tsx";
 import { Label } from "#/components/ui/label.tsx";
+import { usePageSeo } from "#/lib/seo.ts";
 import { useSession, useSessionState } from "#/lib/session/provider.tsx";
+import { notifyError, notifySuccess } from "#/lib/toast.ts";
 
 const NEW_TOKEN_URL = "https://github.com/settings/personal-access-tokens/new";
 
@@ -26,6 +28,13 @@ export function ConnectTokenScreen({ onClose }: { onClose?: () => void }) {
     const [token, setToken] = useState("");
     const isReplacing = onClose !== undefined;
 
+    usePageSeo({
+        title: isReplacing ? "Replace token" : "Connect",
+        description: isReplacing
+            ? "Replace your GitHub personal access token in Easy Review."
+            : "Connect a GitHub personal access token to start reviewing pull requests in Easy Review.",
+    });
+
     function handleCancel() {
         session.cancelConnect();
         onClose?.();
@@ -36,7 +45,14 @@ export function ConnectTokenScreen({ onClose }: { onClose?: () => void }) {
         void session.connect(token).then(() => {
             if (session.state.state.auth.status === "authenticated") {
                 setToken("");
+                notifySuccess("Connected to GitHub");
                 onClose?.();
+                return;
+            }
+
+            const message = session.state.state.auth.error?.message;
+            if (message) {
+                notifyError(message);
             }
         });
     }

@@ -31,8 +31,8 @@ const SHAPES: Array<Shape> = [
     { author: DEV_LOGIN, reviewDecision: "review-required" },
     { author: DEV_LOGIN, isDraft: true },
     { state: "merged" },
-    { reviewers: [{ login: DEV_LOGIN, state: "approved" }] },
-    { reviewers: [{ login: DEV_LOGIN, state: "changes-requested" }] },
+    { reviewers: [{ login: DEV_LOGIN, state: "approved", reviewId: 101 }] },
+    { reviewers: [{ login: DEV_LOGIN, state: "changes-requested", reviewId: 102 }] },
     {},
 ];
 
@@ -50,12 +50,24 @@ function checkRuns(rollup: CheckState): Array<CheckRun> {
         return [];
     }
 
-    return faker.helpers.arrayElements(CHECK_NAMES, { min: 2, max: 5 }).map((name, index) => ({
-        name,
-        // The rollup is whatever the worst run said, so make the first run tell that story.
-        state: index === 0 ? rollup : faker.helpers.arrayElement<CheckState>(["success", "success", "pending"]),
-        url: `https://ci.example.com/${name.replace(/\s+/g, "-")}`,
-    }));
+    return faker.helpers.arrayElements(CHECK_NAMES, { min: 2, max: 5 }).map((name, index) => {
+        const state = index === 0 ? rollup : faker.helpers.arrayElement<CheckState>(["success", "success", "pending"]);
+        const seconds = faker.number.int({ min: 4, max: 180 });
+        const duration = seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m`;
+
+        return {
+            name,
+            // The rollup is whatever the worst run said, so make the first run tell that story.
+            state,
+            url: `https://ci.example.com/${name.replace(/\s+/g, "-")}`,
+            summary:
+                state === "failure"
+                    ? `Failing after ${duration}`
+                    : state === "success"
+                      ? `Successful in ${duration}`
+                      : `Running for ${duration}`,
+        };
+    });
 }
 
 function body(): string {
@@ -115,7 +127,11 @@ export function createSeededGithub(): GithubClient {
             changedFiles: faker.number.int({ min: 1, max: 30 }),
             commentCount: faker.number.int({ min: 0, max: 12 }),
             reviewers: [
-                { login: faker.internet.username().toLowerCase(), state: faker.helpers.arrayElement(REVIEW_STATES) },
+                {
+                    login: faker.internet.username().toLowerCase(),
+                    state: faker.helpers.arrayElement(REVIEW_STATES),
+                    reviewId: number * 10 + 1,
+                },
             ],
             body: number % 7 === 0 ? "" : body(),
             headSha: faker.git.commitSha(),
@@ -146,6 +162,17 @@ export function createSeededGithub(): GithubClient {
             abbreviatedOid: faker.string.hexadecimal({ length: 7, prefix: "" }).toLowerCase(),
             url: `https://github.com/${repository}/commit/${faker.git.commitSha()}`,
             checkState: checks,
+            checkRuns: checkRuns(checks),
+            signature:
+                number % 3 === 0
+                    ? {
+                          verified: true,
+                          keyId: faker.string.hexadecimal({ length: 16, prefix: "" }).toUpperCase(),
+                          signerLogin: authorLogin,
+                          signerName: faker.person.fullName(),
+                          signerAvatarUrl: null,
+                      }
+                    : null,
         });
         if (number % 2 === 0) {
             github.addTimelineItem(DEV_TOKEN, repository, number, {
@@ -172,15 +199,19 @@ export function createSeededGithub(): GithubClient {
             github.addReviewThread(DEV_TOKEN, repository, number, {
                 id: `thread-${repository}-${number}`,
                 path: "src/index.ts",
+                startLine: null,
                 line: 2,
                 side: "RIGHT",
                 isResolved: false,
+                diffHunk: "@@ -1,3 +1,3 @@\n export function answer() {\n-  return 1;\n+  return 2;\n }",
                 comments: [
                     {
                         id: `comment-${repository}-${number}-1`,
                         author: faker.internet.username().toLowerCase(),
+                        authorAvatarUrl: `https://avatars.githubusercontent.com/u/${faker.number.int({ min: 1, max: 99_999 })}?v=4`,
                         body: "Is returning 2 intentional, or should this stay at 1 until the flag ships?",
                         createdAt: faker.date.recent({ days: 3 }).toISOString(),
+                        url: `https://github.com/${repository}/pull/${number}#discussion_r${number}`,
                     },
                 ],
             });
@@ -189,11 +220,17 @@ export function createSeededGithub(): GithubClient {
         if (number % 3 === 0) {
             github.addConversationComment(DEV_TOKEN, repository, number, {
                 id: `issue-comment-${repository}-${number}`,
+                databaseId: number * 1000 + 1,
                 author: faker.internet.username().toLowerCase(),
                 authorAvatarUrl: null,
                 body: faker.lorem.paragraph(),
                 createdAt: faker.date.recent({ days: 5 }).toISOString(),
                 url: `https://github.com/${repository}/pull/${number}#issuecomment-${number}`,
+                lastEditedAt: null,
+                editor: null,
+                editCount: 0,
+                edits: [],
+                reactionGroups: [],
             });
         }
     }

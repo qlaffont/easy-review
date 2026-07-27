@@ -23,6 +23,7 @@ import {
     DropdownMenuTrigger,
 } from "#/components/ui/dropdown-menu.tsx";
 import { useSession } from "#/lib/session/provider.tsx";
+import { notifyAction } from "#/lib/toast.ts";
 import { cn } from "#/lib/utils.ts";
 
 const MERGE_METHOD_ORDER: Array<MergeMethod> = ["merge", "squash", "rebase"];
@@ -65,12 +66,13 @@ export function PullRequestControls({ detail }: { detail: PullRequestDetail }) {
     const [mergeMethod, setMergeMethod] = useState<MergeMethod>(
         () => detail.defaultMergeMethod ?? mergeOptions[0]?.value ?? "squash",
     );
+    const [mergeMenuOpen, setMergeMenuOpen] = useState(false);
 
     if (detail.state !== "open") {
         return null;
     }
 
-    async function run(action: () => Promise<void>) {
+    async function run(action: () => Promise<void>, messages: { loading: string; success: string; error?: string }) {
         if (busyRef.current) {
             return;
         }
@@ -79,7 +81,7 @@ export function PullRequestControls({ detail }: { detail: PullRequestDetail }) {
         setBusy(true);
         setError(null);
         try {
-            await action();
+            await notifyAction(action, messages);
         } catch (cause) {
             setError(cause instanceof Error ? cause.message : "That action failed.");
         } finally {
@@ -89,13 +91,14 @@ export function PullRequestControls({ detail }: { detail: PullRequestDetail }) {
     }
 
     const mergeBlocked = detail.mergeable === "conflicting" || detail.isDraft || mergeOptions.length === 0;
+    const mergeDisabled = busy || mergeBlocked;
     const activeMergeMethod = mergeOptions.some((method) => method.value === mergeMethod)
         ? mergeMethod
         : (mergeOptions[0]?.value ?? mergeMethod);
     const selectedMerge = mergeOptions.find((method) => method.value === activeMergeMethod) ?? mergeOptions[0] ?? null;
     const conflictsUrl = `${detail.url}/conflicts`;
     const mergeButtonClass = mergeBlocked
-        ? "bg-muted text-muted-foreground"
+        ? "bg-muted text-muted-foreground hover:bg-muted hover:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-100"
         : "bg-[#1f883d] text-white hover:bg-[#1a7f37] dark:bg-[#238636] dark:hover:bg-[#2ea043]";
 
     return (
@@ -130,9 +133,16 @@ export function PullRequestControls({ detail }: { detail: PullRequestDetail }) {
                             variant="outline"
                             disabled={busy}
                             onClick={() =>
-                                void run(async () => {
-                                    await session.setPullRequestDraft(detail.repository, detail.number, false);
-                                })
+                                void run(
+                                    async () => {
+                                        await session.setPullRequestDraft(detail.repository, detail.number, false);
+                                    },
+                                    {
+                                        loading: "Marking ready for review…",
+                                        success: "Marked ready for review",
+                                        error: "Could not update draft status.",
+                                    },
+                                )
                             }
                         >
                             Ready for review
@@ -165,13 +175,20 @@ export function PullRequestControls({ detail }: { detail: PullRequestDetail }) {
                             variant="outline"
                             disabled={busy}
                             onClick={() =>
-                                void run(async () => {
-                                    await session.reRequestReview(
-                                        detail.repository,
-                                        detail.number,
-                                        detail.reviewRequests,
-                                    );
-                                })
+                                void run(
+                                    async () => {
+                                        await session.reRequestReview(
+                                            detail.repository,
+                                            detail.number,
+                                            detail.reviewRequests,
+                                        );
+                                    },
+                                    {
+                                        loading: "Re-requesting review…",
+                                        success: "Review re-requested",
+                                        error: "Could not re-request review.",
+                                    },
+                                )
                             }
                         >
                             Re-request review
@@ -196,7 +213,7 @@ export function PullRequestControls({ detail }: { detail: PullRequestDetail }) {
                             <AlertDialogTrigger asChild>
                                 <Button
                                     size="sm"
-                                    disabled={busy || mergeBlocked}
+                                    disabled={mergeDisabled}
                                     className={cn(
                                         mergeOptions.length > 1 ? "rounded-r-none" : undefined,
                                         mergeButtonClass,
@@ -217,13 +234,20 @@ export function PullRequestControls({ detail }: { detail: PullRequestDetail }) {
                                     <AlertDialogAction
                                         className="bg-[#1f883d] text-white hover:bg-[#1a7f37]"
                                         onClick={() =>
-                                            void run(async () => {
-                                                await session.mergePullRequest(
-                                                    detail.repository,
-                                                    detail.number,
-                                                    activeMergeMethod,
-                                                );
-                                            })
+                                            void run(
+                                                async () => {
+                                                    await session.mergePullRequest(
+                                                        detail.repository,
+                                                        detail.number,
+                                                        activeMergeMethod,
+                                                    );
+                                                },
+                                                {
+                                                    loading: "Merging pull request…",
+                                                    success: "Pull request merged",
+                                                    error: "Could not merge the pull request.",
+                                                },
+                                            )
                                         }
                                     >
                                         {selectedMerge.label}
@@ -232,11 +256,20 @@ export function PullRequestControls({ detail }: { detail: PullRequestDetail }) {
                             </AlertDialogContent>
                         </AlertDialog>
                         {mergeOptions.length > 1 ? (
-                            <DropdownMenu>
-                                <DropdownMenuTrigger asChild>
+                            <DropdownMenu
+                                open={mergeDisabled ? false : mergeMenuOpen}
+                                onOpenChange={(open) => {
+                                    if (mergeDisabled) {
+                                        setMergeMenuOpen(false);
+                                        return;
+                                    }
+                                    setMergeMenuOpen(open);
+                                }}
+                            >
+                                <DropdownMenuTrigger asChild disabled={mergeDisabled}>
                                     <Button
                                         size="sm"
-                                        disabled={busy || mergeBlocked}
+                                        disabled={mergeDisabled}
                                         className={cn(
                                             "rounded-l-none border-l px-2",
                                             mergeBlocked ? "border-border" : "border-white/25",

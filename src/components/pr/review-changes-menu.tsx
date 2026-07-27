@@ -1,6 +1,6 @@
 import { useSelector } from "@tanstack/react-store";
 import { ChevronDown } from "lucide-react";
-import { useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 
 import type { ReviewEvent } from "#/lib/session/types.ts";
 
@@ -8,7 +8,9 @@ import { MarkdownComposer } from "#/components/pr/markdown-composer.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import { HelpTooltip } from "#/components/ui/help-tooltip.tsx";
 import { Popover, PopoverContent, PopoverTrigger } from "#/components/ui/popover.tsx";
+import { mentionCandidatesFromPullRequest } from "#/lib/composer-commands.ts";
 import { useSession } from "#/lib/session/provider.tsx";
+import { notifyAction, notifySuccess } from "#/lib/toast.ts";
 import { cn } from "#/lib/utils.ts";
 
 const EVENTS: Array<{ value: ReviewEvent; label: string; hint: string }> = [
@@ -46,6 +48,7 @@ export function ReviewChangesMenu({ repository, number }: { repository: string; 
     const busyRef = useRef(false);
 
     const detail = page.detail;
+    const mentionUsers = useMemo(() => mentionCandidatesFromPullRequest(detail), [detail]);
     const pendingCount = draft.comments.length;
     const blobBase = detail
         ? `https://github.com/${detail.repository}/blob/${detail.headRefName}/`
@@ -61,7 +64,11 @@ export function ReviewChangesMenu({ repository, number }: { repository: string; 
         setError(null);
 
         try {
-            await session.submitReview(repository, number);
+            await notifyAction(() => session.submitReview(repository, number), {
+                loading: "Submitting review…",
+                success: "Review submitted",
+                error: "Could not submit the review.",
+            });
             setOpen(false);
         } catch (cause) {
             setError(cause instanceof Error ? cause.message : "Could not submit the review.");
@@ -97,7 +104,7 @@ export function ReviewChangesMenu({ repository, number }: { repository: string; 
             </HelpTooltip>
             <PopoverContent
                 align="end"
-                className="w-[min(28rem,calc(100vw-2rem))] max-h-[min(36rem,calc(100svh-6rem))] overflow-y-auto p-0"
+                className="w-[min(36rem,calc(100vw-2rem))] max-h-[min(36rem,calc(100svh-6rem))] overflow-y-auto p-0"
             >
                 <div className="flex flex-col gap-3 p-4">
                     {draft.stale ? (
@@ -106,7 +113,13 @@ export function ReviewChangesMenu({ repository, number }: { repository: string; 
                             <Button
                                 size="sm"
                                 variant="outline"
-                                onClick={() => void session.discardReviewDraft(repository, number)}
+                                onClick={() =>
+                                    void notifyAction(() => session.discardReviewDraft(repository, number), {
+                                        loading: "Discarding draft…",
+                                        success: "Draft discarded",
+                                        error: "Could not discard the draft.",
+                                    })
+                                }
                             >
                                 Discard draft
                             </Button>
@@ -118,31 +131,30 @@ export function ReviewChangesMenu({ repository, number }: { repository: string; 
                         className="group/review flex flex-col gap-2 disabled:cursor-not-allowed disabled:opacity-60"
                     >
                         <legend className="text-sm font-medium">Finish your review</legend>
-                        <ul className="flex flex-col gap-2">
+                        <ul className="grid grid-cols-3 gap-2">
                             {EVENTS.map((entry) => (
-                                <li key={entry.value}>
-                                    <label
-                                        className={cn(
-                                            "flex cursor-pointer gap-2.5 rounded-md border px-3 py-2 transition-colors group-disabled/review:cursor-not-allowed",
-                                            draft.event === entry.value
-                                                ? "border-[#1f883d]/50 bg-[#dafbe1]/40 dark:border-[#3fb950]/40 dark:bg-[#238636]/15"
-                                                : "hover:bg-muted/50",
-                                        )}
-                                    >
-                                        <input
-                                            type="radio"
-                                            name="review-event"
-                                            className="mt-1"
-                                            checked={draft.event === entry.value}
-                                            onChange={() =>
-                                                void session.setReviewEvent(repository, number, entry.value)
-                                            }
-                                        />
-                                        <span className="flex min-w-0 flex-col gap-0.5">
-                                            <span className="text-sm font-medium">{entry.label}</span>
-                                            <span className="text-xs text-muted-foreground">{entry.hint}</span>
-                                        </span>
-                                    </label>
+                                <li key={entry.value} className="min-w-0">
+                                    <HelpTooltip label={entry.hint}>
+                                        <label
+                                            className={cn(
+                                                "flex h-full cursor-pointer items-center justify-center gap-1.5 rounded-md border px-2 py-2 text-center whitespace-nowrap transition-colors group-disabled/review:cursor-not-allowed",
+                                                draft.event === entry.value
+                                                    ? "border-[#1f883d]/50 bg-[#dafbe1]/40 dark:border-[#3fb950]/40 dark:bg-[#238636]/15"
+                                                    : "hover:bg-muted/50",
+                                            )}
+                                        >
+                                            <input
+                                                type="radio"
+                                                name="review-event"
+                                                className="shrink-0"
+                                                checked={draft.event === entry.value}
+                                                onChange={() =>
+                                                    void session.setReviewEvent(repository, number, entry.value)
+                                                }
+                                            />
+                                            <span className="text-sm font-medium leading-none">{entry.label}</span>
+                                        </label>
+                                    </HelpTooltip>
                                 </li>
                             ))}
                         </ul>
@@ -152,8 +164,10 @@ export function ReviewChangesMenu({ repository, number }: { repository: string; 
                         value={draft.body}
                         disabled={draft.stale}
                         rows={4}
-                        placeholder="Leave a comment"
+                        placeholder="Leave a comment — @mention or / for commands"
                         previewBaseUrl={blobBase}
+                        repository={repository}
+                        mentionUsers={mentionUsers}
                         onChange={(body) => void session.setReviewBody(repository, number, body)}
                         onSubmitKey={() => void handleSubmit()}
                     />
@@ -183,9 +197,11 @@ export function ReviewChangesMenu({ repository, number }: { repository: string; 
                                         <button
                                             type="button"
                                             className="shrink-0 cursor-pointer text-muted-foreground hover:text-destructive"
-                                            onClick={() =>
-                                                void session.removePendingComment(repository, number, comment.id)
-                                            }
+                                            onClick={() => {
+                                                void session
+                                                    .removePendingComment(repository, number, comment.id)
+                                                    .then(() => notifySuccess("Pending comment removed"));
+                                            }}
                                         >
                                             Remove
                                         </button>

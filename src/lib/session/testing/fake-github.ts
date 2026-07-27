@@ -4,10 +4,13 @@ import type {
     Label,
     MergeMethod,
     PullRequestComment,
+    PullRequestCommit,
     PullRequestDetail,
     PullRequestFile,
     PullRequestSummary,
     PullRequestTimelineItem,
+    ReactionContent,
+    ReactionGroup,
     Repository,
     RepositoryLabel,
     RepositoryUser,
@@ -16,6 +19,7 @@ import type {
     ReviewThreadComment,
 } from "#/lib/session/types.ts";
 
+import { applySuggestionsToFile } from "#/lib/session/apply-suggestion.ts";
 import { buildFileDiff } from "#/lib/session/build-file-diff.ts";
 import { stubForPath } from "#/lib/session/diff-policy.ts";
 import { EasyReviewError, unauthorized } from "#/lib/session/errors.ts";
@@ -104,18 +108,28 @@ function buildPullRequest(input: PullRequestInput): PullRequestDetail {
         baseRefName: input.baseRefName ?? "main",
         reviewDecision: input.reviewDecision ?? null,
         reviewRequests: input.reviewRequests ?? [],
-        reviewers: input.reviewers ?? [],
+        reviewers: (input.reviewers ?? []).map((reviewer, index) => ({
+            login: reviewer.login,
+            state: reviewer.state,
+            reviewId: reviewer.reviewId ?? index + 1,
+        })),
         checks: input.checks ?? "none",
         additions: input.additions ?? 0,
         deletions: input.deletions ?? 0,
         changedFiles: input.changedFiles ?? 0,
         commentCount: input.commentCount ?? 0,
         body: input.body ?? "",
+        lastEditedAt: input.lastEditedAt ?? null,
+        editor: input.editor ?? null,
+        editCount: input.editCount ?? 0,
+        edits: input.edits ?? [],
+        reactionGroups: input.reactionGroups ?? [],
         headSha: input.headSha ?? `sha-head-${input.number}`,
         baseSha: input.baseSha ?? `sha-base-${input.number}`,
         labels: input.labels ?? [],
         assignees: input.assignees ?? [],
         checkRuns: input.checkRuns ?? [],
+        checkCount: input.checkCount ?? input.checkRuns?.length ?? 0,
         mergeable: input.mergeable ?? "mergeable",
         requiredApprovingReviewCount:
             input.requiredApprovingReviewCount ?? (input.reviewDecision === "review-required" ? 1 : null),
@@ -185,6 +199,51 @@ export function createFakeGithub(): FakeGithub {
     let gate: Promise<void> | null = null;
     let replyCounter = 0;
     let conversationCommentCounter = 0;
+    let reactionCounter = 0;
+    const issueReactions = new Map<string, Array<{ id: number; content: ReactionContent; user: string }>>();
+    const commentReactions = new Map<number, Array<{ id: number; content: ReactionContent; user: string }>>();
+
+    function reactionGroupsFrom(
+        rows: Array<{ content: ReactionContent; user: string }>,
+        viewerLogin: string,
+    ): Array<ReactionGroup> {
+        const byContent = new Map<ReactionContent, ReactionGroup>();
+        for (const row of rows) {
+            const current = byContent.get(row.content) ?? {
+                content: row.content,
+                count: 0,
+                viewerHasReacted: false,
+            };
+            current.count += 1;
+            if (row.user === viewerLogin) {
+                current.viewerHasReacted = true;
+            }
+            byContent.set(row.content, current);
+        }
+        return [...byContent.values()];
+    }
+
+    function syncIssueReactions(token: string, repository: string, number: number) {
+        const viewer = accounts.get(token)?.login ?? "";
+        const rows = issueReactions.get(filesKey(token, repository, number)) ?? [];
+        patchPullRequest(token, repository, number, {
+            reactionGroups: reactionGroupsFrom(rows, viewer),
+        });
+    }
+
+    function syncCommentReactions(token: string, repository: string, number: number, commentId: number) {
+        const viewer = accounts.get(token)?.login ?? "";
+        const rows = commentReactions.get(commentId) ?? [];
+        const groups = reactionGroupsFrom(rows, viewer);
+        const key = filesKey(token, repository, number);
+        const timeline = timelineByPullRequest.get(key) ?? [];
+        timelineByPullRequest.set(
+            key,
+            timeline.map((item) =>
+                item.kind === "comment" && item.databaseId === commentId ? { ...item, reactionGroups: groups } : item,
+            ),
+        );
+    }
 
     function authenticate(token: string): GithubViewer {
         if (forcedError) {
@@ -483,7 +542,7 @@ export function createFakeGithub(): FakeGithub {
                 const pathStub = stubForPath(path);
 
                 if (pathStub === "binary" || (pathStub && !force)) {
-                    return { path, lines: [], truncated: false, stub: pathStub };
+                    return { path, lines: [], truncated: false, stub: pathStub, beforeText: null, afterText: null };
                 }
 
                 const stored = (filesByPullRequest.get(filesKey(token, repository, number)) ?? []).find(
@@ -523,17 +582,59 @@ export function createFakeGithub(): FakeGithub {
                 return [...(timelineByPullRequest.get(filesKey(token, repository, number)) ?? [])];
             });
         },
+        listPullRequestCommits(token, repository, number) {
+            return respond("listPullRequestCommits", (): Array<PullRequestCommit> => {
+                authenticate(token);
+                const pullRequest = requirePullRequest(token, repository, number);
+                const fromTimeline = (timelineByPullRequest.get(filesKey(token, repository, number)) ?? [])
+                    .filter(
+                        (item): item is Extract<PullRequestTimelineItem, { kind: "commit" }> => item.kind === "commit",
+                    )
+                    .map((item) => ({
+                        oid: item.oid,
+                        abbreviatedOid: item.abbreviatedOid,
+                        messageHeadline: item.messageHeadline,
+                        committedAt: item.createdAt,
+                        authorLogin: item.author.login,
+                        authorAvatarUrl: item.author.avatarUrl,
+                        url: item.url,
+                        checkState: item.checkState,
+                    }));
+                if (fromTimeline.length > 0) {
+                    return fromTimeline;
+                }
+                return [
+                    {
+                        oid: pullRequest.headSha,
+                        abbreviatedOid: pullRequest.headSha.slice(0, 7),
+                        messageHeadline: pullRequest.title,
+                        committedAt: pullRequest.updatedAt,
+                        authorLogin: pullRequest.author,
+                        authorAvatarUrl: pullRequest.authorAvatarUrl,
+                        url: `https://github.com/${repository}/commit/${pullRequest.headSha}`,
+                        checkState: pullRequest.checks,
+                    },
+                ];
+            });
+        },
         addPullRequestComment(token, repository, number, body) {
             return respond("addPullRequestComment", (): PullRequestComment => {
                 authenticate(token);
                 const pullRequest = requirePullRequest(token, repository, number);
+                const databaseId = ++conversationCommentCounter;
                 const comment: PullRequestComment = {
-                    id: `issue-comment-${++conversationCommentCounter}`,
+                    id: `issue-comment-${databaseId}`,
+                    databaseId,
                     author: accounts.get(token)?.login ?? "octocat",
                     authorAvatarUrl: accounts.get(token)?.avatarUrl ?? null,
                     body,
                     createdAt: new Date().toISOString(),
-                    url: `${pullRequest.url}#issuecomment-${conversationCommentCounter}`,
+                    url: `${pullRequest.url}#issuecomment-${databaseId}`,
+                    lastEditedAt: null,
+                    editor: null,
+                    editCount: 0,
+                    edits: [],
+                    reactionGroups: [],
                 };
                 const key = filesKey(token, repository, number);
                 timelineByPullRequest.set(key, [
@@ -549,6 +650,7 @@ export function createFakeGithub(): FakeGithub {
         submitReview(token, input) {
             return respond("submitReview", () => {
                 authenticate(token);
+                const account = accounts.get(token);
                 requirePullRequest(token, input.repository, input.number);
                 submittedReviews.push({
                     repository: input.repository,
@@ -558,6 +660,33 @@ export function createFakeGithub(): FakeGithub {
                     body: input.body,
                     comments: input.comments.map((comment) => ({ ...comment })),
                 });
+
+                const key = filesKey(token, input.repository, input.number);
+                const created = input.comments.map((comment, index) => {
+                    const id = `thread-${++replyCounter}-${index}`;
+                    return {
+                        id,
+                        path: comment.path,
+                        startLine: null,
+                        line: comment.line,
+                        side: comment.side,
+                        isResolved: false,
+                        diffHunk: `@@ -${comment.line},1 +${comment.line},1 @@\n ${comment.body.slice(0, 40)}`,
+                        comments: [
+                            {
+                                id: `${id}-c0`,
+                                author: account?.login ?? "octocat",
+                                authorAvatarUrl: account?.avatarUrl ?? null,
+                                body: comment.body,
+                                createdAt: new Date().toISOString(),
+                                url: `https://github.com/${input.repository}/pull/${input.number}#discussion_r${replyCounter}`,
+                            },
+                        ],
+                    } satisfies ReviewThread;
+                });
+                if (created.length > 0) {
+                    threadsByPullRequest.set(key, [...(threadsByPullRequest.get(key) ?? []), ...created]);
+                }
             });
         },
         replyToReviewThread(token, threadId, body) {
@@ -571,11 +700,17 @@ export function createFakeGithub(): FakeGithub {
                         continue;
                     }
 
+                    const account = accounts.get(token);
+                    const keyMatch = /^[^:]+:(.+)#(\d+)$/.exec(key);
+                    const repository = keyMatch?.[1] ?? "acme/api";
+                    const pullNumber = keyMatch?.[2] ?? "1";
                     const reply: ReviewThreadComment = {
                         id: `reply-${++replyCounter}`,
-                        author: accounts.get(token)?.login ?? "octocat",
+                        author: account?.login ?? "octocat",
+                        authorAvatarUrl: account?.avatarUrl ?? null,
                         body,
                         createdAt: new Date().toISOString(),
+                        url: `https://github.com/${repository}/pull/${pullNumber}#discussion_r${replyCounter}`,
                     };
                     const updated = {
                         ...threads[index]!,
@@ -585,6 +720,25 @@ export function createFakeGithub(): FakeGithub {
                     next[index] = updated;
                     threadsByPullRequest.set(key, next);
                     return reply;
+                }
+
+                throw new EasyReviewError("not-found", "That review thread no longer exists.");
+            });
+        },
+        setReviewThreadResolved(token, threadId, resolved) {
+            return respond("setReviewThreadResolved", () => {
+                authenticate(token);
+
+                for (const [key, threads] of threadsByPullRequest) {
+                    const index = threads.findIndex((thread) => thread.id === threadId);
+                    if (index < 0) {
+                        continue;
+                    }
+
+                    const next = [...threads];
+                    next[index] = { ...threads[index]!, isResolved: resolved };
+                    threadsByPullRequest.set(key, next);
+                    return;
                 }
 
                 throw new EasyReviewError("not-found", "That review thread no longer exists.");
@@ -653,6 +807,23 @@ export function createFakeGithub(): FakeGithub {
                 });
             });
         },
+        dismissReview(token, repository, number, reviewId, _message: string) {
+            return respond("dismissReview", () => {
+                authenticate(token);
+                const pullRequest = requirePullRequest(token, repository, number);
+                requireOpen(pullRequest);
+                const reviewers = pullRequest.reviewers.map((reviewer) =>
+                    reviewer.reviewId === reviewId ? { ...reviewer, state: "dismissed" as const } : reviewer,
+                );
+                if (!reviewers.some((reviewer) => reviewer.reviewId === reviewId)) {
+                    throw new EasyReviewError("not-found", "That review could not be found.");
+                }
+                patchPullRequest(token, repository, number, {
+                    reviewers,
+                    reviewDecision: null,
+                });
+            });
+        },
         mergePullRequest(token, repository, number, _method: MergeMethod) {
             return respond("mergePullRequest", () => {
                 authenticate(token);
@@ -679,6 +850,154 @@ export function createFakeGithub(): FakeGithub {
                     isDraft: false,
                     reviewRequests: [],
                 });
+            });
+        },
+        updatePullRequestBody(token, repository, number, body) {
+            return respond("updatePullRequestBody", () => {
+                authenticate(token);
+                requirePullRequest(token, repository, number);
+                patchPullRequest(token, repository, number, { body });
+            });
+        },
+        applySuggestions(token, input) {
+            return respond("applySuggestions", () => {
+                authenticate(token);
+                const pullRequest = requirePullRequest(token, input.repository, input.number);
+                requireOpen(pullRequest);
+                if (pullRequest.headSha !== input.headSha) {
+                    throw new EasyReviewError("unknown", "This suggestion is outdated.");
+                }
+                if (input.changes.length === 0) {
+                    throw new EasyReviewError("unknown", "No suggestions to apply.");
+                }
+                const key = filesKey(token, input.repository, input.number);
+                const stored = filesByPullRequest.get(key) ?? [];
+                const byPath = new Map<string, Array<(typeof input.changes)[number]>>();
+                for (const change of input.changes) {
+                    const list = byPath.get(change.path) ?? [];
+                    list.push(change);
+                    byPath.set(change.path, list);
+                }
+                filesByPullRequest.set(
+                    key,
+                    stored.map((file) => {
+                        const changes = byPath.get(file.path);
+                        if (!changes || !file.after) {
+                            return file;
+                        }
+                        const text = new TextDecoder().decode(file.after);
+                        const next = applySuggestionsToFile(text, changes);
+                        return { ...file, after: new TextEncoder().encode(next) };
+                    }),
+                );
+                patchPullRequest(token, input.repository, input.number, {
+                    headSha: `${pullRequest.headSha}-applied`,
+                });
+            });
+        },
+        updatePullRequest(token, repository, number, input) {
+            return respond("updatePullRequest", () => {
+                authenticate(token);
+                const pullRequest = requirePullRequest(token, repository, number);
+                requireOpen(pullRequest);
+                const patch: { title?: string; baseRefName?: string } = {};
+                if (input.title !== undefined) {
+                    patch.title = input.title;
+                }
+                if (input.base !== undefined) {
+                    patch.baseRefName = input.base;
+                }
+                patchPullRequest(token, repository, number, patch);
+            });
+        },
+        listRepositoryBranches(token, repository) {
+            return respond("listRepositoryBranches", () => {
+                authenticate(token);
+                const branches = new Set<string>(["main", "dev", "develop"]);
+                for (const pullRequest of pullRequestsByToken.get(token) ?? []) {
+                    if (pullRequest.repository === repository) {
+                        branches.add(pullRequest.baseRefName);
+                        branches.add(pullRequest.headRefName);
+                    }
+                }
+                return [...branches].sort((a, b) => a.localeCompare(b));
+            });
+        },
+        createIssueReaction(token, repository, number, content) {
+            return respond("createIssueReaction", () => {
+                const viewer = authenticate(token);
+                requirePullRequest(token, repository, number);
+                const key = filesKey(token, repository, number);
+                const rows = issueReactions.get(key) ?? [];
+                const existing = rows.find((row) => row.user === viewer.login && row.content === content);
+                if (existing) {
+                    return existing.id;
+                }
+                const id = ++reactionCounter;
+                issueReactions.set(key, [...rows, { id, content, user: viewer.login }]);
+                syncIssueReactions(token, repository, number);
+                return id;
+            });
+        },
+        deleteIssueReaction(token, repository, number, reactionId) {
+            return respond("deleteIssueReaction", () => {
+                authenticate(token);
+                const key = filesKey(token, repository, number);
+                const rows = (issueReactions.get(key) ?? []).filter((row) => row.id !== reactionId);
+                issueReactions.set(key, rows);
+                syncIssueReactions(token, repository, number);
+            });
+        },
+        findIssueReactionId(token, repository, number, content, viewerLogin) {
+            return respond("findIssueReactionId", () => {
+                authenticate(token);
+                const rows = issueReactions.get(filesKey(token, repository, number)) ?? [];
+                return rows.find((row) => row.content === content && row.user === viewerLogin)?.id ?? null;
+            });
+        },
+        createIssueCommentReaction(token, repository, commentId, content) {
+            return respond("createIssueCommentReaction", () => {
+                const viewer = authenticate(token);
+                const rows = commentReactions.get(commentId) ?? [];
+                const existing = rows.find((row) => row.user === viewer.login && row.content === content);
+                if (existing) {
+                    return existing.id;
+                }
+                const id = ++reactionCounter;
+                commentReactions.set(commentId, [...rows, { id, content, user: viewer.login }]);
+                for (const [key, items] of timelineByPullRequest) {
+                    if (!key.startsWith(`${token}:${repository}#`)) {
+                        continue;
+                    }
+                    if (items.some((item) => item.kind === "comment" && item.databaseId === commentId)) {
+                        syncCommentReactions(token, repository, Number(key.split("#")[1]), commentId);
+                    }
+                }
+                return id;
+            });
+        },
+        deleteIssueCommentReaction(token, repository, commentId, reactionId) {
+            return respond("deleteIssueCommentReaction", () => {
+                authenticate(token);
+                commentReactions.set(
+                    commentId,
+                    (commentReactions.get(commentId) ?? []).filter((row) => row.id !== reactionId),
+                );
+                for (const [key, items] of timelineByPullRequest) {
+                    if (!key.startsWith(`${token}:${repository}#`)) {
+                        continue;
+                    }
+                    if (items.some((item) => item.kind === "comment" && item.databaseId === commentId)) {
+                        syncCommentReactions(token, repository, Number(key.split("#")[1]), commentId);
+                    }
+                }
+            });
+        },
+        findIssueCommentReactionId(token, _repository, commentId, content, viewerLogin) {
+            return respond("findIssueCommentReactionId", () => {
+                authenticate(token);
+                const rows = commentReactions.get(commentId) ?? [];
+                return rows.find((row) => row.content === content && row.user === viewerLogin)?.id ?? null;
             });
         },
     };

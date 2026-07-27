@@ -1,25 +1,89 @@
 import { useSelector } from "@tanstack/react-store";
-import { Check, Pencil, Settings2, X } from "lucide-react";
+import {
+    Check,
+    CheckCircle2,
+    CircleDashed,
+    Ellipsis,
+    MessageSquare,
+    Pencil,
+    RefreshCw,
+    Settings2,
+    ShieldOff,
+    X,
+    XCircle,
+} from "lucide-react";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 
-import type { Label, PullRequestDetail, RepositoryLabel, RepositoryUser, ReviewerStatus } from "#/lib/session/types.ts";
+import type {
+    Label,
+    PullRequestDetail,
+    RepositoryLabel,
+    RepositoryUser,
+    ReviewerStatus,
+    ReviewState,
+} from "#/lib/session/types.ts";
 
+import {
+    AlertDialog,
+    AlertDialogAction,
+    AlertDialogCancel,
+    AlertDialogContent,
+    AlertDialogDescription,
+    AlertDialogFooter,
+    AlertDialogHeader,
+    AlertDialogTitle,
+} from "#/components/ui/alert-dialog.tsx";
 import { Badge } from "#/components/ui/badge.tsx";
+import { Button } from "#/components/ui/button.tsx";
+import {
+    DropdownMenu,
+    DropdownMenuContent,
+    DropdownMenuItem,
+    DropdownMenuSeparator,
+    DropdownMenuTrigger,
+} from "#/components/ui/dropdown-menu.tsx";
 import { HelpTooltip } from "#/components/ui/help-tooltip.tsx";
 import { Input } from "#/components/ui/input.tsx";
 import { Popover, PopoverContent, PopoverTrigger } from "#/components/ui/popover.tsx";
+import { Skeleton } from "#/components/ui/skeleton.tsx";
 import { useSession } from "#/lib/session/provider.tsx";
+import { notifyAction } from "#/lib/toast.ts";
+import { cn } from "#/lib/utils.ts";
 
 const MAX_ASSIGNEES = 10;
 const MAX_REVIEWERS = 15;
 
-const REVIEW_STATE_LABELS = {
-    approved: "approved",
-    "changes-requested": "requested changes",
-    commented: "commented",
-    dismissed: "dismissed",
-    pending: "pending",
-} as const;
+const REVIEW_STATE_META: Record<ReviewState, { label: string; className: string; icon: ReactNode }> = {
+    approved: {
+        label: "Approved",
+        className: "text-[#1a7f37] dark:text-[#3fb950]",
+        icon: <CheckCircle2 className="size-3.5" aria-hidden="true" />,
+    },
+    "changes-requested": {
+        label: "Changes requested",
+        className: "text-[#cf222e] dark:text-[#f85149]",
+        icon: <XCircle className="size-3.5" aria-hidden="true" />,
+    },
+    commented: {
+        label: "Commented",
+        className: "text-muted-foreground",
+        icon: <MessageSquare className="size-3.5" aria-hidden="true" />,
+    },
+    dismissed: {
+        label: "Dismissed",
+        className: "text-muted-foreground",
+        icon: <ShieldOff className="size-3.5" aria-hidden="true" />,
+    },
+    pending: {
+        label: "Pending",
+        className: "text-muted-foreground",
+        icon: <CircleDashed className="size-3.5" aria-hidden="true" />,
+    },
+};
+
+function canDismissReview(state: ReviewState): boolean {
+    return state === "approved" || state === "changes-requested";
+}
 
 /** GitHub-style Reviewers / Assignees / Labels sidebar with gear pickers. */
 export function PullRequestSidebarMetadata({
@@ -92,7 +156,11 @@ function ReviewersSection({
         setBusy(true);
         setError(null);
         try {
-            await session.setReviewRequests(detail.repository, detail.number, next);
+            await notifyAction(() => session.setReviewRequests(detail.repository, detail.number, next), {
+                loading: "Updating reviewers…",
+                success: "Reviewers updated",
+                error: "Could not update reviewers.",
+            });
         } catch (cause) {
             setError(cause instanceof Error ? cause.message : "Could not update reviewers.");
         } finally {
@@ -114,6 +182,40 @@ function ReviewersSection({
         await setRequests([...detail.reviewRequests, login]);
     }
 
+    async function reRequest(login: string) {
+        setBusy(true);
+        setError(null);
+        try {
+            await notifyAction(() => session.reRequestReview(detail.repository, detail.number, [login]), {
+                loading: "Re-requesting review…",
+                success: `Re-requested review from ${login}`,
+                error: "Could not re-request review.",
+            });
+        } catch (cause) {
+            setError(cause instanceof Error ? cause.message : "Could not re-request review.");
+        } finally {
+            setBusy(false);
+        }
+    }
+
+    async function dismiss(reviewId: number, login: string) {
+        setBusy(true);
+        setError(null);
+        try {
+            await notifyAction(() => session.dismissReview(detail.repository, detail.number, reviewId), {
+                loading: "Dismissing review…",
+                success: `Dismissed ${login}'s review`,
+                error: "Could not dismiss the review.",
+            });
+        } catch (cause) {
+            setError(cause instanceof Error ? cause.message : "Could not dismiss the review.");
+        } finally {
+            setBusy(false);
+        }
+    }
+
+    const awaiting = detail.reviewRequests.filter((login) => !reviewedLogins.has(login));
+
     return (
         <MetadataSection
             title="Reviewers"
@@ -132,43 +234,201 @@ function ReviewersSection({
             groupSelected="Requested"
         >
             {reviewers.length > 0 ? (
-                <ul className="flex flex-col gap-1.5">
+                <ul className="flex flex-col gap-1">
                     {reviewers.map((reviewer) => (
-                        <li key={reviewer.login} className="flex items-center justify-between gap-2">
-                            <UserChip
-                                user={
-                                    usersByLogin.get(reviewer.login) ?? {
-                                        login: reviewer.login,
-                                        name: null,
-                                        avatarUrl: null,
-                                    }
+                        <ReviewerRow
+                            key={`${reviewer.login}-${reviewer.reviewId}`}
+                            user={
+                                usersByLogin.get(reviewer.login) ?? {
+                                    login: reviewer.login,
+                                    name: null,
+                                    avatarUrl: null,
                                 }
-                            />
-                            <span className="shrink-0 text-xs text-muted-foreground">
-                                {REVIEW_STATE_LABELS[reviewer.state]}
-                            </span>
-                        </li>
+                            }
+                            reviewer={reviewer}
+                            canEdit={canEdit}
+                            busy={busy}
+                            onReRequest={() => void reRequest(reviewer.login)}
+                            onDismiss={() => void dismiss(reviewer.reviewId, reviewer.login)}
+                        />
                     ))}
                 </ul>
             ) : null}
 
-            {detail.reviewRequests.filter((login) => !reviewedLogins.has(login)).length > 0 ? (
-                <ul className="flex flex-col gap-1.5">
-                    {detail.reviewRequests
-                        .filter((login) => !reviewedLogins.has(login))
-                        .map((login) => (
-                            <li key={login} className="flex items-center justify-between gap-2">
-                                <UserChip user={usersByLogin.get(login) ?? { login, name: null, avatarUrl: null }} />
-                                <span className="shrink-0 text-xs text-muted-foreground">Awaiting</span>
-                            </li>
-                        ))}
+            {awaiting.length > 0 ? (
+                <ul className="flex flex-col gap-1">
+                    {awaiting.map((login) => (
+                        <AwaitingReviewerRow
+                            key={login}
+                            user={usersByLogin.get(login) ?? { login, name: null, avatarUrl: null }}
+                            canEdit={canEdit}
+                            busy={busy}
+                            onRemove={() => void toggle(login)}
+                            onReRequest={() => void reRequest(login)}
+                        />
+                    ))}
                 </ul>
             ) : null}
 
             {reviewers.length === 0 && detail.reviewRequests.length === 0 ? (
-                <p className="text-muted-foreground">{loading ? "…" : "No reviews"}</p>
+                loading ? (
+                    <MetadataPeopleSkeleton />
+                ) : (
+                    <p className="text-muted-foreground">No reviews</p>
+                )
             ) : null}
         </MetadataSection>
+    );
+}
+
+function ReviewerRow({
+    user,
+    reviewer,
+    canEdit,
+    busy,
+    onReRequest,
+    onDismiss,
+}: {
+    user: RepositoryUser;
+    reviewer: ReviewerStatus;
+    canEdit: boolean;
+    busy: boolean;
+    onReRequest: () => void;
+    onDismiss: () => void;
+}) {
+    const [confirmDismiss, setConfirmDismiss] = useState(false);
+    const meta = REVIEW_STATE_META[reviewer.state];
+    const dismissable = canDismissReview(reviewer.state);
+
+    return (
+        <li className="group flex items-center gap-2 rounded-md py-0.5">
+            <UserChip user={user} />
+            <HelpTooltip label={meta.label}>
+                <span
+                    className={cn("ml-auto inline-flex shrink-0 items-center", meta.className)}
+                    aria-label={meta.label}
+                >
+                    {meta.icon}
+                </span>
+            </HelpTooltip>
+            {canEdit ? (
+                <>
+                    <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                            <Button
+                                type="button"
+                                size="icon-sm"
+                                variant="ghost"
+                                disabled={busy}
+                                className="size-6 text-muted-foreground opacity-70 group-hover:opacity-100 data-[state=open]:opacity-100"
+                                aria-label={`Actions for ${reviewer.login}`}
+                            >
+                                <Ellipsis className="size-3.5" aria-hidden="true" />
+                            </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end" className="w-48">
+                            <DropdownMenuItem
+                                disabled={busy}
+                                onSelect={() => {
+                                    onReRequest();
+                                }}
+                            >
+                                <RefreshCw className="size-3.5" aria-hidden="true" />
+                                Re-request review
+                            </DropdownMenuItem>
+                            {dismissable ? (
+                                <>
+                                    <DropdownMenuSeparator />
+                                    <DropdownMenuItem
+                                        variant="destructive"
+                                        disabled={busy}
+                                        onSelect={() => setConfirmDismiss(true)}
+                                    >
+                                        <ShieldOff className="size-3.5" aria-hidden="true" />
+                                        Dismiss review
+                                    </DropdownMenuItem>
+                                </>
+                            ) : null}
+                        </DropdownMenuContent>
+                    </DropdownMenu>
+                    <AlertDialog open={confirmDismiss} onOpenChange={setConfirmDismiss}>
+                        <AlertDialogContent>
+                            <AlertDialogHeader>
+                                <AlertDialogTitle>Dismiss {reviewer.login}&apos;s review?</AlertDialogTitle>
+                                <AlertDialogDescription>
+                                    Their {meta.label.toLowerCase()} review will no longer count toward merge
+                                    requirements. You can re-request a review afterward.
+                                </AlertDialogDescription>
+                            </AlertDialogHeader>
+                            <AlertDialogFooter>
+                                <AlertDialogCancel>Cancel</AlertDialogCancel>
+                                <AlertDialogAction
+                                    className="bg-destructive text-white hover:bg-destructive/90"
+                                    onClick={onDismiss}
+                                >
+                                    Dismiss review
+                                </AlertDialogAction>
+                            </AlertDialogFooter>
+                        </AlertDialogContent>
+                    </AlertDialog>
+                </>
+            ) : null}
+        </li>
+    );
+}
+
+function AwaitingReviewerRow({
+    user,
+    canEdit,
+    busy,
+    onRemove,
+    onReRequest,
+}: {
+    user: RepositoryUser;
+    canEdit: boolean;
+    busy: boolean;
+    onRemove: () => void;
+    onReRequest: () => void;
+}) {
+    return (
+        <li className="group flex items-center gap-2 rounded-md py-0.5">
+            <UserChip user={user} />
+            <HelpTooltip label="Awaiting review">
+                <span
+                    className="ml-auto inline-flex shrink-0 items-center text-muted-foreground"
+                    aria-label="Awaiting review"
+                >
+                    <CircleDashed className="size-3.5" aria-hidden="true" />
+                </span>
+            </HelpTooltip>
+            {canEdit ? (
+                <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                        <Button
+                            type="button"
+                            size="icon-sm"
+                            variant="ghost"
+                            disabled={busy}
+                            className="size-6 text-muted-foreground opacity-70 group-hover:opacity-100 data-[state=open]:opacity-100"
+                            aria-label={`Actions for ${user.login}`}
+                        >
+                            <Ellipsis className="size-3.5" aria-hidden="true" />
+                        </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end" className="w-48">
+                        <DropdownMenuItem disabled={busy} onSelect={onReRequest}>
+                            <RefreshCw className="size-3.5" aria-hidden="true" />
+                            Re-request review
+                        </DropdownMenuItem>
+                        <DropdownMenuSeparator />
+                        <DropdownMenuItem variant="destructive" disabled={busy} onSelect={onRemove}>
+                            <X className="size-3.5" aria-hidden="true" />
+                            Remove request
+                        </DropdownMenuItem>
+                    </DropdownMenuContent>
+                </DropdownMenu>
+            ) : null}
+        </li>
     );
 }
 
@@ -194,7 +454,11 @@ function AssigneesSection({
         setBusy(true);
         setError(null);
         try {
-            await session.setPullRequestAssignees(detail.repository, detail.number, next);
+            await notifyAction(() => session.setPullRequestAssignees(detail.repository, detail.number, next), {
+                loading: "Updating assignees…",
+                success: "Assignees updated",
+                error: "Could not update assignees.",
+            });
         } catch (cause) {
             setError(cause instanceof Error ? cause.message : "Could not update assignees.");
         } finally {
@@ -243,8 +507,10 @@ function AssigneesSection({
                         </li>
                     ))}
                 </ul>
+            ) : loading ? (
+                <MetadataPeopleSkeleton />
             ) : (
-                <p className="text-muted-foreground">{loading ? "…" : "No one—assign someone"}</p>
+                <p className="text-muted-foreground">No one—assign someone</p>
             )}
         </MetadataSection>
     );
@@ -281,10 +547,18 @@ function LabelsSection({
         setBusy(true);
         setError(null);
         try {
-            await session.setPullRequestLabels(
-                detail.repository,
-                detail.number,
-                next.map((label) => label.name),
+            await notifyAction(
+                () =>
+                    session.setPullRequestLabels(
+                        detail.repository,
+                        detail.number,
+                        next.map((label) => label.name),
+                    ),
+                {
+                    loading: "Updating labels…",
+                    success: "Labels updated",
+                    error: "Could not update labels.",
+                },
             );
         } catch (cause) {
             setError(cause instanceof Error ? cause.message : "Could not update labels.");
@@ -345,10 +619,30 @@ function LabelsSection({
                         </li>
                     ))}
                 </ul>
+            ) : loading ? (
+                <div className="flex flex-wrap gap-1.5" aria-hidden="true">
+                    <Skeleton className="h-5 w-16 rounded-full" />
+                    <Skeleton className="h-5 w-20 rounded-full" />
+                </div>
             ) : (
-                <p className="text-muted-foreground">{loading ? "…" : "None yet"}</p>
+                <p className="text-muted-foreground">None yet</p>
             )}
         </MetadataSection>
+    );
+}
+
+function MetadataPeopleSkeleton() {
+    return (
+        <div className="flex flex-col gap-1.5" aria-hidden="true">
+            <div className="flex items-center gap-2">
+                <Skeleton className="size-5 shrink-0 rounded-full" />
+                <Skeleton className="h-3 w-24" />
+            </div>
+            <div className="flex items-center gap-2">
+                <Skeleton className="size-5 shrink-0 rounded-full" />
+                <Skeleton className="h-3 w-20" />
+            </div>
+        </div>
     );
 }
 

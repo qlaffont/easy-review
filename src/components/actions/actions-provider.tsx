@@ -5,6 +5,7 @@ import type { ActionContext, ActionTarget } from "#/lib/actions/catalog.ts";
 
 import { useOpenRepoPicker } from "#/components/repos/repo-picker.tsx";
 import { useSession } from "#/lib/session/provider.tsx";
+import { notifyCopied, notifyError } from "#/lib/toast.ts";
 
 type ActionsBridge = {
     target: ActionTarget | null;
@@ -71,7 +72,13 @@ export function ActionsProvider({ children }: { children: React.ReactNode }) {
             openPullRequest,
             openReviewChanges,
             copyText: async (text) => {
-                await navigator.clipboard.writeText(text);
+                try {
+                    await navigator.clipboard.writeText(text);
+                    notifyCopied("to clipboard");
+                } catch {
+                    notifyError("Could not copy to clipboard");
+                    throw new Error("Could not copy to clipboard");
+                }
             },
             confirm: (message) => window.confirm(message),
         }),

@@ -1,8 +1,4 @@
 const relativeTime = new Intl.RelativeTimeFormat("en", { numeric: "auto", style: "narrow" });
-const absoluteTime = new Intl.DateTimeFormat(undefined, {
-    dateStyle: "medium",
-    timeStyle: "short",
-});
 
 const UNITS: Array<{ unit: Intl.RelativeTimeFormatUnit; ms: number }> = [
     { unit: "year", ms: 365 * 24 * 60 * 60 * 1000 },
@@ -26,7 +22,16 @@ export function formatRelativeTime(iso: string, now: number = Date.now()): strin
     return "just now";
 }
 
-/** Full local date for hover/tooltips on relative timestamps. */
+/**
+ * Full local date for hover/tooltips. Built per call with the runtime locale so hour
+ * cycle follows the browser/OS (12h vs 24h) instead of a module-load snapshot.
+ */
 export function formatAbsoluteTime(iso: string): string {
-    return absoluteTime.format(new Date(iso));
+    return new Intl.DateTimeFormat(undefined, {
+        year: "numeric",
+        month: "short",
+        day: "numeric",
+        hour: "numeric",
+        minute: "2-digit",
+    }).format(new Date(iso));
 }

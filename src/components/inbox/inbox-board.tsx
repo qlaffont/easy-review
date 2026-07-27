@@ -1,6 +1,6 @@
 import { useNavigate } from "@tanstack/react-router";
 import { useSelector } from "@tanstack/react-store";
-import { ChevronRight, RefreshCw } from "lucide-react";
+import { ChevronRight, FolderGit2, Keyboard, RefreshCw } from "lucide-react";
 import { useEffect, useEffectEvent, useState } from "react";
 
 import type { InboxSection } from "#/lib/session/inbox-sections.ts";
@@ -9,10 +9,13 @@ import type { PullRequestSummary } from "#/lib/session/types.ts";
 import { targetFromSummary, useSetActionTarget } from "#/components/actions/actions-provider.tsx";
 import { emptySectionRow, PullRequestRow } from "#/components/inbox/pull-request-row.tsx";
 import { SectionLayoutEditor } from "#/components/inbox/section-layout-editor.tsx";
+import { SECTION_VISUALS } from "#/components/inbox/section-visuals.ts";
 import { useOpenRepoPicker } from "#/components/repos/repo-picker.tsx";
 import { Button } from "#/components/ui/button.tsx";
+import { InboxLoadingSkeleton } from "#/components/ui/loading.tsx";
 import { RelativeTime } from "#/components/ui/relative-time.tsx";
 import { useSession, useSessionState } from "#/lib/session/provider.tsx";
+import { notifyAction } from "#/lib/toast.ts";
 import { cn } from "#/lib/utils.ts";
 
 export function InboxBoard() {
@@ -127,10 +130,16 @@ export function InboxBoard() {
 
     if (selectedCount === 0) {
         return (
-            <div className="flex flex-col items-start gap-3 rounded-lg border border-dashed p-8">
-                <p className="text-sm text-muted-foreground">
-                    Pick the repositories you triage and their pull requests will show up here.
-                </p>
+            <div className="flex flex-col items-start gap-4 rounded-xl border border-dashed border-sky-500/30 bg-sky-500/4 p-8">
+                <span className="grid size-10 place-items-center rounded-lg bg-sky-500/15 text-sky-700 dark:text-sky-300">
+                    <FolderGit2 className="size-5" aria-hidden="true" />
+                </span>
+                <div className="flex flex-col gap-1">
+                    <p className="text-sm font-medium text-foreground">No repositories selected</p>
+                    <p className="max-w-md text-sm text-muted-foreground">
+                        Pick the repositories you triage and their pull requests will show up here.
+                    </p>
+                </div>
                 <Button onClick={openRepoPicker}>Choose repositories</Button>
             </div>
         );
@@ -139,9 +148,12 @@ export function InboxBoard() {
     return (
         <div className="flex flex-col gap-3">
             <div className="flex items-center justify-between gap-3">
-                <p className="text-xs text-muted-foreground">
+                <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
                     {inbox.refreshing ? (
-                        "Syncing with GitHub…"
+                        <span className="inline-flex items-center gap-1.5 text-sky-700 dark:text-sky-300">
+                            <RefreshCw className="size-3 animate-spin" aria-hidden="true" />
+                            Syncing with GitHub…
+                        </span>
                     ) : inbox.lastLoadedAt ? (
                         <span className="inline-flex items-center gap-1">
                             Updated <RelativeTime iso={inbox.lastLoadedAt} />
@@ -149,7 +161,11 @@ export function InboxBoard() {
                     ) : (
                         "Not synced yet"
                     )}
-                    <span className="ml-2 hidden sm:inline">· j/k select · Enter open · ⌘K commands</span>
+                    <span className="hidden items-center gap-1 sm:inline-flex">
+                        <span aria-hidden="true">·</span>
+                        <Keyboard className="size-3" aria-hidden="true" />
+                        j/k select · Enter open · ⌘K commands
+                    </span>
                 </p>
                 <div className="flex items-center gap-2">
                     <SectionLayoutEditor />
@@ -157,7 +173,13 @@ export function InboxBoard() {
                         variant="outline"
                         size="sm"
                         disabled={inbox.refreshing}
-                        onClick={() => void session.refreshInbox()}
+                        onClick={() =>
+                            void notifyAction(() => session.refreshInbox(), {
+                                loading: "Refreshing inbox…",
+                                success: "Inbox refreshed",
+                                error: "Could not refresh the inbox.",
+                            })
+                        }
                     >
                         <RefreshCw className={inbox.refreshing ? "animate-spin" : undefined} />
                         Refresh
@@ -165,12 +187,14 @@ export function InboxBoard() {
                 </div>
             </div>
 
-            {inbox.error ? <p className="text-sm text-destructive">{inbox.error.message}</p> : null}
+            {inbox.error ? (
+                <p className="rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+                    {inbox.error.message}
+                </p>
+            ) : null}
 
             {inbox.status === "loading" ? (
-                <p className="rounded-lg border p-8 text-center text-sm text-muted-foreground">
-                    Loading pull requests…
-                </p>
+                <InboxLoadingSkeleton />
             ) : (
                 <div className="flex flex-col gap-2">
                     {sections.map((section) => (
@@ -202,22 +226,40 @@ function InboxSectionPanel({
     onToggle: () => void;
     onSelect: (key: string) => void;
 }) {
+    const visual = SECTION_VISUALS[section.id];
+    const Icon = visual.icon;
+    const count = section.pullRequests.length;
+
     return (
-        <section className="overflow-hidden rounded-lg border">
+        <section className={cn("overflow-hidden rounded-lg border border-l-[3px]", visual.accentClass)}>
             <h2>
                 <button
                     type="button"
                     onClick={onToggle}
                     aria-expanded={isExpanded}
-                    className="flex w-full cursor-pointer items-center gap-2 bg-muted/40 px-3 py-2 text-left text-sm font-medium hover:bg-muted"
+                    className={cn(
+                        "flex w-full cursor-pointer items-center gap-2 px-3 py-2 text-left text-sm font-medium transition-colors",
+                        visual.headerClass,
+                    )}
                 >
                     <ChevronRight
                         aria-hidden="true"
-                        className={cn("size-4 text-muted-foreground transition-transform", isExpanded && "rotate-90")}
+                        className={cn(
+                            "size-4 shrink-0 text-muted-foreground transition-transform",
+                            isExpanded && "rotate-90",
+                        )}
                     />
-                    {section.label}
-                    <span className="ml-auto text-xs tabular-nums text-muted-foreground">
-                        {section.pullRequests.length}
+                    <span className={cn("grid size-6 shrink-0 place-items-center rounded-md", visual.chipClass)}>
+                        <Icon className={cn("size-3.5", visual.iconClass)} aria-hidden="true" />
+                    </span>
+                    <span className="min-w-0 truncate">{section.label}</span>
+                    <span
+                        className={cn(
+                            "ml-auto rounded-full px-2 py-0.5 text-xs font-medium tabular-nums",
+                            count > 0 ? visual.countClass : "bg-muted/80 text-muted-foreground",
+                        )}
+                    >
+                        {count}
                     </span>
                 </button>
             </h2>
