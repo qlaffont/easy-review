@@ -65,7 +65,7 @@ describe("loading", () => {
     it("groups pull requests into the default sections", async () => {
         const session = await connectedSession();
         await session.loadInbox();
-        await session.setSectionHidden("waiting-for-reviewers", false);
+        await session.setSectionHidden("drafts", false);
 
         expect(sectionOf(session, "needs-your-review")?.pullRequests.map((entry) => entry.key)).toEqual(["acme/api#1"]);
         expect(sectionOf(session, "waiting-for-reviewers")?.pullRequests.map((entry) => entry.key)).toEqual([
@@ -184,6 +184,7 @@ describe("sections", () => {
         expect(session.state.state.inbox.expandedSections).toEqual([
             "needs-your-review",
             "returned-to-you",
+            "waiting-for-reviewers",
             "approved",
         ]);
     });
@@ -211,6 +212,7 @@ describe("sections", () => {
         expect(reloaded.state.state.inbox.expandedSections).toEqual([
             "needs-your-review",
             "returned-to-you",
+            "waiting-for-reviewers",
             "approved",
         ]);
     });
