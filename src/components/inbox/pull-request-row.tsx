@@ -1,5 +1,6 @@
 import { Link } from "@tanstack/react-router";
 import {
+    AlertTriangle,
     CircleDashed,
     GitMerge,
     GitPullRequest,
@@ -9,35 +10,120 @@ import {
 } from "lucide-react";
 import { memo } from "react";
 
-import type { PullRequestSummary } from "#/lib/session/types.ts";
+import type { PullRequestSummary, ReviewState } from "#/lib/session/types.ts";
 
 import { ChecksDot } from "#/components/pr/checks-dot.tsx";
 import { HelpTooltip } from "#/components/ui/help-tooltip.tsx";
 import { RelativeTime } from "#/components/ui/relative-time.tsx";
 import { cn } from "#/lib/utils.ts";
 
-function ReviewProgress({ pullRequest }: { pullRequest: PullRequestSummary }) {
-    const approvals = pullRequest.reviewers.filter((reviewer) => reviewer.state === "approved").length;
-    const changesRequested = pullRequest.reviewers.some((reviewer) => reviewer.state === "changes-requested");
-    const pending = pullRequest.reviewRequests.length;
+const REVIEW_STATUS_LABEL: Record<ReviewState, string> = {
+    approved: "Approved",
+    "changes-requested": "Changes requested",
+    commented: "Commented",
+    dismissed: "Dismissed",
+    pending: "Review requested",
+};
 
-    if (changesRequested) {
-        return <span className="text-rose-600 dark:text-rose-400">Changes requested</span>;
+const REVIEW_STATUS_RING: Record<ReviewState, string> = {
+    approved: "ring-[#1a7f37] dark:ring-[#3fb950]",
+    "changes-requested": "ring-[#cf222e] dark:ring-[#f85149]",
+    commented: "ring-slate-400 dark:ring-slate-500",
+    dismissed: "ring-slate-300 dark:ring-slate-600",
+    pending: "ring-amber-500 dark:ring-amber-400",
+};
+
+const REVIEW_STATUS_ORDER: Record<ReviewState, number> = {
+    "changes-requested": 0,
+    approved: 1,
+    pending: 2,
+    commented: 3,
+    dismissed: 4,
+};
+
+const MAX_VISIBLE_REVIEWERS = 5;
+
+type ReviewerChip = {
+    login: string;
+    state: ReviewState;
+};
+
+function collectReviewers(pullRequest: PullRequestSummary): Array<ReviewerChip> {
+    const byLogin = new Map<string, ReviewerChip>();
+
+    for (const reviewer of pullRequest.reviewers) {
+        byLogin.set(reviewer.login, { login: reviewer.login, state: reviewer.state });
     }
 
-    if (approvals > 0) {
-        return (
-            <span className="text-emerald-600 dark:text-emerald-400">
-                {approvals} approved{pending > 0 ? ` · ${pending} pending` : ""}
-            </span>
-        );
+    for (const login of pullRequest.reviewRequests) {
+        if (!byLogin.has(login)) {
+            byLogin.set(login, { login, state: "pending" });
+        }
     }
 
-    if (pending > 0) {
-        return <span className="text-sky-700 dark:text-sky-300">{pending} pending</span>;
+    return [...byLogin.values()].sort(
+        (a, b) => REVIEW_STATUS_ORDER[a.state] - REVIEW_STATUS_ORDER[b.state] || a.login.localeCompare(b.login),
+    );
+}
+
+function reviewerAvatarUrl(login: string): string | null {
+    // Teams are requested by name and are not GitHub user logins.
+    if (!/^[\w-]+$/.test(login) || login.includes(" ")) {
+        return null;
+    }
+    return `https://github.com/${login}.png?size=40`;
+}
+
+function ReviewerAvatars({ pullRequest }: { pullRequest: PullRequestSummary }) {
+    const reviewers = collectReviewers(pullRequest);
+
+    if (reviewers.length === 0) {
+        return <span className="text-muted-foreground">No reviewers</span>;
     }
 
-    return <span>No reviewers</span>;
+    const visible = reviewers.slice(0, MAX_VISIBLE_REVIEWERS);
+    const overflow = reviewers.length - visible.length;
+
+    return (
+        <span className="inline-flex items-center" aria-label={`${reviewers.length} reviewers`}>
+            {visible.map((reviewer, index) => {
+                const src = reviewerAvatarUrl(reviewer.login);
+                const label = `${reviewer.login} · ${REVIEW_STATUS_LABEL[reviewer.state]}`;
+
+                return (
+                    <HelpTooltip key={`${reviewer.login}-${reviewer.state}`} label={label}>
+                        <span
+                            className={cn(
+                                "relative inline-flex size-5 shrink-0 items-center justify-center overflow-hidden rounded-full bg-muted text-[9px] font-semibold uppercase text-muted-foreground ring-2 ring-offset-1 ring-offset-background",
+                                REVIEW_STATUS_RING[reviewer.state],
+                                index > 0 && "-ml-1.5",
+                            )}
+                            style={{ zIndex: visible.length - index }}
+                            aria-label={label}
+                        >
+                            {src ? (
+                                <img src={src} alt="" className="size-full object-cover" />
+                            ) : (
+                                reviewer.login.slice(0, 1)
+                            )}
+                        </span>
+                    </HelpTooltip>
+                );
+            })}
+            {overflow > 0 ? (
+                <HelpTooltip
+                    label={reviewers
+                        .slice(MAX_VISIBLE_REVIEWERS)
+                        .map((reviewer) => `${reviewer.login} · ${REVIEW_STATUS_LABEL[reviewer.state]}`)
+                        .join(", ")}
+                >
+                    <span className="relative -ml-1.5 inline-flex size-5 shrink-0 items-center justify-center rounded-full bg-muted text-[9px] font-medium text-muted-foreground ring-2 ring-muted-foreground/30 ring-offset-1 ring-offset-background">
+                        +{overflow}
+                    </span>
+                </HelpTooltip>
+            ) : null}
+        </span>
+    );
 }
 
 function PullRequestStateIcon({ pullRequest }: { pullRequest: PullRequestSummary }) {
@@ -68,6 +154,7 @@ export const PullRequestRow = memo(function PullRequestRow({
     selected?: boolean;
 }) {
     const [owner = "", repo = ""] = pullRequest.repository.split("/");
+    const hasConflicts = pullRequest.state === "open" && pullRequest.mergeable === "conflicting";
 
     return (
         <Link
@@ -86,6 +173,14 @@ export const PullRequestRow = memo(function PullRequestRow({
                 <span className="flex min-w-0 items-center gap-2">
                     <PullRequestStateIcon pullRequest={pullRequest} />
                     <span className="truncate font-medium text-foreground">{pullRequest.title}</span>
+                    {hasConflicts ? (
+                        <HelpTooltip label="This branch has conflicts that must be resolved">
+                            <span className="inline-flex shrink-0 items-center gap-1 text-xs font-medium text-amber-700 dark:text-amber-400">
+                                <AlertTriangle className="size-3" aria-hidden="true" />
+                                Conflicts
+                            </span>
+                        </HelpTooltip>
+                    ) : null}
                 </span>
                 <span className="flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
                     <span className="truncate">
@@ -93,12 +188,11 @@ export const PullRequestRow = memo(function PullRequestRow({
                     </span>
                     <span aria-hidden="true">·</span>
                     <span className="truncate">{pullRequest.author}</span>
-                    <span aria-hidden="true">·</span>
-                    <ReviewProgress pullRequest={pullRequest} />
                 </span>
             </span>
 
             <span className="flex shrink-0 items-center gap-3 text-xs text-muted-foreground tabular-nums">
+                <ReviewerAvatars pullRequest={pullRequest} />
                 {pullRequest.commentCount > 0 ? (
                     <HelpTooltip label={`${pullRequest.commentCount} comments`}>
                         <span className="flex items-center gap-1">

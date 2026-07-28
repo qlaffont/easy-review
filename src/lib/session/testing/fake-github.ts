@@ -23,6 +23,7 @@ import { applySuggestionsToFile } from "#/lib/session/apply-suggestion.ts";
 import { buildFileDiff } from "#/lib/session/build-file-diff.ts";
 import { stubForPath } from "#/lib/session/diff-policy.ts";
 import { EasyReviewError, unauthorized } from "#/lib/session/errors.ts";
+import { isRelatedAgeEligible, matchesRelatedRefs } from "#/lib/session/related-pull-requests.ts";
 
 export type FakeGithub = GithubClient & {
     /** Register a token GitHub will accept, together with the account behind it. */
@@ -39,6 +40,12 @@ export type FakeGithub = GithubClient & {
     setPullRequestFiles(token: string, repository: string, number: number, files: Array<FakeFileInput>): void;
     /** Repository sets asked for, one entry per `listPullRequests` call. */
     pullRequestQueries: Array<ReadonlyArray<string>>;
+    /** Related-PR scans, one entry per `listRelatedPullRequests` call. */
+    relatedPullRequestQueries: Array<{
+        repositories: ReadonlyArray<string>;
+        headRefName: string;
+        baseRefName: string;
+    }>;
     /** Paths asked for via `getPullRequestFileDiff`, in order. */
     fileDiffQueries: Array<string>;
     /** Submitted reviews, in order. */
@@ -163,6 +170,7 @@ const SUMMARY_FIELDS = [
     "deletions",
     "changedFiles",
     "commentCount",
+    "mergeable",
 ] as const satisfies ReadonlyArray<keyof PullRequestSummary>;
 
 /** The Inbox only ever sees the row-shaped fields, exactly as the real batch query returns. */
@@ -192,6 +200,7 @@ export function createFakeGithub(): FakeGithub {
     const assigneesByRepository = new Map<string, Array<RepositoryUser>>();
     const labelsByRepository = new Map<string, Array<RepositoryLabel>>();
     const pullRequestQueries: Array<ReadonlyArray<string>> = [];
+    const relatedPullRequestQueries: FakeGithub["relatedPullRequestQueries"] = [];
     const fileDiffQueries: Array<string> = [];
     const submittedReviews: FakeGithub["submittedReviews"] = [];
     const calls: Array<string> = [];
@@ -315,6 +324,7 @@ export function createFakeGithub(): FakeGithub {
     return {
         calls,
         pullRequestQueries,
+        relatedPullRequestQueries,
         fileDiffQueries,
         submittedReviews,
         addAccount(token, viewer) {
@@ -503,6 +513,27 @@ export function createFakeGithub(): FakeGithub {
                 const wanted = new Set(repositories);
                 return (pullRequestsByToken.get(token) ?? [])
                     .filter((pullRequest) => wanted.has(pullRequest.repository))
+                    .map(toSummary);
+            });
+        },
+        listRelatedPullRequests(token, input) {
+            relatedPullRequestQueries.push({
+                repositories: input.repositories,
+                headRefName: input.headRefName,
+                baseRefName: input.baseRefName,
+            });
+
+            return respond("listRelatedPullRequests", () => {
+                authenticate(token);
+                const wanted = new Set(input.repositories);
+                const nowMs = Date.now();
+                return (pullRequestsByToken.get(token) ?? [])
+                    .filter(
+                        (pullRequest) =>
+                            wanted.has(pullRequest.repository) &&
+                            matchesRelatedRefs(pullRequest, input.headRefName, input.baseRefName) &&
+                            isRelatedAgeEligible(pullRequest, nowMs),
+                    )
                     .map(toSummary);
             });
         },

@@ -1,4 +1,4 @@
-import { KeyRound, LogOut } from "lucide-react";
+import { Inbox, KeyRound, LogOut } from "lucide-react";
 
 import { RepoPickerTrigger } from "#/components/repos/repo-picker.tsx";
 import { Button } from "#/components/ui/button.tsx";
@@ -18,9 +18,14 @@ export function AppHeader({ onReplaceToken }: { onReplaceToken: () => void }) {
     const viewer = useSessionState((state) => state.auth.viewer);
 
     return (
-        <header className="flex h-12 items-center justify-between gap-4 border-b bg-background px-4">
+        <header className="flex h-12 items-center justify-between gap-4 bg-background px-4">
             <div className="flex items-center gap-3">
-                <span className="text-sm font-semibold tracking-tight">Easy Review</span>
+                <span className="flex items-center gap-2">
+                    <span className="grid size-7 place-items-center rounded-md border border-sky-500/35 bg-sky-500/15 text-sky-700 dark:border-sky-400/40 dark:text-sky-300">
+                        <Inbox className="size-3.5" aria-hidden="true" />
+                    </span>
+                    <span className="text-sm font-semibold tracking-tight">Easy Review</span>
+                </span>
                 <RepoPickerTrigger />
             </div>
 

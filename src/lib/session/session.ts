@@ -2,7 +2,14 @@ import { Store } from "@tanstack/store";
 
 import type { SuggestionChange } from "#/lib/session/apply-suggestion.ts";
 import type { SessionError } from "#/lib/session/errors.ts";
-import type { InboxSection, InboxSectionId, InboxSectionLayoutEntry } from "#/lib/session/inbox-sections.ts";
+import type {
+    InboxSection,
+    InboxSectionId,
+    InboxSectionLayoutEntry,
+    InboxSettings,
+    SectionColorId,
+    SectionIconId,
+} from "#/lib/session/inbox-sections.ts";
 import type { GithubClient, GithubViewer, KeyValueStore } from "#/lib/session/ports.ts";
 import type {
     DiffSide,
@@ -28,11 +35,17 @@ import type {
 
 import { EasyReviewError, missingToken, toSessionError, unauthorized } from "#/lib/session/errors.ts";
 import {
+    defaultExpandedSections,
     defaultSectionLayout,
     groupIntoSections,
+    INBOX_SETTINGS_VERSION,
+    normalizeExpandedSections,
+    normalizeHexColor,
     normalizeSectionLayout,
+    parseInboxSettings,
     visibleSectionDefinitions,
 } from "#/lib/session/inbox-sections.ts";
+import { mergeRelatedPullRequests, selectRelatedPullRequests } from "#/lib/session/related-pull-requests.ts";
 
 const TOKEN_KEY = "auth:token";
 const SELECTED_REPOS_KEY = "repos:selected";
@@ -49,7 +62,7 @@ function draftStorageKey(login: string, repository: string, number: number): str
     return `review-draft:${login}:${repository}#${number}`;
 }
 
-const DEFAULT_EXPANDED_SECTIONS: Array<InboxSectionId> = ["needs-your-review", "returned-to-you"];
+const DEFAULT_EXPANDED_SECTIONS: Array<InboxSectionId> = defaultExpandedSections();
 
 export type AuthStatus = "restoring" | "unauthenticated" | "verifying" | "authenticated";
 
@@ -142,6 +155,17 @@ export type PullRequestCommitsState = {
     error: SessionError | null;
 };
 
+export type RelatedPullRequestsState = {
+    status: "idle" | "loading" | "ready" | "error";
+    items: Array<PullRequestSummary>;
+    /** True after the user asked to search every discovered repo (not just the allowlist). */
+    searchedAllDiscovered: boolean;
+    expanding: boolean;
+    headRefName: string | null;
+    baseRefName: string | null;
+    error: SessionError | null;
+};
+
 export type RepositoryMetadataState = {
     status: "idle" | "loading" | "ready" | "error";
     users: Array<RepositoryUser>;
@@ -163,6 +187,8 @@ export type SessionState = {
     conversationComments: Record<string, ConversationCommentsState>;
     /** Commits tab list keyed by `owner/repo#number`. */
     pullRequestCommits: Record<string, PullRequestCommitsState>;
+    /** Cross-repo siblings sharing head+base, keyed by `owner/repo#number`. */
+    relatedPullRequests: Record<string, RelatedPullRequestsState>;
     /** Assignable users + labels keyed by `owner/repo`. */
     repositoryMetadata: Record<string, RepositoryMetadataState>;
 };
@@ -253,6 +279,15 @@ export function createEasyReviewSession({ github, store, oauth }: EasyReviewSess
     const initialThreadsState: ReviewThreadsState = { status: "idle", items: [], error: null };
     const initialConversationState: ConversationCommentsState = { status: "idle", items: [], error: null };
     const initialCommitsState: PullRequestCommitsState = { status: "idle", items: [], error: null };
+    const initialRelatedState: RelatedPullRequestsState = {
+        status: "idle",
+        items: [],
+        searchedAllDiscovered: false,
+        expanding: false,
+        headRefName: null,
+        baseRefName: null,
+        error: null,
+    };
     const initialRepositoryMetadata: RepositoryMetadataState = {
         status: "idle",
         users: [],
@@ -269,6 +304,7 @@ export function createEasyReviewSession({ github, store, oauth }: EasyReviewSess
         reviewThreads: {},
         conversationComments: {},
         pullRequestCommits: {},
+        relatedPullRequests: {},
         repositoryMetadata: {},
     });
 
@@ -289,6 +325,7 @@ export function createEasyReviewSession({ github, store, oauth }: EasyReviewSess
     const latestReviewThreadLoads = new Map<string, number>();
     const latestConversationCommentLoads = new Map<string, number>();
     const latestPullRequestCommitLoads = new Map<string, number>();
+    const latestRelatedPullRequestLoads = new Map<string, number>();
     const latestRepositoryMetadataLoads = new Map<string, number>();
     /** Last-write-wins for summary typing so overlapping persists cannot drop characters. */
     const latestDraftBodyWrites = new Map<string, number>();
@@ -389,6 +426,10 @@ export function createEasyReviewSession({ github, store, oauth }: EasyReviewSess
             latestReviewThreadLoads.set(key, attempt + 1);
         }
 
+        for (const [key, attempt] of latestRelatedPullRequestLoads) {
+            latestRelatedPullRequestLoads.set(key, attempt + 1);
+        }
+
         await Promise.all([
             store.remove(SELECTED_REPOS_KEY),
             store.remove(REPOS_CACHE_KEY),
@@ -407,6 +448,7 @@ export function createEasyReviewSession({ github, store, oauth }: EasyReviewSess
             reviewThreads: {},
             conversationComments: {},
             pullRequestCommits: {},
+            relatedPullRequests: {},
             repositoryMetadata: {},
         }));
     }
@@ -443,7 +485,10 @@ export function createEasyReviewSession({ github, store, oauth }: EasyReviewSess
             pullRequests: inbox?.pullRequests ?? [],
             lastLoadedAt: inbox?.lastLoadedAt ?? null,
             status: inbox?.pullRequests.length ? "ready" : "idle",
-            expandedSections: expanded ?? DEFAULT_EXPANDED_SECTIONS,
+            expandedSections: normalizeExpandedSections(
+                expanded,
+                defaultExpandedSections(normalizeSectionLayout(sections)),
+            ),
             sectionLayout: normalizeSectionLayout(sections),
         });
     }
@@ -737,25 +782,84 @@ export function createEasyReviewSession({ github, store, oauth }: EasyReviewSess
         );
     }
 
+    async function setSectionColor(id: InboxSectionId, color: SectionColorId): Promise<void> {
+        await persistSectionLayout(
+            state.state.inbox.sectionLayout.map((entry) =>
+                entry.id === id ? { ...entry, color, customColor: null } : entry,
+            ),
+        );
+    }
+
+    async function setSectionCustomColor(id: InboxSectionId, customColor: string): Promise<void> {
+        const hex = normalizeHexColor(customColor);
+        if (!hex) {
+            return;
+        }
+
+        await persistSectionLayout(
+            state.state.inbox.sectionLayout.map((entry) => (entry.id === id ? { ...entry, customColor: hex } : entry)),
+        );
+    }
+
+    async function setSectionIcon(id: InboxSectionId, icon: SectionIconId): Promise<void> {
+        await persistSectionLayout(
+            state.state.inbox.sectionLayout.map((entry) => (entry.id === id ? { ...entry, icon } : entry)),
+        );
+    }
+
+    async function setSectionDefaultExpanded(id: InboxSectionId, defaultExpanded: boolean): Promise<void> {
+        await persistSectionLayout(
+            state.state.inbox.sectionLayout.map((entry) => (entry.id === id ? { ...entry, defaultExpanded } : entry)),
+        );
+    }
+
     async function moveSection(id: InboxSectionId, direction: "up" | "down"): Promise<void> {
         const layout = [...state.state.inbox.sectionLayout];
-        const index = layout.findIndex((entry) => entry.id === id);
-        if (index < 0) {
+        const visibleIndexes = layout.flatMap((entry, index) => (entry.hidden ? [] : [index]));
+        const visiblePos = visibleIndexes.findIndex((index) => layout[index]?.id === id);
+        if (visiblePos < 0) {
             return;
         }
 
-        const target = direction === "up" ? index - 1 : index + 1;
-        if (target < 0 || target >= layout.length) {
+        const swapPos = direction === "up" ? visiblePos - 1 : visiblePos + 1;
+        if (swapPos < 0 || swapPos >= visibleIndexes.length) {
             return;
         }
 
-        const [entry] = layout.splice(index, 1);
-        layout.splice(target, 0, entry!);
+        const from = visibleIndexes[visiblePos]!;
+        const to = visibleIndexes[swapPos]!;
+        const current = layout[from]!;
+        layout[from] = layout[to]!;
+        layout[to] = current;
         await persistSectionLayout(layout);
     }
 
     async function resetSectionLayout(): Promise<void> {
-        await persistSectionLayout(defaultSectionLayout());
+        const layout = defaultSectionLayout();
+        await persistSectionLayout(layout);
+        const expanded = defaultExpandedSections(layout);
+        setInbox({ expandedSections: expanded });
+        await store.set(INBOX_EXPANDED_KEY, JSON.stringify(expanded));
+    }
+
+    function getInboxSettings(): InboxSettings {
+        return {
+            version: INBOX_SETTINGS_VERSION,
+            expandedSections: state.state.inbox.expandedSections,
+            sectionLayout: state.state.inbox.sectionLayout,
+        };
+    }
+
+    async function importInboxSettings(raw: unknown): Promise<void> {
+        const settings = parseInboxSettings(raw, defaultExpandedSections(state.state.inbox.sectionLayout));
+        setInbox({
+            expandedSections: settings.expandedSections,
+            sectionLayout: settings.sectionLayout,
+        });
+        await Promise.all([
+            store.set(INBOX_EXPANDED_KEY, JSON.stringify(settings.expandedSections)),
+            store.set(INBOX_SECTIONS_KEY, JSON.stringify(settings.sectionLayout)),
+        ]);
     }
 
     /** Ask GitHub for one pull request in full. */
@@ -1363,6 +1467,223 @@ export function createEasyReviewSession({ github, store, oauth }: EasyReviewSess
         return state.state.pullRequestCommits[pullRequestKey(repository, number)] ?? initialCommitsState;
     }
 
+    function relatedRefsFor(repository: string, number: number): { headRefName: string; baseRefName: string } | null {
+        const page = getPullRequestPage(repository, number);
+        const source = page.detail ?? page.summary;
+        if (!source) {
+            return null;
+        }
+
+        return { headRefName: source.headRefName, baseRefName: source.baseRefName };
+    }
+
+    async function loadRelatedPullRequests(repository: string, number: number): Promise<void> {
+        const key = pullRequestKey(repository, number);
+        const refs = relatedRefsFor(repository, number);
+        if (!refs) {
+            return;
+        }
+
+        const current = state.state.relatedPullRequests[key];
+        if (
+            current &&
+            (current.status === "loading" || current.status === "ready") &&
+            current.headRefName === refs.headRefName &&
+            current.baseRefName === refs.baseRefName
+        ) {
+            return;
+        }
+
+        const attempt = (latestRelatedPullRequestLoads.get(key) ?? 0) + 1;
+        latestRelatedPullRequestLoads.set(key, attempt);
+
+        const repositories = state.state.repos.selected.filter((nameWithOwner) => nameWithOwner !== repository);
+
+        state.setState((prev) => ({
+            ...prev,
+            relatedPullRequests: {
+                ...prev.relatedPullRequests,
+                [key]: {
+                    status: "loading",
+                    items: prev.relatedPullRequests[key]?.items ?? [],
+                    searchedAllDiscovered: false,
+                    expanding: false,
+                    headRefName: refs.headRefName,
+                    baseRefName: refs.baseRefName,
+                    error: null,
+                },
+            },
+        }));
+
+        try {
+            const fetched =
+                repositories.length === 0
+                    ? []
+                    : await github.listRelatedPullRequests(requireToken(), {
+                          repositories,
+                          headRefName: refs.headRefName,
+                          baseRefName: refs.baseRefName,
+                      });
+
+            if (attempt !== latestRelatedPullRequestLoads.get(key)) {
+                return;
+            }
+
+            const items = selectRelatedPullRequests({
+                pullRequests: fetched,
+                headRefName: refs.headRefName,
+                baseRefName: refs.baseRefName,
+                excludeRepository: repository,
+            });
+
+            state.setState((prev) => ({
+                ...prev,
+                relatedPullRequests: {
+                    ...prev.relatedPullRequests,
+                    [key]: {
+                        status: "ready",
+                        items,
+                        searchedAllDiscovered: false,
+                        expanding: false,
+                        headRefName: refs.headRefName,
+                        baseRefName: refs.baseRefName,
+                        error: null,
+                    },
+                },
+            }));
+        } catch (error) {
+            if (attempt !== latestRelatedPullRequestLoads.get(key)) {
+                return;
+            }
+
+            state.setState((prev) => ({
+                ...prev,
+                relatedPullRequests: {
+                    ...prev.relatedPullRequests,
+                    [key]: {
+                        status: "error",
+                        items: prev.relatedPullRequests[key]?.items ?? [],
+                        searchedAllDiscovered: prev.relatedPullRequests[key]?.searchedAllDiscovered ?? false,
+                        expanding: false,
+                        headRefName: refs.headRefName,
+                        baseRefName: refs.baseRefName,
+                        error: toSessionError(error),
+                    },
+                },
+            }));
+        }
+    }
+
+    async function expandRelatedPullRequests(repository: string, number: number): Promise<void> {
+        const key = pullRequestKey(repository, number);
+        const refs = relatedRefsFor(repository, number);
+        if (!refs) {
+            return;
+        }
+
+        const current = state.state.relatedPullRequests[key];
+        if (current?.expanding || current?.searchedAllDiscovered) {
+            return;
+        }
+
+        const attempt = (latestRelatedPullRequestLoads.get(key) ?? 0) + 1;
+        latestRelatedPullRequestLoads.set(key, attempt);
+
+        state.setState((prev) => ({
+            ...prev,
+            relatedPullRequests: {
+                ...prev.relatedPullRequests,
+                [key]: {
+                    status: prev.relatedPullRequests[key]?.status === "ready" ? "ready" : "loading",
+                    items: prev.relatedPullRequests[key]?.items ?? [],
+                    searchedAllDiscovered: false,
+                    expanding: true,
+                    headRefName: refs.headRefName,
+                    baseRefName: refs.baseRefName,
+                    error: null,
+                },
+            },
+        }));
+
+        try {
+            if (state.state.repos.status !== "ready" && state.state.repos.available.length === 0) {
+                await refreshRepositories();
+            }
+
+            if (attempt !== latestRelatedPullRequestLoads.get(key)) {
+                return;
+            }
+
+            const allowlist = new Set(state.state.repos.selected);
+            const repositories = state.state.repos.available
+                .map((entry) => entry.nameWithOwner)
+                .filter((nameWithOwner) => nameWithOwner !== repository && !allowlist.has(nameWithOwner));
+
+            const fetched =
+                repositories.length === 0
+                    ? []
+                    : await github.listRelatedPullRequests(requireToken(), {
+                          repositories,
+                          headRefName: refs.headRefName,
+                          baseRefName: refs.baseRefName,
+                      });
+
+            if (attempt !== latestRelatedPullRequestLoads.get(key)) {
+                return;
+            }
+
+            const incoming = selectRelatedPullRequests({
+                pullRequests: fetched,
+                headRefName: refs.headRefName,
+                baseRefName: refs.baseRefName,
+                excludeRepository: repository,
+            });
+
+            state.setState((prev) => {
+                const previous = prev.relatedPullRequests[key];
+                return {
+                    ...prev,
+                    relatedPullRequests: {
+                        ...prev.relatedPullRequests,
+                        [key]: {
+                            status: "ready",
+                            items: mergeRelatedPullRequests(previous?.items ?? [], incoming),
+                            searchedAllDiscovered: true,
+                            expanding: false,
+                            headRefName: refs.headRefName,
+                            baseRefName: refs.baseRefName,
+                            error: null,
+                        },
+                    },
+                };
+            });
+        } catch (error) {
+            if (attempt !== latestRelatedPullRequestLoads.get(key)) {
+                return;
+            }
+
+            state.setState((prev) => ({
+                ...prev,
+                relatedPullRequests: {
+                    ...prev.relatedPullRequests,
+                    [key]: {
+                        status: prev.relatedPullRequests[key]?.items.length ? "ready" : "error",
+                        items: prev.relatedPullRequests[key]?.items ?? [],
+                        searchedAllDiscovered: prev.relatedPullRequests[key]?.searchedAllDiscovered ?? false,
+                        expanding: false,
+                        headRefName: refs.headRefName,
+                        baseRefName: refs.baseRefName,
+                        error: toSessionError(error),
+                    },
+                },
+            }));
+        }
+    }
+
+    function getRelatedPullRequests(repository: string, number: number): RelatedPullRequestsState {
+        return state.state.relatedPullRequests[pullRequestKey(repository, number)] ?? initialRelatedState;
+    }
+
     async function addPullRequestComment(
         repository: string,
         number: number,
@@ -1832,8 +2153,14 @@ export function createEasyReviewSession({ github, store, oauth }: EasyReviewSess
         getSectionLayout,
         setSectionHidden,
         setSectionLabel,
+        setSectionColor,
+        setSectionCustomColor,
+        setSectionIcon,
+        setSectionDefaultExpanded,
         moveSection,
         resetSectionLayout,
+        getInboxSettings,
+        importInboxSettings,
         getInboxSections,
         loadPullRequest,
         refreshPullRequest,
@@ -1860,6 +2187,9 @@ export function createEasyReviewSession({ github, store, oauth }: EasyReviewSess
         getConversationComments,
         loadPullRequestCommits,
         getPullRequestCommits,
+        loadRelatedPullRequests,
+        expandRelatedPullRequests,
+        getRelatedPullRequests,
         addPullRequestComment,
         loadRepositoryMetadata,
         getRepositoryMetadata,
@@ -1904,6 +2234,7 @@ function toInboxSummary(detail: PullRequestDetail): PullRequestSummary {
         deletions: detail.deletions,
         changedFiles: detail.changedFiles,
         commentCount: detail.commentCount,
+        mergeable: detail.mergeable,
     };
 }
 

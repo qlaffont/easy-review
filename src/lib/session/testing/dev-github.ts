@@ -235,6 +235,29 @@ export function createSeededGithub(): GithubClient {
         }
     }
 
+    // Shared head/base across repos so the Related sidebar has siblings in fake mode.
+    for (const [index, repository] of REPOSITORIES.entries()) {
+        const number = 200 + index;
+        github.addPullRequest(DEV_TOKEN, {
+            repository,
+            number,
+            title: `Cross-repo: ${repository.split("/")[1] ?? repository}`,
+            author: DEV_LOGIN,
+            headRefName: "feature/cross-repo",
+            baseRefName: "main",
+            updatedAt: faker.date.recent({ days: 3 }).toISOString(),
+            createdAt: faker.date.recent({ days: 8 }).toISOString(),
+            checks: "success",
+            additions: 12,
+            deletions: 2,
+            changedFiles: 2,
+            body: "Sibling PR for related-branch demos.",
+            headSha: faker.git.commitSha(),
+            checkRuns: checkRuns("success"),
+        });
+        github.setPullRequestFiles(DEV_TOKEN, repository, number, seedFiles(number));
+    }
+
     return github;
 }
 

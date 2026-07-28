@@ -3,7 +3,6 @@ import {
     AtSign,
     Bold,
     Code,
-    Command,
     FileText,
     Heading2,
     Italic,
@@ -450,7 +449,7 @@ export function MarkdownComposer({
                             mention
                         </span>
                         <span className="inline-flex items-center gap-1">
-                            <Command className="size-3" aria-hidden="true" />
+                            <kbd className="font-mono text-[11px] leading-none">/</kbd>
                             commands
                         </span>
                         <span className="text-muted-foreground/70">⌘↵</span>
@@ -469,9 +468,7 @@ export function MarkdownComposer({
                         <li>
                             <span className="inline-flex items-center gap-1.5 rounded-md px-1.5 py-1">
                                 <AtSign className="size-3.5 shrink-0" aria-hidden="true" />
-                                <span>
-                                    <kbd className="font-mono text-[11px]">@</kbd> mention
-                                </span>
+                                <span>mention</span>
                             </span>
                         </li>
                         <li aria-hidden="true" className="text-border">
@@ -479,10 +476,8 @@ export function MarkdownComposer({
                         </li>
                         <li>
                             <span className="inline-flex items-center gap-1.5 rounded-md px-1.5 py-1">
-                                <Command className="size-3.5 shrink-0" aria-hidden="true" />
-                                <span>
-                                    <kbd className="font-mono text-[11px]">/</kbd> commands
-                                </span>
+                                <kbd className="font-mono text-[11px]">/</kbd>
+                                <span>commands</span>
                             </span>
                         </li>
                     </ul>

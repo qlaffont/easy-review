@@ -1,7 +1,9 @@
+import { HotkeysProvider } from "@tanstack/react-hotkeys";
 import { useRouterState } from "@tanstack/react-router";
 import { useState } from "react";
 
 import { ActionsProvider } from "#/components/actions/actions-provider.tsx";
+import { ClipboardHotkeys } from "#/components/actions/clipboard-hotkeys.tsx";
 import { AppHeader } from "#/components/app-header.tsx";
 import { ConnectTokenScreen } from "#/components/auth/connect-token-screen.tsx";
 import { CommandPalette } from "#/components/command-palette.tsx";
@@ -31,13 +33,21 @@ export function SessionGate({ children }: { children: React.ReactNode }) {
 
     return (
         <RepoPickerProvider>
-            <ActionsProvider>
-                <div className="flex min-h-svh flex-col">
-                    {isInbox ? <AppHeader onReplaceToken={() => setReplacingToken(true)} /> : null}
-                    <main className="flex-1">{children}</main>
-                </div>
-                <CommandPalette />
-            </ActionsProvider>
+            <HotkeysProvider>
+                <ActionsProvider>
+                    <ClipboardHotkeys>
+                        <div className="flex min-h-svh flex-col">
+                            {isInbox ? (
+                                <div className="sticky top-0 z-20 border-b bg-background">
+                                    <AppHeader onReplaceToken={() => setReplacingToken(true)} />
+                                </div>
+                            ) : null}
+                            <main className="flex-1">{children}</main>
+                        </div>
+                        <CommandPalette />
+                    </ClipboardHotkeys>
+                </ActionsProvider>
+            </HotkeysProvider>
         </RepoPickerProvider>
     );
 }

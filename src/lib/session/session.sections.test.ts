@@ -57,6 +57,26 @@ describe("inbox section customization", () => {
         );
     });
 
+    it("reorders visible sections without changing hidden neighbors", async () => {
+        const session = await connectedWithInbox();
+        await session.setSectionHidden("returned-to-you", true);
+
+        // Visible order starts: needs-your-review, approved, …
+        await session.moveSection("approved", "up");
+
+        expect(session.getSectionLayout().map((entry) => entry.id)).toEqual([
+            "approved",
+            "returned-to-you",
+            "needs-your-review",
+            "waiting-for-reviewers",
+            "drafts",
+            "merging-and-recently-merged",
+            "waiting-for-author",
+            "other",
+        ]);
+        expect(session.getSectionLayout().find((entry) => entry.id === "returned-to-you")?.hidden).toBe(true);
+    });
+
     it("reorders sections and can reset to the Graphite defaults", async () => {
         const session = await connectedWithInbox();
         const first = session.getSectionLayout()[0]!.id;
@@ -66,6 +86,89 @@ describe("inbox section customization", () => {
 
         await session.resetSectionLayout();
         expect(session.getSectionLayout()[0]?.id).toBe("needs-your-review");
-        expect(session.getSectionLayout().every((entry) => !entry.hidden)).toBe(true);
+        expect(session.getSectionLayout().find((entry) => entry.id === "waiting-for-reviewers")?.hidden).toBe(true);
+        expect(
+            session
+                .getSectionLayout()
+                .filter((entry) => entry.id !== "waiting-for-reviewers")
+                .every((entry) => !entry.hidden),
+        ).toBe(true);
+    });
+
+    it("persists default-expanded preference across reload", async () => {
+        const session = await connectedWithInbox();
+        await session.setSectionDefaultExpanded("drafts", true);
+        await session.setSectionDefaultExpanded("approved", false);
+
+        const reloaded = createEasyReviewSession({ github, store });
+        await reloaded.restore();
+
+        expect(reloaded.getSectionLayout().find((entry) => entry.id === "drafts")?.defaultExpanded).toBe(true);
+        expect(reloaded.getSectionLayout().find((entry) => entry.id === "approved")?.defaultExpanded).toBe(false);
+    });
+
+    it("persists color and icon across reload", async () => {
+        const session = await connectedWithInbox();
+        await session.setSectionColor("needs-your-review", "violet");
+        await session.setSectionIcon("needs-your-review", "flame");
+
+        const reloaded = createEasyReviewSession({ github, store });
+        await reloaded.restore();
+
+        expect(reloaded.getSectionLayout().find((entry) => entry.id === "needs-your-review")).toMatchObject({
+            color: "violet",
+            icon: "flame",
+            customColor: null,
+        });
+    });
+
+    it("persists a custom hex color across reload", async () => {
+        const session = await connectedWithInbox();
+        await session.setSectionCustomColor("approved", "#AbC");
+
+        const reloaded = createEasyReviewSession({ github, store });
+        await reloaded.restore();
+
+        expect(reloaded.getSectionLayout().find((entry) => entry.id === "approved")?.customColor).toBe("#aabbcc");
+        await session.setSectionColor("approved", "rose");
+        expect(session.getSectionLayout().find((entry) => entry.id === "approved")?.customColor).toBeNull();
+    });
+
+    it("exports and imports collapse + layout preferences", async () => {
+        const session = await connectedWithInbox();
+        await session.setSectionHidden("drafts", true);
+        await session.setSectionLabel("approved", "Ship it");
+        await session.setSectionColor("approved", "rose");
+        await session.setSectionIcon("approved", "star");
+        await session.toggleSection("drafts");
+
+        const exported = session.getInboxSettings();
+        expect(exported.version).toBe(1);
+        expect(exported.expandedSections).toContain("drafts");
+        expect(exported.expandedSections).toContain("approved");
+
+        await session.importInboxSettings({
+            version: 1,
+            expandedSections: ["drafts"],
+            sectionLayout: [],
+        });
+        expect(session.state.state.inbox.expandedSections).toEqual(["drafts"]);
+        expect(session.getSectionLayout().find((entry) => entry.id === "waiting-for-reviewers")?.hidden).toBe(true);
+        expect(
+            session
+                .getSectionLayout()
+                .filter((entry) => entry.id !== "waiting-for-reviewers")
+                .every((entry) => !entry.hidden && entry.label),
+        ).toBeTruthy();
+
+        await session.importInboxSettings(exported);
+
+        expect(session.getSectionLayout().find((entry) => entry.id === "drafts")?.hidden).toBe(true);
+        expect(session.getSectionLayout().find((entry) => entry.id === "approved")).toMatchObject({
+            label: "Ship it",
+            color: "rose",
+            icon: "star",
+        });
+        expect(session.state.state.inbox.expandedSections).toEqual(exported.expandedSections);
     });
 });

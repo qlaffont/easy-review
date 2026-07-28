@@ -58,9 +58,12 @@ export function PullRequestCommits({ repository, number }: { repository: string;
                 <ol className="flex flex-col divide-y">
                     {commits.items.map((commit) => (
                         <li key={commit.oid} className="flex min-w-0 items-start gap-3 px-3 py-2.5">
-                            {commit.authorAvatarUrl ? (
+                            {commit.authorAvatarUrl ||
+                            (/^[\w-]+$/.test(commit.authorLogin) && commit.authorLogin !== "ghost") ? (
                                 <img
-                                    src={commit.authorAvatarUrl}
+                                    src={
+                                        commit.authorAvatarUrl ?? `https://github.com/${commit.authorLogin}.png?size=48`
+                                    }
                                     alt=""
                                     className="mt-0.5 size-6 shrink-0 rounded-full"
                                 />

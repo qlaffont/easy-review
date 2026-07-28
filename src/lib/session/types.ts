@@ -14,6 +14,9 @@ export type ReviewerStatus = {
     reviewId: number;
 };
 
+/** Whether GitHub thinks the branches can still be combined. */
+export type MergeableState = "mergeable" | "conflicting" | "unknown";
+
 /** Everything an Inbox row needs. Deliberately flat so it can be cached as JSON. */
 export type PullRequestSummary = {
     /** `owner/repo#number`, stable across refreshes. */
@@ -41,6 +44,8 @@ export type PullRequestSummary = {
     changedFiles: number;
     /** Issue + review comments — GitHub Conversation tab badge (`totalCommentsCount`). */
     commentCount: number;
+    /** Whether GitHub can merge head into base — used for inbox conflict signals. */
+    mergeable: MergeableState;
 };
 
 export type Label = {
@@ -69,9 +74,6 @@ export type CheckRun = {
     /** Short status line under the name, e.g. "Failing after 1m" / "Successful in 6s". */
     summary: string | null;
 };
-
-/** Whether GitHub thinks the branches can still be combined. */
-export type MergeableState = "mergeable" | "conflicting" | "unknown";
 
 /** How GitHub should combine the head into the base when merging. */
 export type MergeMethod = "merge" | "squash" | "rebase";
@@ -124,7 +126,6 @@ export type PullRequestDetail = PullRequestSummary & {
      * credential permissions (classic OAuth vs limited scopes).
      */
     checkCount: number;
-    mergeable: MergeableState;
     /**
      * From the base branch protection rule. `null` when the base has no (readable) approving-review
      * requirement — never invent a count client-side.

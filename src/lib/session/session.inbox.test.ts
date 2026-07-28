@@ -65,6 +65,7 @@ describe("loading", () => {
     it("groups pull requests into the default sections", async () => {
         const session = await connectedSession();
         await session.loadInbox();
+        await session.setSectionHidden("waiting-for-reviewers", false);
 
         expect(sectionOf(session, "needs-your-review")?.pullRequests.map((entry) => entry.key)).toEqual(["acme/api#1"]);
         expect(sectionOf(session, "waiting-for-reviewers")?.pullRequests.map((entry) => entry.key)).toEqual([
@@ -177,10 +178,14 @@ describe("cache and revalidation", () => {
 });
 
 describe("sections", () => {
-    it("opens with the two sections that need attention", async () => {
+    it("opens with the sections that need attention by default", async () => {
         const session = await connectedSession();
 
-        expect(session.state.state.inbox.expandedSections).toEqual(["needs-your-review", "returned-to-you"]);
+        expect(session.state.state.inbox.expandedSections).toEqual([
+            "needs-your-review",
+            "returned-to-you",
+            "approved",
+        ]);
     });
 
     it("revalidates when a section is opened, but not when it is closed", async () => {

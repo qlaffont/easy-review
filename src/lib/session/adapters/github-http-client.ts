@@ -30,6 +30,12 @@ import { applySuggestionsToFile, type SuggestionChange } from "#/lib/session/app
 import { buildFileDiff } from "#/lib/session/build-file-diff.ts";
 import { HUGE_FILE_BYTES, stubForPath } from "#/lib/session/diff-policy.ts";
 import { EasyReviewError } from "#/lib/session/errors.ts";
+import {
+    RELATED_CLOSED_OR_MERGED_FETCH_CAP,
+    RELATED_OPEN_FETCH_CAP,
+    isRelatedAgeEligible,
+    matchesRelatedRefs,
+} from "#/lib/session/related-pull-requests.ts";
 
 const DEFAULT_GRAPHQL_URL = "https://api.github.com/graphql";
 const DEFAULT_REST_URL = "https://api.github.com";
@@ -56,6 +62,10 @@ const REPOSITORY_PAGE_LIMIT = 10;
 const INBOX_BATCH_SIZE = 10;
 const OPEN_PULL_REQUESTS_PER_REPOSITORY = 30;
 const MERGED_PULL_REQUESTS_PER_REPOSITORY = 10;
+/** Related scans are heavier (open+merged+closed); keep GraphQL documents small. */
+const RELATED_BATCH_SIZE = 4;
+/** Cap parallel related batches so expand-all does not stampede GitHub / the proxy. */
+const RELATED_BATCH_CONCURRENCY = 2;
 /** GraphQL caps `pullRequest.files` at 100 per page. */
 const FILES_PAGE_SIZE = 100;
 const FILES_PAGE_LIMIT = 20;
@@ -110,6 +120,10 @@ function errorForStatus(response: Response): EasyReviewError {
 
     if (response.status === 404) {
         return new EasyReviewError("not-found", "GitHub could not find that resource, or this session cannot see it.");
+    }
+
+    if (response.status === 502 || response.status === 503 || response.status === 504) {
+        return new EasyReviewError("unknown", "GitHub is temporarily unreachable. Try again in a moment.");
     }
 
     return new EasyReviewError("unknown", `GitHub replied with an unexpected status (${response.status}).`);
@@ -302,6 +316,71 @@ export function createGithubHttpClient(
                           ],
                 ),
             );
+        },
+
+        async listRelatedPullRequests(token, input) {
+            if (input.repositories.length === 0) {
+                return [];
+            }
+
+            const batches: Array<Array<string>> = [];
+            for (let index = 0; index < input.repositories.length; index += RELATED_BATCH_SIZE) {
+                batches.push(input.repositories.slice(index, index + RELATED_BATCH_SIZE));
+            }
+
+            const nowMs = Date.now();
+            const matched: Array<PullRequestSummary> = [];
+            let lastError: unknown = null;
+            let succeeded = 0;
+
+            for (let index = 0; index < batches.length; index += RELATED_BATCH_CONCURRENCY) {
+                const slice = batches.slice(index, index + RELATED_BATCH_CONCURRENCY);
+                const pages = await Promise.all(
+                    slice.map(async (batch) => {
+                        try {
+                            return await graphql<RelatedPullRequestsQuery>(token, buildRelatedQuery(batch), undefined, {
+                                keepPartial: true,
+                            });
+                        } catch (error) {
+                            lastError = error;
+                            return null;
+                        }
+                    }),
+                );
+
+                for (const page of pages) {
+                    if (page === null) {
+                        continue;
+                    }
+
+                    succeeded += 1;
+                    for (const repository of Object.values(page)) {
+                        if (repository === null) {
+                            continue;
+                        }
+
+                        for (const node of [
+                            ...repository.open.nodes,
+                            ...repository.merged.nodes,
+                            ...repository.closed.nodes,
+                        ]) {
+                            const pullRequest = toRelatedPullRequestSummary(node);
+                            if (
+                                matchesRelatedRefs(pullRequest, input.headRefName, input.baseRefName) &&
+                                isRelatedAgeEligible(pullRequest, nowMs)
+                            ) {
+                                matched.push(pullRequest);
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (succeeded === 0 && lastError) {
+                throw lastError;
+            }
+
+            return matched;
         },
 
         async getPullRequest(token, repository, number) {
@@ -627,14 +706,14 @@ export function createGithubHttpClient(
                     if (!commit) {
                         continue;
                     }
-                    const authorUser = commit.author?.user;
+                    const author = resolveCommitAuthor(commit.author);
                     commits.push({
                         oid: commit.oid,
                         abbreviatedOid: commit.abbreviatedOid,
                         messageHeadline: commit.messageHeadline,
                         committedAt: commit.committedDate,
-                        authorLogin: authorUser?.login ?? commit.author?.name ?? "ghost",
-                        authorAvatarUrl: authorUser?.avatarUrl ?? null,
+                        authorLogin: author.login,
+                        authorAvatarUrl: author.avatarUrl,
                         url: commit.url,
                         checkState: toCheckState(commit.statusCheckRollup?.state),
                     });
@@ -1121,11 +1200,14 @@ export function createGithubHttpClient(
     }
 }
 
-/** Encode each path segment so nested paths survive the Contents API. */
+/** Encode each path segment so nested paths survive the Contents API.
+ * Dots are encoded too: Vite's dev middleware treats bare `.ts` / `.tsx` / `.css` URLs under
+ * `/api/github/...` as modules and returns 404 before the proxy runs.
+ */
 function encodePath(path: string): string {
     return path
         .split("/")
-        .map((segment) => encodeURIComponent(segment))
+        .map((segment) => encodeURIComponent(segment).replaceAll(".", "%2E"))
         .join("/");
 }
 
@@ -1155,6 +1237,21 @@ type PullRequestNode = {
         nodes: Array<{ databaseId: number | null; author: { login: string } | null; state: string }>;
     };
     commits: { nodes: Array<{ commit: { statusCheckRollup: { state: string } | null } }> };
+    mergeable: "MERGEABLE" | "CONFLICTING" | "UNKNOWN";
+};
+
+type RelatedPullRequestNode = {
+    number: number;
+    title: string;
+    url: string;
+    state: "OPEN" | "MERGED" | "CLOSED";
+    isDraft: boolean;
+    updatedAt: string;
+    mergedAt: string | null;
+    headRefName: string;
+    baseRefName: string;
+    author: { login: string; avatarUrl: string | null } | null;
+    repository: { nameWithOwner: string };
 };
 
 type RepositoryPullRequests = {
@@ -1162,7 +1259,14 @@ type RepositoryPullRequests = {
     merged: { nodes: Array<PullRequestNode> };
 } | null;
 
+type RelatedRepositoryPullRequests = {
+    open: { nodes: Array<RelatedPullRequestNode> };
+    merged: { nodes: Array<RelatedPullRequestNode> };
+    closed: { nodes: Array<RelatedPullRequestNode> };
+} | null;
+
 type PullRequestsQuery = Record<string, RepositoryPullRequests>;
+type RelatedPullRequestsQuery = Record<string, RelatedRepositoryPullRequests>;
 
 function toCheckState(rollup: string | undefined): CheckState {
     switch (rollup) {
@@ -1247,6 +1351,38 @@ function toPullRequestSummary(node: PullRequestNode): PullRequestSummary {
         deletions: node.deletions,
         changedFiles: node.changedFiles,
         commentCount: node.totalCommentsCount ?? 0,
+        mergeable: toMergeableState(node.mergeable),
+    };
+}
+
+/** Related cards only need identity + state; omit reviews/checks to keep scans cheap. */
+function toRelatedPullRequestSummary(node: RelatedPullRequestNode): PullRequestSummary {
+    const repository = node.repository.nameWithOwner;
+
+    return {
+        key: `${repository}#${node.number}`,
+        repository,
+        number: node.number,
+        title: node.title,
+        url: node.url,
+        author: node.author?.login ?? "ghost",
+        authorAvatarUrl: node.author?.avatarUrl ?? null,
+        state: node.state === "MERGED" ? "merged" : node.state === "CLOSED" ? "closed" : "open",
+        isDraft: node.isDraft,
+        createdAt: node.updatedAt,
+        updatedAt: node.updatedAt,
+        mergedAt: node.mergedAt,
+        headRefName: node.headRefName,
+        baseRefName: node.baseRefName,
+        reviewDecision: null,
+        reviewRequests: [],
+        reviewers: [],
+        checks: "none",
+        additions: 0,
+        deletions: 0,
+        changedFiles: 0,
+        commentCount: 0,
+        mergeable: "unknown",
     };
 }
 
@@ -1282,6 +1418,63 @@ function buildInboxQuery(repositories: ReadonlyArray<string>): string {
     `;
 }
 
+/** Related-PR scan: open window + small merged/closed windows, filtered client-side by refs. */
+function buildRelatedQuery(repositories: ReadonlyArray<string>): string {
+    const selections = repositories.map((nameWithOwner, index) => {
+        const [owner = "", name = ""] = nameWithOwner.split("/");
+
+        return `
+            repo${index}: repository(owner: ${JSON.stringify(owner)}, name: ${JSON.stringify(name)}) {
+                open: pullRequests(
+                    states: [OPEN]
+                    first: ${RELATED_OPEN_FETCH_CAP}
+                    orderBy: { field: UPDATED_AT, direction: DESC }
+                ) { nodes { ...RelatedPullRequest } }
+                merged: pullRequests(
+                    states: [MERGED]
+                    first: ${RELATED_CLOSED_OR_MERGED_FETCH_CAP}
+                    orderBy: { field: UPDATED_AT, direction: DESC }
+                ) { nodes { ...RelatedPullRequest } }
+                closed: pullRequests(
+                    states: [CLOSED]
+                    first: ${RELATED_CLOSED_OR_MERGED_FETCH_CAP}
+                    orderBy: { field: UPDATED_AT, direction: DESC }
+                ) { nodes { ...RelatedPullRequest } }
+            }
+        `;
+    });
+
+    return `
+        query EasyReviewRelatedPullRequests {
+            ${selections.join("\n")}
+        }
+
+        fragment RelatedPullRequest on PullRequest {
+            ${RELATED_PULL_REQUEST_FIELDS}
+        }
+    `;
+}
+
+/** Lean fields for cross-repo related scans — avoids review/check complexity bombs. */
+const RELATED_PULL_REQUEST_FIELDS = `
+    number
+    title
+    url
+    state
+    isDraft
+    updatedAt
+    mergedAt
+    headRefName
+    baseRefName
+    author {
+        login
+        avatarUrl
+    }
+    repository {
+        nameWithOwner
+    }
+`;
+
 /** The fields behind `PullRequestSummary`, shared by the Inbox batch and the overview query. */
 const PULL_REQUEST_FIELDS = `
     number
@@ -1297,6 +1490,7 @@ const PULL_REQUEST_FIELDS = `
     additions
     deletions
     changedFiles
+    mergeable
     reviewDecision
     author {
         login
@@ -1389,7 +1583,6 @@ type PullRequestDetailNode = Omit<PullRequestNode, "commits"> & {
     reactionGroups: Array<ReactionGroupNode>;
     baseRefOid: string;
     headRefOid: string;
-    mergeable: "MERGEABLE" | "CONFLICTING" | "UNKNOWN";
     baseRef: {
         branchProtectionRule: {
             requiresApprovingReviews: boolean;
@@ -1483,7 +1676,6 @@ const PULL_REQUEST_QUERY = `
                 }
                 baseRefOid
                 headRefOid
-                mergeable
                 baseRef {
                     branchProtectionRule {
                         requiresApprovingReviews
@@ -1595,6 +1787,7 @@ type PullRequestCommitsQuery = {
                         url: string;
                         author: {
                             name: string | null;
+                            avatarUrl: string | null;
                             user: { login: string; avatarUrl: string | null } | null;
                         } | null;
                         statusCheckRollup: { state: string } | null;
@@ -1626,6 +1819,7 @@ const PULL_REQUEST_COMMITS_QUERY = `
                             url
                             author {
                                 name
+                                avatarUrl
                                 user {
                                     login
                                     avatarUrl
@@ -1713,6 +1907,7 @@ const PULL_REQUEST_TIMELINE_QUERY = `
                                 committedDate
                                 url
                                 author {
+                                    avatarUrl
                                     user {
                                         login
                                         avatarUrl
@@ -1952,7 +2147,11 @@ type TimelineNode =
               messageHeadline: string;
               committedDate: string;
               url: string;
-              author: { user: TimelineActorNode; name: string | null } | null;
+              author: {
+                  avatarUrl: string | null;
+                  user: TimelineActorNode;
+                  name: string | null;
+              } | null;
               signature: {
                   __typename: string;
                   isValid: boolean;
@@ -2045,6 +2244,41 @@ function toTimelineActor(actor: TimelineActorNode): { login: string; avatarUrl: 
     };
 }
 
+/**
+ * Prefer the linked GitHub user avatar (same as timeline actors). GitActor.avatarUrl is often an
+ * email gravatar that disagrees with the profile avatar GitHub shows for that person.
+ */
+function resolveCommitAuthor(
+    author:
+        | {
+              avatarUrl: string | null;
+              name: string | null;
+              user: { login: string; avatarUrl: string | null } | null;
+          }
+        | null
+        | undefined,
+): { login: string; avatarUrl: string | null } {
+    if (author?.user) {
+        return {
+            login: author.user.login,
+            avatarUrl: author.user.avatarUrl ?? `https://github.com/${author.user.login}.png?size=40`,
+        };
+    }
+
+    const name = author?.name?.trim() ?? "";
+    if (/^[\w-]+$/.test(name)) {
+        return {
+            login: name,
+            avatarUrl: `https://github.com/${name}.png?size=40`,
+        };
+    }
+
+    return {
+        login: name || "ghost",
+        avatarUrl: author?.avatarUrl ?? null,
+    };
+}
+
 function toTimelineReviewer(reviewer: { login?: string; name?: string } | null): string {
     return reviewer?.login ?? reviewer?.name ?? "someone";
 }
@@ -2104,15 +2338,12 @@ function toTimelineItem(node: TimelineNode): PullRequestTimelineItem | null {
         }
         case "PullRequestCommit": {
             const commit = node.commit;
-            const authorUser = commit.author?.user;
+            const author = resolveCommitAuthor(commit.author);
             return {
                 kind: "commit",
                 id: node.id,
                 createdAt: commit.committedDate,
-                author: {
-                    login: authorUser?.login ?? commit.author?.name ?? "ghost",
-                    avatarUrl: authorUser?.avatarUrl ?? null,
-                },
+                author,
                 messageHeadline: commit.messageHeadline,
                 oid: commit.oid,
                 abbreviatedOid: commit.abbreviatedOid,
@@ -2393,7 +2624,7 @@ function formatCheckDuration(startedAt: string | null, completedAt: string | nul
     return remMinutes === 0 ? `${hours}h` : `${hours}h ${remMinutes}m`;
 }
 
-function toMergeableState(mergeable: PullRequestDetailNode["mergeable"]): MergeableState {
+function toMergeableState(mergeable: PullRequestNode["mergeable"] | null | undefined): MergeableState {
     switch (mergeable) {
         case "MERGEABLE":
             return "mergeable";
@@ -2572,7 +2803,6 @@ function toPullRequestDetail(node: PullRequestDetailNode, settings: RepositoryMe
             .filter((context): context is NonNullable<CheckContextNode> => context !== null)
             .map(toCheckRun),
         checkCount: toCheckCount(commit),
-        mergeable: toMergeableState(node.mergeable),
         requiredApprovingReviewCount: toRequiredApprovingReviewCount(node),
         allowedMergeMethods,
         defaultMergeMethod: toDefaultMergeMethod(settings, allowedMergeMethods),

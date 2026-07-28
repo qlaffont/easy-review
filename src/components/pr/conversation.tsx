@@ -331,6 +331,34 @@ function TimelineReviewThread({
         }
     }
 
+    async function replyAndResolve() {
+        const body = reply.trim();
+        if (!body || sending || resolving || thread.isResolved) {
+            return;
+        }
+        setSending(true);
+        setResolving(true);
+        try {
+            await notifyAction(
+                async () => {
+                    await session.replyToReviewThread(repository, number, thread.id, body);
+                    await session.setReviewThreadResolved(repository, number, thread.id, true);
+                },
+                {
+                    loading: "Replying and resolving…",
+                    success: "Reply posted · conversation resolved",
+                    error: "Could not reply and resolve.",
+                },
+            );
+            setReply("");
+            setReplyOpen(false);
+            setOpen(false);
+        } finally {
+            setSending(false);
+            setResolving(false);
+        }
+    }
+
     async function toggleResolved() {
         if (resolving) {
             return;
@@ -352,6 +380,10 @@ function TimelineReviewThread({
                           error: "Could not unresolve the conversation.",
                       },
             );
+            setOpen(!next);
+            if (next) {
+                setReplyOpen(false);
+            }
         } finally {
             setResolving(false);
         }
@@ -462,27 +494,8 @@ function TimelineReviewThread({
                                 </div>
                             ))}
 
-                            <div className="flex flex-wrap items-center gap-2 border-t pt-2">
-                                <Button
-                                    type="button"
-                                    size="sm"
-                                    variant="outline"
-                                    className="h-7"
-                                    disabled={resolving}
-                                    onClick={() => void toggleResolved()}
-                                >
-                                    {thread.isResolved ? "Unresolve conversation" : "Resolve conversation"}
-                                </Button>
-                                {thread.isResolved ? (
-                                    <span className="text-xs text-muted-foreground">
-                                        <span className="font-medium text-foreground">{root.author}</span> marked this
-                                        conversation as resolved.
-                                    </span>
-                                ) : null}
-                            </div>
-
                             {canReply ? (
-                                <div>
+                                <div className="border-t pt-2">
                                     {replyOpen ? (
                                         <MarkdownComposer
                                             compact
@@ -501,7 +514,7 @@ function TimelineReviewThread({
                                                     <Button
                                                         size="sm"
                                                         variant="outline"
-                                                        disabled={sending}
+                                                        disabled={sending || resolving}
                                                         onClick={() => {
                                                             setReply("");
                                                             setReplyOpen(false);
@@ -509,9 +522,28 @@ function TimelineReviewThread({
                                                     >
                                                         Cancel
                                                     </Button>
+                                                    {thread.isResolved ? (
+                                                        <Button
+                                                            size="sm"
+                                                            variant="outline"
+                                                            disabled={resolving}
+                                                            onClick={() => void toggleResolved()}
+                                                        >
+                                                            Unresolve
+                                                        </Button>
+                                                    ) : (
+                                                        <Button
+                                                            size="sm"
+                                                            disabled={sending || resolving || !reply.trim()}
+                                                            className="bg-[#1f883d] text-white hover:bg-[#1a7f37] dark:bg-[#238636] dark:hover:bg-[#2ea043]"
+                                                            onClick={() => void replyAndResolve()}
+                                                        >
+                                                            {sending || resolving ? "Working…" : "Reply and resolve"}
+                                                        </Button>
+                                                    )}
                                                     <Button
                                                         size="sm"
-                                                        disabled={sending || !reply.trim()}
+                                                        disabled={sending || resolving || !reply.trim()}
                                                         className="bg-[#1f883d] text-white hover:bg-[#1a7f37] dark:bg-[#238636] dark:hover:bg-[#2ea043]"
                                                         onClick={() => void sendReply()}
                                                     >
@@ -521,16 +553,39 @@ function TimelineReviewThread({
                                             }
                                         />
                                     ) : (
-                                        <button
-                                            type="button"
-                                            className="flex w-full cursor-pointer items-center rounded-md border bg-muted/20 px-3 py-2 text-left text-sm text-muted-foreground transition-colors hover:bg-muted/40 hover:text-foreground"
-                                            onClick={() => setReplyOpen(true)}
-                                        >
-                                            Reply…
-                                        </button>
+                                        <div className="flex flex-wrap items-center gap-2">
+                                            <button
+                                                type="button"
+                                                className="flex min-w-0 flex-1 cursor-pointer items-center rounded-md border bg-muted/20 px-3 py-2 text-left text-sm text-muted-foreground transition-colors hover:bg-muted/40 hover:text-foreground"
+                                                onClick={() => setReplyOpen(true)}
+                                            >
+                                                Reply…
+                                            </button>
+                                            <Button
+                                                type="button"
+                                                size="sm"
+                                                variant="outline"
+                                                disabled={resolving}
+                                                onClick={() => void toggleResolved()}
+                                            >
+                                                {thread.isResolved ? "Unresolve" : "Resolve"}
+                                            </Button>
+                                        </div>
                                     )}
                                 </div>
-                            ) : null}
+                            ) : (
+                                <div className="border-t pt-2">
+                                    <Button
+                                        type="button"
+                                        size="sm"
+                                        variant="outline"
+                                        disabled={resolving}
+                                        onClick={() => void toggleResolved()}
+                                    >
+                                        {thread.isResolved ? "Unresolve conversation" : "Resolve conversation"}
+                                    </Button>
+                                </div>
+                            )}
                         </div>
                     </>
                 ) : null}

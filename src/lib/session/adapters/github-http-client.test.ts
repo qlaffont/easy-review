@@ -262,6 +262,76 @@ describe("listPullRequests", () => {
     });
 });
 
+describe("listRelatedPullRequests", () => {
+    it("returns only open and recent siblings that match head and base refs", async () => {
+        const matching = pullRequestNode("acme/web", 2);
+        matching.headRefName = "feature/foo";
+        matching.baseRefName = "main";
+        matching.updatedAt = "2026-07-20T00:00:00.000Z";
+
+        const wrongBranch = pullRequestNode("acme/web", 3);
+        wrongBranch.headRefName = "other";
+        wrongBranch.baseRefName = "main";
+
+        const github = createGithubHttpClient(
+            respondWith({
+                data: {
+                    repo0: {
+                        open: { nodes: [matching, wrongBranch] },
+                        merged: { nodes: [] },
+                        closed: { nodes: [] },
+                    },
+                },
+            }),
+        );
+
+        const pullRequests = await github.listRelatedPullRequests("token", {
+            repositories: ["acme/web"],
+            headRefName: "feature/foo",
+            baseRefName: "main",
+        });
+
+        expect(pullRequests.map((pullRequest) => pullRequest.key)).toEqual(["acme/web#2"]);
+    });
+
+    it("keeps successful batches when a later batch gets a gateway error", async () => {
+        let calls = 0;
+        const matching = pullRequestNode("acme/web", 2);
+        matching.headRefName = "feature/foo";
+        matching.baseRefName = "main";
+        matching.updatedAt = "2026-07-20T00:00:00.000Z";
+
+        const github = createGithubHttpClient(async () => {
+            calls += 1;
+            if (calls === 1) {
+                return new Response(
+                    JSON.stringify({
+                        data: {
+                            repo0: {
+                                open: { nodes: [matching] },
+                                merged: { nodes: [] },
+                                closed: { nodes: [] },
+                            },
+                        },
+                    }),
+                    { status: 200, headers: { "content-type": "application/json" } },
+                );
+            }
+
+            return new Response("bad gateway", { status: 502 });
+        });
+
+        const pullRequests = await github.listRelatedPullRequests("token", {
+            repositories: ["acme/web", "acme/a", "acme/b", "acme/c", "acme/d"],
+            headRefName: "feature/foo",
+            baseRefName: "main",
+        });
+
+        expect(pullRequests.map((pullRequest) => pullRequest.key)).toEqual(["acme/web#2"]);
+        expect(calls).toBeGreaterThan(1);
+    });
+});
+
 describe("getPullRequestFileDiff", () => {
     it("reads the head side via refs/pull/N/head so fork PR commits resolve", async () => {
         const requests: Array<string> = [];
@@ -316,5 +386,58 @@ describe("getPullRequestFileDiff", () => {
         expect(diff.stub).toBeNull();
         expect(diff.lines.some((line) => line.kind === "add" && line.text === "a")).toBe(true);
         expect(diff.lines.filter((line) => line.kind === "add")).toHaveLength(3);
+    });
+
+    it("percent-encodes dots in content paths so the same-origin proxy is not stolen by Vite", async () => {
+        const requests: Array<string> = [];
+        const github = createGithubHttpClient(
+            async (input, init) => {
+                const url = String(input);
+                requests.push(url);
+
+                if (init?.method === "POST" || url.includes("/graphql")) {
+                    return new Response(
+                        JSON.stringify({
+                            data: {
+                                repository: {
+                                    pullRequest: { baseRefOid: "baseoid", headRefOid: "headoid" },
+                                },
+                            },
+                        }),
+                        { status: 200, headers: { "content-type": "application/json" } },
+                    );
+                }
+
+                if (url.includes("useAutoInsRetrieval%2Ets") && url.includes("ref=baseoid")) {
+                    return new Response("{}", { status: 404 });
+                }
+
+                if (url.includes("useAutoInsRetrieval%2Ets")) {
+                    return new Response(
+                        JSON.stringify({
+                            type: "file",
+                            encoding: "base64",
+                            size: 4,
+                            content: btoa("ok\n"),
+                        }),
+                        { status: 200, headers: { "content-type": "application/json" } },
+                    );
+                }
+
+                throw new Error(`unexpected request: ${url}`);
+            },
+            { restBaseUrl: "/api/github" },
+        );
+
+        const diff = await github.getPullRequestFileDiff(
+            "token",
+            "latomate/medical-web",
+            278,
+            "app/features/Messaging/hooks/useAutoInsRetrieval.ts",
+        );
+
+        expect(requests.some((url) => /useAutoInsRetrieval\.ts(?:\?|$)/.test(url))).toBe(false);
+        expect(requests.some((url) => url.includes("useAutoInsRetrieval%2Ets"))).toBe(true);
+        expect(diff.lines.some((line) => line.kind === "add" && line.text === "ok")).toBe(true);
     });
 });

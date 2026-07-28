@@ -7,6 +7,7 @@ import {
     classifyPullRequest,
     groupIntoSections,
     normalizeSectionLayout,
+    parseInboxSettings,
     visibleSectionDefinitions,
 } from "#/lib/session/inbox-sections.ts";
 
@@ -36,6 +37,7 @@ function pullRequest(overrides: Partial<PullRequestSummary> = {}): PullRequestSu
         deletions: 0,
         changedFiles: 0,
         commentCount: 0,
+        mergeable: "mergeable",
         ...overrides,
     };
 }
@@ -117,12 +119,41 @@ describe("section layout", () => {
             { id: "needs-your-review", label: "dup", hidden: false },
         ]);
 
-        expect(layout[0]).toMatchObject({ id: "other", label: "Misc" });
+        expect(layout[0]).toMatchObject({ id: "other", label: "Misc", color: "muted", icon: "inbox" });
         expect(layout.find((entry) => entry.id === "needs-your-review")).toMatchObject({
             label: "  ",
             hidden: true,
+            color: "amber",
+            icon: "eye",
         });
         expect(layout).toHaveLength(DEFAULT_INBOX_SECTIONS.length);
+    });
+
+    it("keeps custom color and icon, and falls back when invalid", () => {
+        const layout = normalizeSectionLayout([
+            { id: "approved", label: "Ship it", hidden: false, color: "violet", icon: "star", customColor: "#0f0" },
+            {
+                id: "drafts",
+                label: "Drafts",
+                hidden: false,
+                color: "not-a-color",
+                icon: "not-an-icon",
+                customColor: "nope",
+            },
+        ]);
+
+        expect(layout.find((entry) => entry.id === "approved")).toMatchObject({
+            color: "violet",
+            icon: "star",
+            customColor: "#00ff00",
+            defaultExpanded: true,
+        });
+        expect(layout.find((entry) => entry.id === "drafts")).toMatchObject({
+            color: "slate",
+            icon: "draft",
+            customColor: null,
+            defaultExpanded: false,
+        });
     });
 
     it("only exposes visible sections to the board, with blank labels falling back", () => {
@@ -135,6 +166,34 @@ describe("section layout", () => {
         expect(visibleSectionDefinitions(layout).map((entry) => entry.id)).not.toContain("needs-your-review");
         expect(visibleSectionDefinitions(layout)[0]).toMatchObject({ id: "approved", label: "Ship it" });
         expect(visibleSectionDefinitions(layout).find((entry) => entry.id === "drafts")?.label).toBe("Drafts");
+    });
+});
+
+describe("parseInboxSettings", () => {
+    it("accepts a versioned document and normalizes layout + expanded sections", () => {
+        const settings = parseInboxSettings(
+            {
+                version: 1,
+                expandedSections: ["approved", "bogus", "approved"],
+                sectionLayout: [{ id: "approved", label: "Ready", hidden: true, color: "rose", icon: "flame" }],
+            },
+            ["needs-your-review"],
+        );
+
+        expect(settings.expandedSections).toEqual(["approved"]);
+        expect(settings.sectionLayout.find((entry) => entry.id === "approved")).toMatchObject({
+            label: "Ready",
+            hidden: true,
+            color: "rose",
+            icon: "flame",
+        });
+        expect(settings.sectionLayout).toHaveLength(DEFAULT_INBOX_SECTIONS.length);
+    });
+
+    it("rejects unsupported versions", () => {
+        expect(() => parseInboxSettings({ version: 99 }, ["needs-your-review"])).toThrow(
+            /Unsupported Inbox settings version/,
+        );
     });
 });
 

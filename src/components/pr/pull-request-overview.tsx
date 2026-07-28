@@ -34,7 +34,9 @@ import { MarkdownComposer } from "#/components/pr/markdown-composer.tsx";
 import { Markdown } from "#/components/pr/markdown.tsx";
 import { PullRequestCommits } from "#/components/pr/pull-request-commits.tsx";
 import { PullRequestControls } from "#/components/pr/pull-request-controls.tsx";
+import { PullRequestCopyMenu } from "#/components/pr/pull-request-copy-menu.tsx";
 import { ReactionBar } from "#/components/pr/reaction-bar.tsx";
+import { RelatedPullRequestsSidebar } from "#/components/pr/related-pull-requests.tsx";
 import { ReviewChangesMenu } from "#/components/pr/review-changes-menu.tsx";
 import { ReviewChanges } from "#/components/pr/review-changes.tsx";
 import { PullRequestSidebarMetadata } from "#/components/pr/sidebar-metadata.tsx";
@@ -721,7 +723,32 @@ function PullRequestHeader({ page, headline }: { page: PullRequestPage; headline
         <header className="flex flex-col gap-3">
             <div className="flex flex-wrap items-center justify-between gap-3">
                 <BackToInbox />
-                <div className="flex flex-wrap items-center justify-end gap-2">
+                <div className="flex flex-wrap items-center justify-end gap-1">
+                    <HelpTooltip label="Reload this pull request from GitHub">
+                        <Button
+                            variant="ghost"
+                            size="icon-sm"
+                            className="size-8 shrink-0 text-muted-foreground"
+                            disabled={page.refreshing || busy || editing}
+                            aria-label="Refresh pull request"
+                            onClick={() =>
+                                void notifyAction(() => session.refreshPullRequest(page.repository, page.number), {
+                                    loading: "Refreshing pull request…",
+                                    success: "Pull request refreshed",
+                                    error: "Could not refresh the pull request.",
+                                })
+                            }
+                        >
+                            <RefreshCw className={cn("size-3.5", page.refreshing && "animate-spin")} />
+                        </Button>
+                    </HelpTooltip>
+                    <PullRequestCopyMenu
+                        repository={headline.repository}
+                        number={headline.number}
+                        title={headline.title}
+                        githubUrl={headline.url}
+                        headRefName={headline.headRefName}
+                    />
                     {isOpen ? (
                         <HelpTooltip
                             label={
@@ -762,23 +789,6 @@ function PullRequestHeader({ page, headline }: { page: PullRequestPage; headline
                             </Button>
                         </HelpTooltip>
                     ) : null}
-                    <HelpTooltip label="Reload this pull request from GitHub">
-                        <Button
-                            variant="ghost"
-                            size="sm"
-                            disabled={page.refreshing || busy || editing}
-                            onClick={() =>
-                                void notifyAction(() => session.refreshPullRequest(page.repository, page.number), {
-                                    loading: "Refreshing pull request…",
-                                    success: "Pull request refreshed",
-                                    error: "Could not refresh the pull request.",
-                                })
-                            }
-                        >
-                            <RefreshCw className={page.refreshing ? "animate-spin" : undefined} />
-                            Refresh
-                        </Button>
-                    </HelpTooltip>
                     <ReviewChangesMenu repository={page.repository} number={page.number} />
                 </div>
             </div>
@@ -898,8 +908,11 @@ function PullRequestHeader({ page, headline }: { page: PullRequestPage; headline
 }
 
 function AuthorAvatar({ login, avatarUrl }: { login: string; avatarUrl: string | null }) {
-    if (avatarUrl) {
-        return <img src={avatarUrl} alt="" className="size-5 shrink-0 rounded-full" />;
+    const resolved =
+        avatarUrl ?? (/^[\w-]+$/.test(login) && login !== "ghost" ? `https://github.com/${login}.png?size=40` : null);
+
+    if (resolved) {
+        return <img src={resolved} alt="" className="size-5 shrink-0 rounded-full" />;
     }
 
     return (
@@ -1125,6 +1138,12 @@ function Sidebar({ headline, detail }: { headline: Headline; detail: PullRequest
     if (detail === null) {
         return (
             <aside className="flex flex-col gap-5 text-sm">
+                <RelatedPullRequestsSidebar
+                    repository={headline.repository}
+                    number={headline.number}
+                    headRefName={headline.headRefName}
+                    baseRefName={headline.baseRefName}
+                />
                 <SidebarMetadataLoadingSkeleton />
             </aside>
         );
@@ -1132,6 +1151,12 @@ function Sidebar({ headline, detail }: { headline: Headline; detail: PullRequest
 
     return (
         <aside className="flex flex-col gap-5 text-sm">
+            <RelatedPullRequestsSidebar
+                repository={detail.repository}
+                number={detail.number}
+                headRefName={detail.headRefName}
+                baseRefName={detail.baseRefName}
+            />
             <PullRequestSidebarMetadata detail={detail} reviewers={headline.reviewers} />
         </aside>
     );

@@ -31,6 +31,8 @@ export const Route = createRootRoute({
                 rel: "stylesheet",
                 href: appCss,
             },
+            { rel: "icon", href: "/favicon-inbox.svg", type: "image/svg+xml" },
+            { rel: "apple-touch-icon", href: "/favicon-inbox.svg" },
         ],
     }),
     shellComponent: RootDocument,

@@ -236,6 +236,19 @@ describe("thread replies", () => {
         expect(session.getReviewThreads("acme/api", 1).items[0]?.comments).toHaveLength(2);
         expect(session.getReviewThreads("acme/api", 1).items[0]?.comments.at(-1)?.body).toBe("Done in the next push.");
     });
+
+    it("resolves and unresolves a review thread", async () => {
+        const session = await connectedWithPr();
+        await session.loadReviewThreads("acme/api", 1);
+
+        expect(session.getReviewThreads("acme/api", 1).items[0]?.isResolved).toBe(false);
+
+        await session.setReviewThreadResolved("acme/api", 1, "thread-1", true);
+        expect(session.getReviewThreads("acme/api", 1).items[0]?.isResolved).toBe(true);
+
+        await session.setReviewThreadResolved("acme/api", 1, "thread-1", false);
+        expect(session.getReviewThreads("acme/api", 1).items[0]?.isResolved).toBe(false);
+    });
 });
 
 describe("conversation comments", () => {

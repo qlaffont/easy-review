@@ -70,9 +70,11 @@ describe("action catalog", () => {
         const ctx = context({ copyText });
 
         await findAction("copy.pr-url")!.run(ctx);
+        await findAction("copy.github-url")!.run(ctx);
         await findAction("copy.pr-title")!.run(ctx);
         await findAction("copy.branch")!.run(ctx);
 
+        expect(copyText).toHaveBeenCalledWith(expect.stringContaining("/pr/acme/api/1"));
         expect(copyText).toHaveBeenCalledWith("https://github.com/acme/api/pull/1");
         expect(copyText).toHaveBeenCalledWith("Ship it");
         expect(copyText).toHaveBeenCalledWith("feature-1");

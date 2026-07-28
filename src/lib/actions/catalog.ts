@@ -108,9 +108,23 @@ export const APP_ACTIONS: ReadonlyArray<AppAction> = [
     },
     {
         id: "copy.pr-url",
-        label: "Copy pull request URL",
+        label: "Copy link to PR",
         group: "Clipboard",
-        keywords: ["link"],
+        keywords: ["link", "app"],
+        when: hasTarget,
+        run: async (context) => {
+            if (!context.target) return;
+            const [owner = "", repo = ""] = context.target.repository.split("/");
+            const path = `/pr/${owner}/${repo}/${context.target.number}`;
+            const url = typeof window !== "undefined" ? `${window.location.origin}${path}` : path;
+            await context.copyText(url);
+        },
+    },
+    {
+        id: "copy.github-url",
+        label: "Copy link to GitHub",
+        group: "Clipboard",
+        keywords: ["link", "github"],
         when: hasTarget,
         run: async (context) => {
             if (!context.target) return;
@@ -119,7 +133,7 @@ export const APP_ACTIONS: ReadonlyArray<AppAction> = [
     },
     {
         id: "copy.pr-title",
-        label: "Copy pull request title",
+        label: "Copy title",
         group: "Clipboard",
         when: hasTarget,
         run: async (context) => {
@@ -129,7 +143,7 @@ export const APP_ACTIONS: ReadonlyArray<AppAction> = [
     },
     {
         id: "copy.branch",
-        label: "Copy head branch name",
+        label: "Copy PR branch name",
         group: "Clipboard",
         keywords: ["ref"],
         when: hasTarget,
@@ -140,9 +154,9 @@ export const APP_ACTIONS: ReadonlyArray<AppAction> = [
     },
     {
         id: "copy.checkout",
-        label: "Copy gh pr checkout command",
+        label: "Copy CLI checkout command",
         group: "Clipboard",
-        keywords: ["clone", "checkout"],
+        keywords: ["clone", "checkout", "gh"],
         when: hasTarget,
         run: async (context) => {
             if (!context.target) return;
