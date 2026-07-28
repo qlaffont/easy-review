@@ -84,7 +84,9 @@ export function PullRequestConversation({
     const [error, setError] = useState<string | null>(null);
 
     const hasBody = body.trim().length > 0;
-    const busy = posting || closing;
+    const unresolvedThreads = useMemo(() => threads.items.filter((thread) => !thread.isResolved), [threads.items]);
+    const [resolvingAll, setResolvingAll] = useState(false);
+    const busy = posting || closing || resolvingAll;
     const loading =
         (timeline.status === "loading" && timeline.items.length === 0) ||
         (threads.status === "loading" && threads.items.length === 0 && timeline.items.length === 0);
@@ -169,6 +171,36 @@ export function PullRequestConversation({
         }
     }
 
+    async function resolveAllThreads() {
+        if (busy || unresolvedThreads.length === 0) {
+            return;
+        }
+
+        setResolvingAll(true);
+        setError(null);
+        const count = unresolvedThreads.length;
+        try {
+            await notifyAction(
+                async () => {
+                    await Promise.all(
+                        unresolvedThreads.map((thread) =>
+                            session.setReviewThreadResolved(repository, number, thread.id, true),
+                        ),
+                    );
+                },
+                {
+                    loading: "Resolving threads…",
+                    success: count === 1 ? "Thread resolved" : `Resolved ${count} threads`,
+                    error: "Could not resolve all threads.",
+                },
+            );
+        } catch (cause) {
+            setError(cause instanceof Error ? cause.message : "Could not resolve all threads.");
+        } finally {
+            setResolvingAll(false);
+        }
+    }
+
     return (
         <section className="flex flex-col gap-3" aria-label="Conversation">
             <h2 className="text-sm font-medium">Conversation</h2>
@@ -225,6 +257,17 @@ export function PullRequestConversation({
                         onSubmitKey={() => void post()}
                         footer={
                             <div className="flex flex-wrap items-center justify-end gap-2">
+                                {unresolvedThreads.length > 0 ? (
+                                    <Button
+                                        size="sm"
+                                        variant="outline"
+                                        disabled={busy}
+                                        className="h-7"
+                                        onClick={() => void resolveAllThreads()}
+                                    >
+                                        {resolvingAll ? "Resolving…" : "Resolve all threads"}
+                                    </Button>
+                                ) : null}
                                 {canClose ? (
                                     <AlertDialog>
                                         <AlertDialogTrigger asChild>

@@ -1,21 +1,24 @@
-import { Inbox, KeyRound, LogOut } from "lucide-react";
+import { FileDiff, Inbox, LogOut, Settings2 } from "lucide-react";
+import { useState } from "react";
 
+import { SectionLayoutEditor } from "#/components/inbox/section-layout-editor.tsx";
+import { PrSettingsEditor } from "#/components/pr/pr-settings-editor.tsx";
 import { RepoPickerTrigger } from "#/components/repos/repo-picker.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import {
     DropdownMenu,
     DropdownMenuContent,
     DropdownMenuItem,
-    DropdownMenuLabel,
-    DropdownMenuSeparator,
     DropdownMenuTrigger,
 } from "#/components/ui/dropdown-menu.tsx";
 import { useSession, useSessionState } from "#/lib/session/provider.tsx";
 import { notifySuccess } from "#/lib/toast.ts";
 
-export function AppHeader({ onReconnect }: { onReconnect: () => void }) {
+export function AppHeader() {
     const session = useSession();
     const viewer = useSessionState((state) => state.auth.viewer);
+    const [inboxSettingsOpen, setInboxSettingsOpen] = useState(false);
+    const [prSettingsOpen, setPrSettingsOpen] = useState(false);
 
     return (
         <header className="flex h-12 items-center justify-between gap-4 bg-background px-4">
@@ -43,13 +46,13 @@ export function AppHeader({ onReconnect }: { onReconnect: () => void }) {
                     </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end" className="w-56">
-                    <DropdownMenuLabel className="text-muted-foreground font-normal">
-                        Signed in with GitHub OAuth
-                    </DropdownMenuLabel>
-                    <DropdownMenuSeparator />
-                    <DropdownMenuItem onSelect={onReconnect}>
-                        <KeyRound aria-hidden="true" />
-                        Reconnect GitHub…
+                    <DropdownMenuItem onSelect={() => setInboxSettingsOpen(true)}>
+                        <Settings2 aria-hidden="true" />
+                        Inbox Settings
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onSelect={() => setPrSettingsOpen(true)}>
+                        <FileDiff aria-hidden="true" />
+                        PR Settings
                     </DropdownMenuItem>
                     <DropdownMenuItem
                         variant="destructive"
@@ -62,6 +65,9 @@ export function AppHeader({ onReconnect }: { onReconnect: () => void }) {
                     </DropdownMenuItem>
                 </DropdownMenuContent>
             </DropdownMenu>
+
+            <SectionLayoutEditor open={inboxSettingsOpen} onOpenChange={setInboxSettingsOpen} />
+            <PrSettingsEditor open={prSettingsOpen} onOpenChange={setPrSettingsOpen} />
         </header>
     );
 }

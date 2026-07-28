@@ -1,19 +1,12 @@
 import { useSelector } from "@tanstack/react-store";
-import { ArrowDown, ArrowUp, ChevronDown, ChevronRight, Download, Plus, Settings2, Trash2, Upload } from "lucide-react";
+import { ArrowDown, ArrowUp, ChevronDown, ChevronRight, Download, Plus, Trash2, Upload } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 import type { InboxSectionLayoutEntry, SectionColorId, SectionIconId } from "#/lib/session/inbox-sections.ts";
 
 import { SECTION_COLOR_STYLES, SECTION_ICONS, visualForSection } from "#/components/inbox/section-visuals.ts";
 import { Button } from "#/components/ui/button.tsx";
-import {
-    Dialog,
-    DialogContent,
-    DialogDescription,
-    DialogHeader,
-    DialogTitle,
-    DialogTrigger,
-} from "#/components/ui/dialog.tsx";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "#/components/ui/dialog.tsx";
 import {
     DropdownMenu,
     DropdownMenuContent,
@@ -32,10 +25,9 @@ import { useSession } from "#/lib/session/provider.tsx";
 import { notifyError, notifySuccess } from "#/lib/toast.ts";
 import { cn } from "#/lib/utils.ts";
 
-export function SectionLayoutEditor() {
+export function SectionLayoutEditor({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
     const session = useSession();
     const layout = useSelector(session.state, () => session.getSectionLayout());
-    const [open, setOpen] = useState(false);
     const fileInputRef = useRef<HTMLInputElement>(null);
 
     const visible = layout.filter((entry) => !entry.hidden);
@@ -65,13 +57,7 @@ export function SectionLayoutEditor() {
     }
 
     return (
-        <Dialog open={open} onOpenChange={setOpen}>
-            <DialogTrigger asChild>
-                <Button variant="outline" size="sm">
-                    <Settings2 />
-                    Sections
-                </Button>
-            </DialogTrigger>
+        <Dialog open={open} onOpenChange={onOpenChange}>
             <DialogContent className="max-h-[85svh] overflow-y-auto sm:max-w-lg">
                 <DialogHeader>
                     <DialogTitle>Inbox sections</DialogTitle>

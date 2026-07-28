@@ -42,13 +42,17 @@ export function ReviewChangesMenu({ repository, number }: { repository: string; 
     const session = useSession();
     const draft = useSelector(session.state, () => session.getReviewDraft(repository, number));
     const page = useSelector(session.state, () => session.getPullRequestPage(repository, number));
+    const threads = useSelector(session.state, () => session.getReviewThreads(repository, number));
     const [open, setOpen] = useState(false);
     const [submitting, setSubmitting] = useState(false);
+    const [resolvingAll, setResolvingAll] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const busyRef = useRef(false);
 
     const detail = page.detail;
     const mentionUsers = useMemo(() => mentionCandidatesFromPullRequest(detail), [detail]);
+    const unresolvedThreads = useMemo(() => threads.items.filter((thread) => !thread.isResolved), [threads.items]);
+    const unresolvedCount = unresolvedThreads.length;
     const pendingCount = draft.comments.length;
     const blobBase = detail
         ? `https://github.com/${detail.repository}/blob/${detail.headRefName}/`
@@ -75,6 +79,37 @@ export function ReviewChangesMenu({ repository, number }: { repository: string; 
         } finally {
             busyRef.current = false;
             setSubmitting(false);
+        }
+    }
+
+    async function resolveAllThreads() {
+        if (busyRef.current || unresolvedCount === 0) {
+            return;
+        }
+
+        busyRef.current = true;
+        setResolvingAll(true);
+        setError(null);
+        try {
+            await notifyAction(
+                async () => {
+                    await Promise.all(
+                        unresolvedThreads.map((thread) =>
+                            session.setReviewThreadResolved(repository, number, thread.id, true),
+                        ),
+                    );
+                },
+                {
+                    loading: "Resolving threads…",
+                    success: unresolvedCount === 1 ? "Thread resolved" : `Resolved ${unresolvedCount} threads`,
+                    error: "Could not resolve all threads.",
+                },
+            );
+        } catch (cause) {
+            setError(cause instanceof Error ? cause.message : "Could not resolve all threads.");
+        } finally {
+            busyRef.current = false;
+            setResolvingAll(false);
         }
     }
 
@@ -211,10 +246,20 @@ export function ReviewChangesMenu({ repository, number }: { repository: string; 
                         </div>
                     ) : null}
 
-                    <div className="flex flex-wrap items-center justify-end">
+                    <div className="flex flex-wrap items-center justify-end gap-2">
+                        {unresolvedCount > 0 ? (
+                            <Button
+                                size="sm"
+                                variant="outline"
+                                disabled={draft.stale || submitting || resolvingAll}
+                                onClick={() => void resolveAllThreads()}
+                            >
+                                {resolvingAll ? "Resolving…" : "Resolve all threads"}
+                            </Button>
+                        ) : null}
                         <Button
                             size="sm"
-                            disabled={draft.stale || submitting}
+                            disabled={draft.stale || submitting || resolvingAll}
                             className="bg-[#1f883d] text-white hover:bg-[#1a7f37] dark:bg-[#238636] dark:hover:bg-[#2ea043]"
                             onClick={() => void handleSubmit()}
                         >

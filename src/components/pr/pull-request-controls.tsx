@@ -1,5 +1,6 @@
+import { useSelector } from "@tanstack/react-store";
 import { AlertTriangle, Check, ChevronDown, GitMerge, GitPullRequestDraft, RotateCcw } from "lucide-react";
-import { useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 
 import type { MergeMethod, PullRequestDetail } from "#/lib/session/types.ts";
 
@@ -59,6 +60,8 @@ function mergeMethodOptions(
 
 export function PullRequestControls({ detail }: { detail: PullRequestDetail }) {
     const session = useSession();
+    const threads = useSelector(session.state, () => session.getReviewThreads(detail.repository, detail.number));
+    const unresolvedThreads = useMemo(() => threads.items.filter((thread) => !thread.isResolved), [threads.items]);
     const [error, setError] = useState<string | null>(null);
     const [busy, setBusy] = useState(false);
     const busyRef = useRef(false);
@@ -88,6 +91,28 @@ export function PullRequestControls({ detail }: { detail: PullRequestDetail }) {
             busyRef.current = false;
             setBusy(false);
         }
+    }
+
+    async function resolveAllThreads() {
+        if (busyRef.current || unresolvedThreads.length === 0) {
+            return;
+        }
+
+        const count = unresolvedThreads.length;
+        await run(
+            async () => {
+                await Promise.all(
+                    unresolvedThreads.map((thread) =>
+                        session.setReviewThreadResolved(detail.repository, detail.number, thread.id, true),
+                    ),
+                );
+            },
+            {
+                loading: "Resolving threads…",
+                success: count === 1 ? "Thread resolved" : `Resolved ${count} threads`,
+                error: "Could not resolve all threads.",
+            },
+        );
     }
 
     const mergeBlocked = detail.mergeable === "conflicting" || detail.isDraft || mergeOptions.length === 0;
@@ -207,6 +232,11 @@ export function PullRequestControls({ detail }: { detail: PullRequestDetail }) {
                             ? "Draft pull requests cannot be merged."
                             : `Ready to land into ${detail.baseRefName}.`}
                 </p>
+                {unresolvedThreads.length > 0 ? (
+                    <Button size="sm" variant="outline" disabled={busy} onClick={() => void resolveAllThreads()}>
+                        Resolve all threads
+                    </Button>
+                ) : null}
                 {selectedMerge ? (
                     <div className="inline-flex">
                         <AlertDialog>

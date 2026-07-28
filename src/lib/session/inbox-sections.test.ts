@@ -180,7 +180,12 @@ describe("parseInboxSettings", () => {
             ],
         });
 
-        expect(settings.expandedSections).toEqual(["drafts", "needs-your-review", "returned-to-you"]);
+        expect(settings.expandedSections).toEqual([
+            "drafts",
+            "needs-your-review",
+            "returned-to-you",
+            "waiting-for-reviewers",
+        ]);
         expect(settings.sectionLayout.find((entry) => entry.id === "approved")).toMatchObject({
             label: "Ready",
             hidden: true,

@@ -61,13 +61,13 @@ describe("inbox section customization", () => {
         const session = await connectedWithInbox();
         await session.setSectionHidden("returned-to-you", true);
 
-        // Visible order starts: needs-your-review, approved, …
+        // Visible order starts: needs-your-review, waiting-for-reviewers, approved, …
         await session.moveSection("approved", "up");
 
         expect(session.getSectionLayout().map((entry) => entry.id)).toEqual([
-            "approved",
-            "returned-to-you",
             "needs-your-review",
+            "returned-to-you",
+            "approved",
             "waiting-for-reviewers",
             "drafts",
             "merging-and-recently-merged",
@@ -85,12 +85,25 @@ describe("inbox section customization", () => {
         expect(session.getSectionLayout()[1]?.id).toBe(first);
 
         await session.resetSectionLayout();
-        expect(session.getSectionLayout()[0]?.id).toBe("needs-your-review");
-        expect(session.getSectionLayout().find((entry) => entry.id === "waiting-for-reviewers")?.hidden).toBe(true);
+        expect(session.getSectionLayout().map((entry) => entry.id)).toEqual([
+            "needs-your-review",
+            "returned-to-you",
+            "waiting-for-reviewers",
+            "approved",
+            "drafts",
+            "merging-and-recently-merged",
+            "waiting-for-author",
+            "other",
+        ]);
+        expect(session.getSectionLayout().find((entry) => entry.id === "drafts")?.hidden).toBe(true);
+        expect(session.getSectionLayout().find((entry) => entry.id === "merging-and-recently-merged")?.hidden).toBe(
+            true,
+        );
+        expect(session.getSectionLayout().find((entry) => entry.id === "waiting-for-author")?.hidden).toBe(true);
         expect(
             session
                 .getSectionLayout()
-                .filter((entry) => entry.id !== "waiting-for-reviewers")
+                .filter((entry) => !["drafts", "merging-and-recently-merged", "waiting-for-author"].includes(entry.id))
                 .every((entry) => !entry.hidden),
         ).toBe(true);
     });
@@ -158,13 +171,18 @@ describe("inbox section customization", () => {
         expect(session.state.state.inbox.expandedSections).toEqual([
             "needs-your-review",
             "returned-to-you",
+            "waiting-for-reviewers",
             "approved",
         ]);
-        expect(session.getSectionLayout().find((entry) => entry.id === "waiting-for-reviewers")?.hidden).toBe(true);
+        expect(session.getSectionLayout().find((entry) => entry.id === "drafts")?.hidden).toBe(true);
+        expect(session.getSectionLayout().find((entry) => entry.id === "merging-and-recently-merged")?.hidden).toBe(
+            true,
+        );
+        expect(session.getSectionLayout().find((entry) => entry.id === "waiting-for-author")?.hidden).toBe(true);
         expect(
             session
                 .getSectionLayout()
-                .filter((entry) => entry.id !== "waiting-for-reviewers")
+                .filter((entry) => !["drafts", "merging-and-recently-merged", "waiting-for-author"].includes(entry.id))
                 .every((entry) => !entry.hidden && entry.label),
         ).toBeTruthy();
 

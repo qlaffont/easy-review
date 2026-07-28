@@ -457,10 +457,15 @@ export function MarkdownComposer({
                 ) : (
                     <ul className="flex flex-wrap items-center gap-1" aria-label="Composer shortcuts">
                         <li>
-                            <span className="inline-flex items-center gap-1.5 rounded-md px-1.5 py-1">
+                            <a
+                                href="https://docs.github.com/en/get-started/writing-on-github/getting-started-with-writing-and-formatting-on-github/basic-writing-and-formatting-syntax"
+                                target="_blank"
+                                rel="noreferrer"
+                                className="inline-flex items-center gap-1.5 rounded-md px-1.5 py-1 transition-colors hover:bg-muted hover:text-foreground"
+                            >
                                 <FileText className="size-3.5 shrink-0" aria-hidden="true" />
                                 <span>Markdown</span>
-                            </span>
+                            </a>
                         </li>
                         <li aria-hidden="true" className="text-border">
                             ·

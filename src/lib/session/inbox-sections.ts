@@ -76,8 +76,8 @@ export type InboxSectionDefinition = {
 export const DEFAULT_INBOX_SECTIONS: ReadonlyArray<InboxSectionDefinition> = [
     { id: "needs-your-review", label: "Needs your review" },
     { id: "returned-to-you", label: "Returned to you" },
-    { id: "approved", label: "Approved" },
     { id: "waiting-for-reviewers", label: "Waiting for reviewers" },
+    { id: "approved", label: "Approved" },
     { id: "drafts", label: "Drafts" },
     { id: "merging-and-recently-merged", label: "Merging and recently merged" },
     { id: "waiting-for-author", label: "Waiting for author" },
@@ -226,7 +226,19 @@ export function isHexColor(value: unknown): value is string {
     return normalizeHexColor(value) !== null;
 }
 
-const DEFAULT_EXPANDED_SECTION_IDS = new Set<InboxSectionId>(["needs-your-review", "returned-to-you", "approved"]);
+/** Visible by default: Needs review → Returned → Waiting for reviewers → Approved → Other. */
+const DEFAULT_HIDDEN_SECTION_IDS = new Set<InboxSectionId>([
+    "drafts",
+    "merging-and-recently-merged",
+    "waiting-for-author",
+]);
+
+const DEFAULT_EXPANDED_SECTION_IDS = new Set<InboxSectionId>([
+    "needs-your-review",
+    "returned-to-you",
+    "waiting-for-reviewers",
+    "approved",
+]);
 
 export function defaultSectionLayout(): Array<InboxSectionLayoutEntry> {
     return DEFAULT_INBOX_SECTIONS.map((definition) => {
@@ -234,8 +246,8 @@ export function defaultSectionLayout(): Array<InboxSectionLayoutEntry> {
         return {
             id: definition.id,
             label: definition.label,
-            /** Waiting-on-reviewers is noise for most reviewers; add it back from Sections if needed. */
-            hidden: definition.id === "waiting-for-reviewers",
+            /** Drafts / merging / waiting-for-author stay available via Sections. */
+            hidden: DEFAULT_HIDDEN_SECTION_IDS.has(definition.id),
             defaultExpanded: DEFAULT_EXPANDED_SECTION_IDS.has(definition.id),
             color: appearance.color,
             customColor: null,

@@ -8,7 +8,6 @@ import type { PullRequestSummary } from "#/lib/session/types.ts";
 
 import { targetFromSummary, useSetActionTarget } from "#/components/actions/actions-provider.tsx";
 import { emptySectionRow, PullRequestRow } from "#/components/inbox/pull-request-row.tsx";
-import { SectionLayoutEditor } from "#/components/inbox/section-layout-editor.tsx";
 import { visualForSection } from "#/components/inbox/section-visuals.ts";
 import { useOpenRepoPicker } from "#/components/repos/repo-picker.tsx";
 import { Button } from "#/components/ui/button.tsx";
@@ -178,7 +177,6 @@ export function InboxBoard() {
                         </span>
                     </p>
                     <div className="flex items-center gap-2">
-                        <SectionLayoutEditor />
                         <Button
                             variant="outline"
                             size="sm"

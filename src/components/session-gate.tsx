@@ -1,6 +1,5 @@
 import { HotkeysProvider } from "@tanstack/react-hotkeys";
 import { useRouterState } from "@tanstack/react-router";
-import { useState } from "react";
 
 import { ActionsProvider } from "#/components/actions/actions-provider.tsx";
 import { ClipboardHotkeys } from "#/components/actions/clipboard-hotkeys.tsx";
@@ -17,7 +16,6 @@ const bootScreen = <BootLoadingScreen />;
 export function SessionGate({ children }: { children: React.ReactNode }) {
     const auth = useSessionState((state) => state.auth);
     const isInbox = useRouterState({ select: (state) => state.location.pathname === "/" });
-    const [reconnecting, setReconnecting] = useState(false);
 
     if (auth.status === "restoring") {
         return bootScreen;
@@ -25,10 +23,6 @@ export function SessionGate({ children }: { children: React.ReactNode }) {
 
     if (!auth.viewer) {
         return <ConnectGithubScreen />;
-    }
-
-    if (reconnecting) {
-        return <ConnectGithubScreen onClose={() => setReconnecting(false)} />;
     }
 
     return (
@@ -39,7 +33,7 @@ export function SessionGate({ children }: { children: React.ReactNode }) {
                         <div className="flex min-h-svh flex-col">
                             {isInbox ? (
                                 <div className="sticky top-0 z-20 border-b bg-background">
-                                    <AppHeader onReconnect={() => setReconnecting(true)} />
+                                    <AppHeader />
                                 </div>
                             ) : null}
                             <main className="flex-1">{children}</main>

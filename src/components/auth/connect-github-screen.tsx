@@ -1,4 +1,4 @@
-import { ExternalLink, Github, ShieldCheck } from "lucide-react";
+import { Building2, ExternalLink, Github, ShieldCheck } from "lucide-react";
 import { useEffect } from "react";
 
 import { Alert, AlertDescription, AlertTitle } from "#/components/ui/alert.tsx";
@@ -51,14 +51,20 @@ export function ConnectGithubScreen({ onClose }: { onClose?: () => void }) {
 
     return (
         <div className="mx-auto flex w-full max-w-2xl flex-col gap-8 px-6 py-16">
-            <header className="flex flex-col gap-2">
-                <h1 className="text-2xl font-semibold tracking-tight">
-                    {isReplacing ? "Reconnect GitHub" : "Connect Easy Review to GitHub"}
-                </h1>
-                <p className="text-sm text-muted-foreground">
-                    Sign in with a GitHub OAuth app. Easy Review’s server holds the client secret and proxies API calls;
-                    your access token stays in an HTTP-only cookie.
-                </p>
+            <header className="flex flex-col gap-4">
+                <div className="flex items-center gap-3">
+                    <img src="/favicon-inbox.svg" alt="" width={40} height={40} className="size-10 shrink-0" />
+                    <span className="text-lg font-semibold tracking-tight">Easy Review</span>
+                </div>
+                <div className="flex flex-col gap-2">
+                    <h1 className="text-2xl font-semibold tracking-tight">
+                        {isReplacing ? "Reconnect GitHub" : "Connect Easy Review to GitHub"}
+                    </h1>
+                    <p className="text-sm text-muted-foreground">
+                        Sign in with a GitHub OAuth app. Easy Review’s server holds the client secret and proxies API
+                        calls; your access token stays in an HTTP-only cookie.
+                    </p>
+                </div>
             </header>
 
             <div className="flex flex-wrap gap-2">
@@ -72,6 +78,25 @@ export function ConnectGithubScreen({ onClose }: { onClose?: () => void }) {
                     </Button>
                 ) : null}
             </div>
+
+            <Alert>
+                <Building2 aria-hidden="true" />
+                <AlertTitle>Organization repositories</AlertTitle>
+                <AlertDescription>
+                    Want org repos in Easy Review? On GitHub’s authorize screen, grant access to each organization (or
+                    later open{" "}
+                    <a
+                        href="https://github.com/settings/applications"
+                        target="_blank"
+                        rel="noreferrer"
+                        className="inline-flex items-center gap-1 font-medium text-foreground underline-offset-4 hover:underline"
+                    >
+                        Authorized OAuth Apps
+                        <ExternalLink className="size-3" aria-hidden="true" />
+                    </a>{" "}
+                    → this app → Organization access → Grant). Restricted orgs need an admin approval.
+                </AlertDescription>
+            </Alert>
 
             {auth.error ? (
                 <Alert variant="destructive">
