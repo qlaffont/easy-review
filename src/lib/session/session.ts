@@ -513,6 +513,8 @@ export function createEasyReviewSession({ github, store, oauth }: EasyReviewSess
             pullRequests: inbox?.pullRequests ?? [],
             lastLoadedAt: inbox?.lastLoadedAt ?? null,
             status: inbox?.pullRequests.length ? "ready" : "idle",
+            // Force a GitHub refresh after sign-in / session restore (cache is only for instant paint).
+            stale: true,
             expandedSections: defaultExpandedSections(sectionLayout),
             sectionLayout,
         });

@@ -30,9 +30,12 @@ import {
     clampFileListWidth,
     FILE_LIST_WIDTH_MAX,
     FILE_LIST_WIDTH_MIN,
-    readViewedPaths,
+    fileViewState,
+    readViewedFileMarks,
     useDiffPreferences,
-    writeViewedPaths,
+    writeViewedFileMarks,
+    type FileViewState,
+    type ViewedFileMarks,
 } from "#/lib/diff-preferences.ts";
 import { buildFileTree, defaultExpandedDirPaths, type FileTreeDirNode, type FileTreeNode } from "#/lib/file-tree.ts";
 import { useSession } from "#/lib/session/provider.tsx";
@@ -64,8 +67,7 @@ export function ReviewChanges({
     const [preferences, setPreferences] = useDiffPreferences();
     const headSha = page.detail?.headSha ?? "";
     const mentionUsers = useMemo(() => mentionCandidatesFromPullRequest(page.detail), [page.detail]);
-    const [viewedPaths, setViewedPaths] = useState<Set<string>>(() => new Set());
-    const [collapsedPaths, setCollapsedPaths] = useState<Set<string>>(() => new Set());
+    const [viewedMarks, setViewedMarks] = useState<ViewedFileMarks>(() => ({}));
     const [resizingFileList, setResizingFileList] = useState(false);
     const fileListWidth = preferences.fileListWidth;
 
@@ -75,7 +77,7 @@ export function ReviewChanges({
     }, [session, repository, number]);
 
     useEffect(() => {
-        setViewedPaths(readViewedPaths(repository, number, headSha));
+        setViewedMarks(readViewedFileMarks(repository, number, headSha));
     }, [repository, number, headSha]);
 
     useEffect(() => {
@@ -102,34 +104,37 @@ export function ReviewChanges({
     const pendingOnFile = draft.comments.filter((comment) => comment.path === selectedPath);
     const threadsOnFile = selectedPath ? threads.items.filter((thread) => thread.path === selectedPath) : [];
     const fileCount = page.files.status === "ready" ? page.files.items.length : null;
-    const viewedCount = page.files.items.filter((file) => viewedPaths.has(file.path)).length;
+    const viewedCount = page.files.items.filter(
+        (file) => fileViewState(viewedMarks, file.path, headSha) === "viewed",
+    ).length;
     const selectedFile = page.files.items.find((file) => file.path === selectedPath) ?? null;
     const diffPending =
         selectedDiff === null ||
         selectedDiff.status === "idle" ||
         selectedDiff.status === "loading" ||
         selectedDiff.refreshing === true;
+    const selectedViewState = selectedPath ? fileViewState(viewedMarks, selectedPath, headSha) : "unseen";
 
     function setPathViewed(path: string, viewed: boolean) {
-        setViewedPaths((current) => {
-            const next = new Set(current);
-            if (viewed) {
-                next.add(path);
+        setViewedMarks((current) => {
+            const next = { ...current };
+            if (viewed && headSha) {
+                next[path] = headSha;
             } else {
-                next.delete(path);
+                delete next[path];
             }
-            writeViewedPaths(repository, number, headSha, next);
+            writeViewedFileMarks(repository, number, next);
             return next;
         });
 
         if (viewed) {
-            setCollapsedPaths((current) => new Set(current).add(path));
             const files = page.files.items;
             const index = files.findIndex((file) => file.path === path);
-            const isAlreadyViewed = (candidate: string) => candidate === path || viewedPaths.has(candidate);
+            const isDone = (candidate: string) =>
+                candidate === path || fileViewState(viewedMarks, candidate, headSha) === "viewed";
             const nextFile =
-                files.slice(index + 1).find((file) => !isAlreadyViewed(file.path)) ??
-                files.slice(0, Math.max(0, index)).find((file) => !isAlreadyViewed(file.path));
+                files.slice(index + 1).find((file) => !isDone(file.path)) ??
+                files.slice(0, Math.max(0, index)).find((file) => !isDone(file.path));
             if (nextFile) {
                 setSelectedPath(nextFile.path);
             }
@@ -265,7 +270,8 @@ export function ReviewChanges({
                                 files={page.files.items}
                                 status={page.files.status}
                                 selectedPath={selectedPath}
-                                viewedPaths={viewedPaths}
+                                viewedMarks={viewedMarks}
+                                headSha={headSha}
                                 pendingPaths={new Set(draft.comments.map((comment) => comment.path))}
                                 layout={preferences.fileListLayout}
                                 onLayoutChange={(fileListLayout) => setPreferences({ fileListLayout })}
@@ -302,19 +308,7 @@ export function ReviewChanges({
                                     layout={preferences.layout}
                                     hideWhitespace={preferences.hideWhitespace}
                                     compactLineHeight={preferences.compactLineHeight}
-                                    viewed={viewedPaths.has(selectedPath)}
-                                    collapsed={collapsedPaths.has(selectedPath)}
-                                    onCollapsedChange={(collapsed) => {
-                                        setCollapsedPaths((current) => {
-                                            const next = new Set(current);
-                                            if (collapsed) {
-                                                next.add(selectedPath);
-                                            } else {
-                                                next.delete(selectedPath);
-                                            }
-                                            return next;
-                                        });
-                                    }}
+                                    viewed={selectedViewState === "viewed"}
                                     onViewedChange={(viewed) => setPathViewed(selectedPath, viewed)}
                                     previewBaseUrl={
                                         page.detail
@@ -503,7 +497,8 @@ function FileList({
     files,
     status,
     selectedPath,
-    viewedPaths,
+    viewedMarks,
+    headSha,
     pendingPaths,
     layout,
     onLayoutChange,
@@ -512,7 +507,8 @@ function FileList({
     files: Array<PullRequestFile>;
     status: string;
     selectedPath: string | null;
-    viewedPaths: Set<string>;
+    viewedMarks: ViewedFileMarks;
+    headSha: string;
     pendingPaths: Set<string>;
     layout: "flat" | "tree";
     onLayoutChange: (layout: "flat" | "tree") => void;
@@ -575,9 +571,9 @@ function FileList({
                     </Button>
                 </HelpTooltip>
             </div>
-            <nav aria-label="Changed files" className="min-h-0 flex-1 overflow-y-auto">
+            <nav aria-label="Changed files" className="min-h-0 flex-1 overflow-auto">
                 {layout === "tree" ? (
-                    <ul className="flex flex-col py-1">
+                    <ul className="flex w-max min-w-full flex-col py-1">
                         {tree.map((node) => (
                             <FileTreeRows
                                 key={node.kind === "dir" ? `dir:${node.path}` : node.file.path}
@@ -585,7 +581,8 @@ function FileList({
                                 depth={0}
                                 expandedDirs={expandedDirs}
                                 selectedPath={selectedPath}
-                                viewedPaths={viewedPaths}
+                                viewedMarks={viewedMarks}
+                                headSha={headSha}
                                 pendingPaths={pendingPaths}
                                 onToggleDir={toggleDir}
                                 onSelect={onSelect}
@@ -593,7 +590,7 @@ function FileList({
                         ))}
                     </ul>
                 ) : (
-                    <ul className="flex flex-col py-1">
+                    <ul className="flex w-max min-w-full flex-col py-1">
                         {files.map((file) => (
                             <li key={file.path}>
                                 <FileRow
@@ -601,7 +598,7 @@ function FileList({
                                     label={file.path}
                                     depth={0}
                                     selected={selectedPath === file.path}
-                                    viewed={viewedPaths.has(file.path)}
+                                    viewState={fileViewState(viewedMarks, file.path, headSha)}
                                     pending={pendingPaths.has(file.path)}
                                     onSelect={onSelect}
                                 />
@@ -619,7 +616,8 @@ function FileTreeRows({
     depth,
     expandedDirs,
     selectedPath,
-    viewedPaths,
+    viewedMarks,
+    headSha,
     pendingPaths,
     onToggleDir,
     onSelect,
@@ -628,7 +626,8 @@ function FileTreeRows({
     depth: number;
     expandedDirs: Set<string>;
     selectedPath: string | null;
-    viewedPaths: Set<string>;
+    viewedMarks: ViewedFileMarks;
+    headSha: string;
     pendingPaths: Set<string>;
     onToggleDir: (path: string) => void;
     onSelect: (path: string) => void;
@@ -641,7 +640,7 @@ function FileTreeRows({
                     label={node.name}
                     depth={depth}
                     selected={selectedPath === node.file.path}
-                    viewed={viewedPaths.has(node.file.path)}
+                    viewState={fileViewState(viewedMarks, node.file.path, headSha)}
                     pending={pendingPaths.has(node.file.path)}
                     onSelect={onSelect}
                 />
@@ -653,7 +652,7 @@ function FileTreeRows({
         <li>
             <DirRow dir={node} depth={depth} expanded={expandedDirs.has(node.path)} onToggle={onToggleDir} />
             {expandedDirs.has(node.path) ? (
-                <ul className="flex flex-col">
+                <ul className="flex w-max min-w-full flex-col">
                     {node.children.map((child) => (
                         <FileTreeRows
                             key={child.kind === "dir" ? `dir:${child.path}` : child.file.path}
@@ -661,7 +660,8 @@ function FileTreeRows({
                             depth={depth + 1}
                             expandedDirs={expandedDirs}
                             selectedPath={selectedPath}
-                            viewedPaths={viewedPaths}
+                            viewedMarks={viewedMarks}
+                            headSha={headSha}
                             pendingPaths={pendingPaths}
                             onToggleDir={onToggleDir}
                             onSelect={onSelect}
@@ -691,13 +691,13 @@ function DirRow({
         <button
             type="button"
             onClick={() => onToggle(dir.path)}
-            className="flex w-full cursor-pointer items-center gap-1 py-1 pr-2 text-left text-xs text-muted-foreground hover:bg-accent hover:text-foreground"
+            className="flex w-max min-w-full cursor-pointer items-center gap-1 py-1 pr-2 text-left text-xs text-muted-foreground hover:bg-accent hover:text-foreground"
             style={{ paddingLeft: `${0.5 + depth * 0.75}rem` }}
             aria-expanded={expanded}
         >
             <Chevron className="size-3.5 shrink-0" aria-hidden="true" />
             <FolderIcon className="size-3.5 shrink-0" aria-hidden="true" />
-            <span className="min-w-0 truncate font-mono">{dir.name}</span>
+            <span className="whitespace-nowrap font-mono">{dir.name}</span>
         </button>
     );
 }
@@ -707,7 +707,7 @@ function FileRow({
     label,
     depth,
     selected,
-    viewed,
+    viewState,
     pending,
     onSelect,
 }: {
@@ -715,43 +715,63 @@ function FileRow({
     label: string;
     depth: number;
     selected: boolean;
-    viewed: boolean;
+    viewState: FileViewState;
     pending: boolean;
     onSelect: (path: string) => void;
 }) {
+    const viewed = viewState === "viewed";
+    const updated = viewState === "updated";
+
     return (
         <button
             type="button"
             onClick={() => onSelect(file.path)}
-            title={file.path}
+            title={
+                updated
+                    ? `${file.path} — changed since you last viewed it`
+                    : viewed
+                      ? `${file.path} — viewed`
+                      : file.path
+            }
             className={cn(
-                "flex w-full cursor-pointer items-start gap-1.5 py-1.5 pr-2 text-left text-xs hover:bg-accent",
+                "flex w-max min-w-full cursor-pointer items-start gap-1.5 py-1.5 pr-2 text-left text-xs hover:bg-accent",
                 selected && "bg-accent",
-                viewed && "opacity-60",
             )}
             style={{ paddingLeft: `${0.75 + depth * 0.75}rem` }}
         >
             <FileStatusIcon status={file.status} />
-            <span className="min-w-0 flex-1">
+            <span className="min-w-0 shrink-0">
                 <span
                     className={cn(
-                        "block truncate font-mono",
+                        "block whitespace-nowrap font-mono",
                         file.status === "added" && "text-emerald-700 dark:text-emerald-400",
                         file.status === "removed" && "text-red-700 dark:text-red-400",
+                        viewed && "text-muted-foreground",
                     )}
                 >
                     {label}
                     {pending ? <span className="ml-1 text-amber-600">•</span> : null}
                 </span>
-                <span className="mt-0.5 flex gap-2 text-[10px] text-muted-foreground tabular-nums">
+                <span className="mt-0.5 flex flex-nowrap items-center gap-1.5 text-[10px] tabular-nums">
                     {file.additions > 0 ? (
                         <span className="text-emerald-600 dark:text-emerald-400">+{file.additions}</span>
                     ) : null}
                     {file.deletions > 0 ? (
                         <span className="text-red-600 dark:text-red-400">−{file.deletions}</span>
                     ) : null}
-                    {file.stub ? <span className="uppercase tracking-wide">{file.stub}</span> : null}
-                    {viewed ? <span>viewed</span> : null}
+                    {file.stub ? (
+                        <span className="uppercase tracking-wide text-muted-foreground">{file.stub}</span>
+                    ) : null}
+                    {viewed ? (
+                        <span className="rounded bg-emerald-500/15 px-1 py-px font-medium tracking-wide text-emerald-700 uppercase dark:bg-emerald-400/15 dark:text-emerald-300">
+                            viewed
+                        </span>
+                    ) : null}
+                    {updated ? (
+                        <span className="rounded bg-amber-500/20 px-1 py-px font-medium tracking-wide text-amber-800 uppercase dark:bg-amber-400/15 dark:text-amber-200">
+                            updated
+                        </span>
+                    ) : null}
                 </span>
             </span>
         </button>

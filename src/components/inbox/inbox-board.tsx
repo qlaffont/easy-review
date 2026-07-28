@@ -43,6 +43,7 @@ export function InboxBoard() {
     const openRepoPicker = useOpenRepoPicker();
     const inbox = useSessionState((state) => state.inbox);
     const selectedCount = useSessionState((state) => state.repos.selected.length);
+    const viewerLogin = useSessionState((state) => state.auth.viewer?.login ?? null);
     const sections = useSelector(session.state, () => session.getInboxSections());
     const sectionLayout = useSelector(session.state, () => session.getSectionLayout());
     const [selectedKey, setSelectedKey] = useState<string | null>(null);
@@ -98,6 +99,14 @@ export function InboxBoard() {
     useEffect(() => {
         void session.loadInbox();
     }, [session, selectedCount, inbox.stale]);
+
+    // Refresh on Inbox mount, when returning from a PR, and whenever the signed-in account changes.
+    useEffect(() => {
+        if (!viewerLogin) {
+            return;
+        }
+        void session.revalidateInbox();
+    }, [session, viewerLogin]);
 
     useQuietRevalidate(() => {
         void session.revalidateInbox();

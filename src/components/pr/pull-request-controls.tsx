@@ -1,3 +1,4 @@
+import { useNavigate } from "@tanstack/react-router";
 import { useSelector } from "@tanstack/react-store";
 import { AlertTriangle, Check, ChevronDown, GitMerge, GitPullRequestDraft, RotateCcw } from "lucide-react";
 import { useMemo, useRef, useState } from "react";
@@ -23,6 +24,7 @@ import {
     DropdownMenuSeparator,
     DropdownMenuTrigger,
 } from "#/components/ui/dropdown-menu.tsx";
+import { useDiffPreferences } from "#/lib/diff-preferences.ts";
 import { useSession } from "#/lib/session/provider.tsx";
 import { notifyAction } from "#/lib/toast.ts";
 import { cn } from "#/lib/utils.ts";
@@ -60,6 +62,8 @@ function mergeMethodOptions(
 
 export function PullRequestControls({ detail }: { detail: PullRequestDetail }) {
     const session = useSession();
+    const navigate = useNavigate();
+    const [preferences] = useDiffPreferences();
     const threads = useSelector(session.state, () => session.getReviewThreads(detail.repository, detail.number));
     const unresolvedThreads = useMemo(() => threads.items.filter((thread) => !thread.isResolved), [threads.items]);
     const [error, setError] = useState<string | null>(null);
@@ -77,7 +81,7 @@ export function PullRequestControls({ detail }: { detail: PullRequestDetail }) {
 
     async function run(action: () => Promise<void>, messages: { loading: string; success: string; error?: string }) {
         if (busyRef.current) {
-            return;
+            return false;
         }
 
         busyRef.current = true;
@@ -85,11 +89,29 @@ export function PullRequestControls({ detail }: { detail: PullRequestDetail }) {
         setError(null);
         try {
             await notifyAction(action, messages);
+            return true;
         } catch (cause) {
             setError(cause instanceof Error ? cause.message : "That action failed.");
+            return false;
         } finally {
             busyRef.current = false;
             setBusy(false);
+        }
+    }
+
+    async function mergePullRequest(method: MergeMethod) {
+        const ok = await run(
+            async () => {
+                await session.mergePullRequest(detail.repository, detail.number, method);
+            },
+            {
+                loading: "Merging pull request…",
+                success: "Pull request merged",
+                error: "Could not merge the pull request.",
+            },
+        );
+        if (ok && preferences.returnToInboxAfterReviewOrMerge) {
+            void navigate({ to: "/" });
         }
     }
 
@@ -263,22 +285,7 @@ export function PullRequestControls({ detail }: { detail: PullRequestDetail }) {
                                     <AlertDialogCancel>Cancel</AlertDialogCancel>
                                     <AlertDialogAction
                                         className="bg-[#1f883d] text-white hover:bg-[#1a7f37]"
-                                        onClick={() =>
-                                            void run(
-                                                async () => {
-                                                    await session.mergePullRequest(
-                                                        detail.repository,
-                                                        detail.number,
-                                                        activeMergeMethod,
-                                                    );
-                                                },
-                                                {
-                                                    loading: "Merging pull request…",
-                                                    success: "Pull request merged",
-                                                    error: "Could not merge the pull request.",
-                                                },
-                                            )
-                                        }
+                                        onClick={() => void mergePullRequest(activeMergeMethod)}
                                     >
                                         {selectedMerge.label}
                                     </AlertDialogAction>

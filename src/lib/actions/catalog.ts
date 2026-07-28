@@ -1,6 +1,7 @@
 import type { EasyReviewSession } from "#/lib/session/session.ts";
 import type { PullRequestState } from "#/lib/session/types.ts";
 
+import { shouldReturnToInboxAfterReviewOrMerge } from "#/lib/diff-preferences.ts";
 import { notifyAction } from "#/lib/toast.ts";
 
 /**
@@ -277,6 +278,9 @@ export const APP_ACTIONS: ReadonlyArray<AppAction> = [
                     error: "Could not merge the pull request.",
                 },
             );
+            if (shouldReturnToInboxAfterReviewOrMerge()) {
+                context.goToInbox();
+            }
         },
     },
     {
@@ -297,6 +301,9 @@ export const APP_ACTIONS: ReadonlyArray<AppAction> = [
                     error: "Could not submit the review.",
                 },
             );
+            if (shouldReturnToInboxAfterReviewOrMerge()) {
+                context.goToInbox();
+            }
         },
     },
 ];

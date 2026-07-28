@@ -89,9 +89,7 @@ export function FileDiffViewer({
     hideWhitespace,
     compactLineHeight,
     viewed,
-    collapsed,
     canApplySuggestions,
-    onCollapsedChange,
     onViewedChange,
     onLoadAnyway,
     onAddComment,
@@ -119,8 +117,6 @@ export function FileDiffViewer({
     hideWhitespace: boolean;
     compactLineHeight: boolean;
     viewed: boolean;
-    collapsed: boolean;
-    onCollapsedChange: (collapsed: boolean) => void;
     onViewedChange: (viewed: boolean) => void;
     onLoadAnyway: () => void;
     onAddComment: (target: LineTarget, body: string) => Promise<void>;
@@ -137,6 +133,8 @@ export function FileDiffViewer({
     >({});
 
     const noteValue = draftBody ?? "";
+    /** Viewed files stay fully expanded — gap collapse bars are useless once you’ve reviewed the file. */
+    const effectiveShowFullFile = showFullFile || viewed;
 
     useEffect(() => {
         setShowFullFile(false);
@@ -151,10 +149,10 @@ export function FileDiffViewer({
 
         return materializeFileDiff(path, diff.beforeText, diff.afterText, {
             ignoreWhitespace: hideWhitespace,
-            showFullFile,
-            expansions,
+            showFullFile: effectiveShowFullFile,
+            expansions: effectiveShowFullFile ? {} : expansions,
         });
-    }, [diff, path, hideWhitespace, showFullFile, expansions]);
+    }, [diff, path, hideWhitespace, effectiveShowFullFile, expansions]);
 
     const lineHeight = compactLineHeight ? COMPACT_LINE_HEIGHT : LINE_HEIGHT;
 
@@ -195,27 +193,28 @@ export function FileDiffViewer({
                 path={path}
                 file={file}
                 viewed={viewed}
-                collapsed={collapsed}
                 pendingCount={pendingComments.length}
-                onCollapsedChange={onCollapsedChange}
                 onViewedChange={(next) => {
                     onViewedChange(next);
                     notifySuccess(next ? "Marked as viewed" : "Marked as unviewed");
                 }}
-                showFullFile={showFullFile}
+                showFullFile={effectiveShowFullFile}
                 onShowFullFile={() => {
                     setShowFullFile(true);
                     setExpansions({});
                     notifySuccess("Showing full file");
                 }}
                 onCollapseContext={() => {
+                    if (viewed) {
+                        return;
+                    }
                     setShowFullFile(false);
                     setExpansions({});
                     notifySuccess("Collapsed file context");
                 }}
             />
 
-            {collapsed ? null : error ? (
+            {error ? (
                 <p className="p-4 text-sm text-destructive">{error}</p>
             ) : isLoading && !diff ? (
                 <DiffLoadingSkeleton path={path} />
@@ -281,10 +280,8 @@ function FileDiffHeader({
     path,
     file,
     viewed,
-    collapsed,
     pendingCount,
     showFullFile,
-    onCollapsedChange,
     onViewedChange,
     onShowFullFile,
     onCollapseContext,
@@ -292,28 +289,14 @@ function FileDiffHeader({
     path: string;
     file: PullRequestFile | null;
     viewed: boolean;
-    collapsed: boolean;
     pendingCount: number;
     showFullFile: boolean;
-    onCollapsedChange: (collapsed: boolean) => void;
     onViewedChange: (viewed: boolean) => void;
     onShowFullFile: () => void;
     onCollapseContext: () => void;
 }) {
     return (
         <header className="flex shrink-0 flex-wrap items-center gap-2 border-b bg-muted/30 px-2 py-1.5">
-            <button
-                type="button"
-                className="inline-flex size-7 cursor-pointer items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
-                aria-expanded={!collapsed}
-                aria-label={collapsed ? "Expand file" : "Collapse file"}
-                onClick={() => onCollapsedChange(!collapsed)}
-            >
-                <ChevronDown
-                    className={cn("size-4 transition-transform", collapsed && "-rotate-90")}
-                    aria-hidden="true"
-                />
-            </button>
             <code className="min-w-0 flex-1 truncate font-mono text-xs">{path}</code>
             <HelpTooltip label="Copy path">
                 <Button
@@ -349,26 +332,34 @@ function FileDiffHeader({
                     {pendingCount}
                 </span>
             ) : null}
-            <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                    <Button type="button" variant="ghost" size="icon-sm" className="size-7" aria-label="File options">
-                        <Ellipsis className="size-3.5" aria-hidden="true" />
-                    </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end">
-                    {showFullFile ? (
-                        <DropdownMenuItem onSelect={onCollapseContext}>
-                            <FoldVertical className="size-3.5" aria-hidden="true" />
-                            Collapse context
-                        </DropdownMenuItem>
-                    ) : (
-                        <DropdownMenuItem onSelect={onShowFullFile}>
-                            <UnfoldVertical className="size-3.5" aria-hidden="true" />
-                            Show full file
-                        </DropdownMenuItem>
-                    )}
-                </DropdownMenuContent>
-            </DropdownMenu>
+            {viewed ? null : (
+                <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                        <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon-sm"
+                            className="size-7"
+                            aria-label="File options"
+                        >
+                            <Ellipsis className="size-3.5" aria-hidden="true" />
+                        </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end">
+                        {showFullFile ? (
+                            <DropdownMenuItem onSelect={onCollapseContext}>
+                                <FoldVertical className="size-3.5" aria-hidden="true" />
+                                Collapse context
+                            </DropdownMenuItem>
+                        ) : (
+                            <DropdownMenuItem onSelect={onShowFullFile}>
+                                <UnfoldVertical className="size-3.5" aria-hidden="true" />
+                                Show full file
+                            </DropdownMenuItem>
+                        )}
+                    </DropdownMenuContent>
+                </DropdownMenu>
+            )}
         </header>
     );
 }

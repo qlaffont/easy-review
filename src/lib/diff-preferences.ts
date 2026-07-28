@@ -17,6 +17,8 @@ export type DiffPreferences = {
     fileListLayout: FileListLayout;
     /** Desktop width of the changed-files sidebar in pixels. */
     fileListWidth: number;
+    /** After submitting a review or merging, navigate back to the Inbox. */
+    returnToInboxAfterReviewOrMerge: boolean;
 };
 
 export const FILE_LIST_WIDTH_DEFAULT = 256;
@@ -41,6 +43,7 @@ const DEFAULT_PREFERENCES: DiffPreferences = {
     fullWidth: false,
     fileListLayout: "flat",
     fileListWidth: FILE_LIST_WIDTH_DEFAULT,
+    returnToInboxAfterReviewOrMerge: false,
 };
 
 function readPreferences(): DiffPreferences {
@@ -66,6 +69,7 @@ function readPreferences(): DiffPreferences {
             fileListWidth: clampFileListWidth(
                 typeof parsed.fileListWidth === "number" ? parsed.fileListWidth : FILE_LIST_WIDTH_DEFAULT,
             ),
+            returnToInboxAfterReviewOrMerge: Boolean(parsed.returnToInboxAfterReviewOrMerge),
         };
     } catch {
         return DEFAULT_PREFERENCES;
@@ -119,32 +123,104 @@ export function useDiffPreferences() {
     return [preferences, setPreferences] as const;
 }
 
+/** Sync read for command-palette / non-React callers. */
+export function shouldReturnToInboxAfterReviewOrMerge(): boolean {
+    return getPreferences().returnToInboxAfterReviewOrMerge;
+}
+
 export function viewedFilesStorageKey(repository: string, number: number, headSha: string): string {
     return `easy-review:viewed:v1:${repository}#${number}:${headSha || "unknown"}`;
 }
 
-export function readViewedPaths(repository: string, number: number, headSha: string): Set<string> {
+/** Path → head SHA at the moment the file was marked viewed. */
+export type ViewedFileMarks = Record<string, string>;
+
+export function viewedFileMarksStorageKey(repository: string, number: number): string {
+    return `easy-review:viewed:v2:${repository}#${number}`;
+}
+
+export function readViewedFileMarks(repository: string, number: number, headSha: string): ViewedFileMarks {
     if (typeof window === "undefined") {
-        return new Set();
+        return {};
     }
 
     try {
-        const raw = window.localStorage.getItem(viewedFilesStorageKey(repository, number, headSha));
-        if (!raw) {
-            return new Set();
+        const raw = window.localStorage.getItem(viewedFileMarksStorageKey(repository, number));
+        if (raw) {
+            const parsed = JSON.parse(raw) as unknown;
+            if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+                const marks: ViewedFileMarks = {};
+                for (const [path, sha] of Object.entries(parsed as Record<string, unknown>)) {
+                    if (typeof sha === "string" && sha.length > 0) {
+                        marks[path] = sha;
+                    }
+                }
+                return marks;
+            }
         }
-
-        const parsed = JSON.parse(raw) as unknown;
-        return new Set(Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === "string") : []);
     } catch {
-        return new Set();
+        // fall through to v1 migration
+    }
+
+    // Migrate legacy per-head path lists into path→sha marks for the current head.
+    try {
+        const legacy = window.localStorage.getItem(viewedFilesStorageKey(repository, number, headSha));
+        if (!legacy || !headSha) {
+            return {};
+        }
+        const parsed = JSON.parse(legacy) as unknown;
+        const paths = Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === "string") : [];
+        const marks: ViewedFileMarks = Object.fromEntries(paths.map((path) => [path, headSha]));
+        writeViewedFileMarks(repository, number, marks);
+        return marks;
+    } catch {
+        return {};
     }
 }
 
-export function writeViewedPaths(repository: string, number: number, headSha: string, paths: Set<string>): void {
+export function writeViewedFileMarks(repository: string, number: number, marks: ViewedFileMarks): void {
     try {
-        window.localStorage.setItem(viewedFilesStorageKey(repository, number, headSha), JSON.stringify([...paths]));
+        window.localStorage.setItem(viewedFileMarksStorageKey(repository, number), JSON.stringify(marks));
     } catch {
         // ignore
     }
+}
+
+export type FileViewState = "unseen" | "viewed" | "updated";
+
+/** `updated` = marked viewed on an older head; new commits may have changed this file. */
+export function fileViewState(marks: ViewedFileMarks, path: string, headSha: string): FileViewState {
+    const viewedAt = marks[path];
+    if (!viewedAt) {
+        return "unseen";
+    }
+    if (!headSha || viewedAt === headSha) {
+        return "viewed";
+    }
+    return "updated";
+}
+
+/** @deprecated Prefer `readViewedFileMarks` — kept for any stray callers. */
+export function readViewedPaths(repository: string, number: number, headSha: string): Set<string> {
+    const marks = readViewedFileMarks(repository, number, headSha);
+    return new Set(
+        Object.entries(marks)
+            .filter(([, sha]) => !headSha || sha === headSha)
+            .map(([path]) => path),
+    );
+}
+
+/** @deprecated Prefer `writeViewedFileMarks`. */
+export function writeViewedPaths(repository: string, number: number, headSha: string, paths: Set<string>): void {
+    const marks = readViewedFileMarks(repository, number, headSha);
+    const next: ViewedFileMarks = { ...marks };
+    for (const path of Object.keys(next)) {
+        if (next[path] === headSha && !paths.has(path)) {
+            delete next[path];
+        }
+    }
+    for (const path of paths) {
+        next[path] = headSha;
+    }
+    writeViewedFileMarks(repository, number, next);
 }

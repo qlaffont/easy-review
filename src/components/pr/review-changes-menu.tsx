@@ -1,3 +1,4 @@
+import { useNavigate } from "@tanstack/react-router";
 import { useSelector } from "@tanstack/react-store";
 import { ChevronDown } from "lucide-react";
 import { useMemo, useRef, useState } from "react";
@@ -9,6 +10,7 @@ import { Button } from "#/components/ui/button.tsx";
 import { HelpTooltip } from "#/components/ui/help-tooltip.tsx";
 import { Popover, PopoverContent, PopoverTrigger } from "#/components/ui/popover.tsx";
 import { mentionCandidatesFromPullRequest } from "#/lib/composer-commands.ts";
+import { useDiffPreferences } from "#/lib/diff-preferences.ts";
 import { useSession } from "#/lib/session/provider.tsx";
 import { notifyAction, notifySuccess } from "#/lib/toast.ts";
 import { cn } from "#/lib/utils.ts";
@@ -40,6 +42,8 @@ const SUBMIT_LABEL: Record<ReviewEvent, string> = {
 /** GitHub-style “Review changes” control — green trigger with finish-review dropdown. */
 export function ReviewChangesMenu({ repository, number }: { repository: string; number: number }) {
     const session = useSession();
+    const navigate = useNavigate();
+    const [preferences] = useDiffPreferences();
     const draft = useSelector(session.state, () => session.getReviewDraft(repository, number));
     const page = useSelector(session.state, () => session.getPullRequestPage(repository, number));
     const threads = useSelector(session.state, () => session.getReviewThreads(repository, number));
@@ -74,6 +78,9 @@ export function ReviewChangesMenu({ repository, number }: { repository: string; 
                 error: "Could not submit the review.",
             });
             setOpen(false);
+            if (preferences.returnToInboxAfterReviewOrMerge) {
+                void navigate({ to: "/" });
+            }
         } catch (cause) {
             setError(cause instanceof Error ? cause.message : "Could not submit the review.");
         } finally {

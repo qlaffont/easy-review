@@ -15,11 +15,23 @@ export function PrSettingsEditor({ open, onOpenChange }: { open: boolean; onOpen
                 <DialogHeader>
                     <DialogTitle>PR Settings</DialogTitle>
                     <DialogDescription>
-                        Defaults for the Files changed panel. Saved in this browser and apply on every pull request.
+                        Defaults for pull request review. Saved in this browser and apply on every pull request.
                     </DialogDescription>
                 </DialogHeader>
 
                 <div className="flex flex-col gap-5">
+                    <section className="flex flex-col gap-3">
+                        <h3 className="text-xs font-medium text-muted-foreground">Workflow</h3>
+                        <PreferenceRow
+                            title="Return to Inbox after review or merge"
+                            description="After you submit a review or merge a pull request, go back to the Inbox."
+                            checked={preferences.returnToInboxAfterReviewOrMerge}
+                            onCheckedChange={(returnToInboxAfterReviewOrMerge) =>
+                                setPreferences({ returnToInboxAfterReviewOrMerge })
+                            }
+                        />
+                    </section>
+
                     <section className="flex flex-col gap-3">
                         <h3 className="text-xs font-medium text-muted-foreground">Files changed</h3>
                         <PreferenceRow
