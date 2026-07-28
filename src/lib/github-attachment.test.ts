@@ -105,7 +105,7 @@ describe("repositoryFromGithubBaseUrl", () => {
 describe("Markdown mermaid fences", () => {
     it("renders a mermaid fence as a diagram host instead of a plain code block", () => {
         const html = renderMarkdown("```mermaid\nsequenceDiagram\n    A->>B: hi\n```");
-        expect(html).toContain('aria-label="Rendering diagram"');
+        expect(html).toMatch(/aria-label="(?:Loading|Rendering) diagram"/);
         expect(html).not.toContain("sequenceDiagram");
     });
 });

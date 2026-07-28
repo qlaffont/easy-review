@@ -11,10 +11,10 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const outputDir = path.join(root, ".output");
 const publicDir = path.join(outputDir, "public");
 
-/** Soft headroom over today's build (~1.4 MiB client / ~4.7 MiB total). */
+/** Soft headroom over today's build (~4.8 MiB client / ~10 MiB total with lazy Mermaid). */
 const BUDGETS = {
-    clientPublicBytes: 2 * 1024 * 1024, // 2 MiB — static assets sent to browsers
-    totalOutputBytes: 6 * 1024 * 1024, // 6 MiB — full deployable `.output`
+    clientPublicBytes: 6 * 1024 * 1024, // 6 MiB — static assets sent to browsers (incl. Mermaid chunks)
+    totalOutputBytes: 12 * 1024 * 1024, // 12 MiB — full deployable `.output`
     largestJsChunkBytes: 1024 * 1024, // 1 MiB — single client JS chunk
 };
 

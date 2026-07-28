@@ -7,9 +7,17 @@ import { defineConfig } from "vite";
 
 const config = defineConfig({
     resolve: { tsconfigPaths: true },
+    ssr: {
+        // Mermaid is client-only (dynamic import + React.lazy). Keep it out of the Nitro SSR graph.
+        external: ["mermaid"],
+    },
     plugins: [
         devtools(),
-        nitro({ rollupConfig: { external: [/^@sentry\//] } }),
+        nitro({
+            rollupConfig: {
+                external: [/^@sentry\//, /^mermaid($|\/)/],
+            },
+        }),
         tailwindcss(),
         tanstackStart(),
         viteReact(),

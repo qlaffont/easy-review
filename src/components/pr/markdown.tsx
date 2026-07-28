@@ -3,7 +3,9 @@ import {
     Children,
     createContext,
     isValidElement,
+    lazy,
     memo,
+    Suspense,
     useContext,
     useEffect,
     useMemo,
@@ -18,7 +20,6 @@ import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 import remarkGfm from "remark-gfm";
 import { remarkAlert } from "remark-github-blockquote-alert";
 
-import { MermaidDiagram } from "#/components/pr/mermaid-diagram.tsx";
 import { SuggestionApplyActions, type SuggestionApplyTarget } from "#/components/pr/suggestion-apply.tsx";
 import {
     isGithubUserAttachmentUrl,
@@ -31,6 +32,11 @@ import { remarkBoldMentions } from "#/lib/remark-bold-mentions.ts";
 import { useOptionalSession } from "#/lib/session/provider.tsx";
 import { notifyCopied, notifyError } from "#/lib/toast.ts";
 import { cn } from "#/lib/utils.ts";
+
+/** Client-only; keep out of the SSR graph so Nitro does not ship mermaid on the server. */
+const MermaidDiagram = lazy(() =>
+    import("#/components/pr/mermaid-diagram.tsx").then((module) => ({ default: module.MermaidDiagram })),
+);
 
 /**
  * Alert / icon classes from `remark-github-blockquote-alert` only. Unrestricted `className`
@@ -518,7 +524,19 @@ const components = {
 
         const mermaid = fencedCodeFromPre(children, "mermaid");
         if (mermaid !== null) {
-            return <MermaidDiagram code={mermaid} />;
+            return (
+                <Suspense
+                    fallback={
+                        <div
+                            className="my-3 min-h-24 animate-pulse rounded-md border bg-muted/40 not-prose"
+                            aria-busy="true"
+                            aria-label="Loading diagram"
+                        />
+                    }
+                >
+                    <MermaidDiagram code={mermaid} />
+                </Suspense>
+            );
         }
 
         const codeChild = codeChildFromPre(children);

@@ -16,8 +16,10 @@ jobs:
     env:
       HUSKY: "0"
       # Build-time placeholders; OAuth secrets are not needed for lint/test/build.
-      GITHUB_CLIENT_ID: ci-dummy
+      # Must look like a GitHub App client id (Iv…).
+      GITHUB_CLIENT_ID: Iv1.ci-dummy
       GITHUB_CLIENT_SECRET: ci-dummy
+      GITHUB_APP_SLUG: easy-review-ci
 
     steps:
       - name: Checkout
