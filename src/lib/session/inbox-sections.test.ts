@@ -4,12 +4,13 @@ import type { PullRequestSummary } from "#/lib/session/types.ts";
 
 import {
     DEFAULT_INBOX_SECTIONS,
-    classifyPullRequest,
+    defaultSectionLayout,
     groupIntoSections,
     normalizeSectionLayout,
     parseInboxSettings,
     visibleSectionDefinitions,
 } from "#/lib/session/inbox-sections.ts";
+import { defaultFilterForPreset, matchSectionFilter } from "#/lib/session/section-filters.ts";
 
 const VIEWER = "quentin";
 
@@ -38,15 +39,16 @@ function pullRequest(overrides: Partial<PullRequestSummary> = {}): PullRequestSu
         changedFiles: 0,
         commentCount: 0,
         mergeable: "mergeable",
+        assignees: [],
+        labels: [],
         ...overrides,
     };
 }
 
-describe("classifyPullRequest", () => {
+describe("default section filters", () => {
     it("puts a review requested from you in Needs your review", () => {
         const subject = pullRequest({ reviewRequests: [VIEWER] });
-
-        expect(classifyPullRequest(subject, VIEWER)).toBe("needs-your-review");
+        expect(matchSectionFilter(subject, defaultFilterForPreset("needs-your-review"), VIEWER)).toBe(true);
     });
 
     it("puts a re-requested review back in Needs your review even after you reviewed", () => {
@@ -54,79 +56,85 @@ describe("classifyPullRequest", () => {
             reviewRequests: [VIEWER],
             reviewers: [{ login: VIEWER, state: "approved", reviewId: 1 }],
         });
-
-        expect(classifyPullRequest(subject, VIEWER)).toBe("needs-your-review");
+        expect(matchSectionFilter(subject, defaultFilterForPreset("needs-your-review"), VIEWER)).toBe(true);
     });
 
     it("puts a pull request you already reviewed in Waiting for author", () => {
         const subject = pullRequest({
             reviewers: [{ login: VIEWER, state: "changes-requested", reviewId: 2 }],
         });
-
-        expect(classifyPullRequest(subject, VIEWER)).toBe("waiting-for-author");
+        expect(matchSectionFilter(subject, defaultFilterForPreset("waiting-for-author"), VIEWER)).toBe(true);
+        expect(matchSectionFilter(subject, defaultFilterForPreset("needs-your-review"), VIEWER)).toBe(false);
     });
 
     it("puts your own blocked pull request in Returned to you", () => {
         const subject = pullRequest({ author: VIEWER, reviewDecision: "changes-requested" });
-
-        expect(classifyPullRequest(subject, VIEWER)).toBe("returned-to-you");
+        expect(matchSectionFilter(subject, defaultFilterForPreset("returned-to-you"), VIEWER)).toBe(true);
     });
 
     it("puts your own approved pull request in Approved", () => {
         const subject = pullRequest({ author: VIEWER, reviewDecision: "approved" });
-
-        expect(classifyPullRequest(subject, VIEWER)).toBe("approved");
+        expect(matchSectionFilter(subject, defaultFilterForPreset("approved"), VIEWER)).toBe(true);
     });
 
     it("puts your own pending pull request in Waiting for reviewers", () => {
         const subject = pullRequest({ author: VIEWER, reviewDecision: "review-required" });
-
-        expect(classifyPullRequest(subject, VIEWER)).toBe("waiting-for-reviewers");
+        expect(matchSectionFilter(subject, defaultFilterForPreset("waiting-for-reviewers"), VIEWER)).toBe(true);
     });
 
     it("puts your own draft in Drafts, whatever its review state", () => {
         const subject = pullRequest({ author: VIEWER, isDraft: true, reviewDecision: "approved" });
-
-        expect(classifyPullRequest(subject, VIEWER)).toBe("drafts");
+        expect(matchSectionFilter(subject, defaultFilterForPreset("drafts"), VIEWER)).toBe(true);
+        expect(matchSectionFilter(subject, defaultFilterForPreset("approved"), VIEWER)).toBe(false);
     });
 
-    it("puts a merged pull request in Merging and recently merged, whoever wrote it", () => {
+    it("puts a merged pull request in Merging and recently merged", () => {
         const mine = pullRequest({ author: VIEWER, state: "merged", mergedAt: "2026-07-03T00:00:00.000Z" });
-        const theirs = pullRequest({ state: "merged", mergedAt: "2026-07-03T00:00:00.000Z" });
-
-        expect(classifyPullRequest(mine, VIEWER)).toBe("merging-and-recently-merged");
-        expect(classifyPullRequest(theirs, VIEWER)).toBe("merging-and-recently-merged");
+        expect(matchSectionFilter(mine, defaultFilterForPreset("merging-and-recently-merged"), VIEWER)).toBe(true);
     });
 
-    it("drops closed, unreviewed and other people's drafts into Other", () => {
-        expect(classifyPullRequest(pullRequest({ state: "closed" }), VIEWER)).toBe("other");
-        expect(classifyPullRequest(pullRequest(), VIEWER)).toBe("other");
-        expect(classifyPullRequest(pullRequest({ isDraft: true }), VIEWER)).toBe("other");
+    it("does not put unmatched PRs into any default section", () => {
+        const closed = pullRequest({ state: "closed" });
+        const stranger = pullRequest();
+        const otherDraft = pullRequest({ isDraft: true });
+
+        for (const id of DEFAULT_INBOX_SECTIONS.map((section) => section.id)) {
+            expect(matchSectionFilter(closed, defaultFilterForPreset(id), VIEWER)).toBe(false);
+            expect(matchSectionFilter(stranger, defaultFilterForPreset(id), VIEWER)).toBe(false);
+            expect(matchSectionFilter(otherDraft, defaultFilterForPreset(id), VIEWER)).toBe(false);
+        }
     });
 
-    it("ignores a review request that is not yours", () => {
-        const subject = pullRequest({ reviewRequests: ["someone-else"] });
-
-        expect(classifyPullRequest(subject, VIEWER)).toBe("other");
+    it("treats empty filter and empty cases as match-nothing", () => {
+        expect(matchSectionFilter(pullRequest(), { cases: [] }, VIEWER)).toBe(false);
+        expect(
+            matchSectionFilter(pullRequest(), { cases: [{ id: "c1", name: "Empty", conditions: [] }] }, VIEWER),
+        ).toBe(false);
     });
 });
 
 describe("section layout", () => {
-    it("appends missing defaults and drops unknown ids", () => {
+    it("appends missing defaults, keeps customs, and drops unknown ids", () => {
         const layout = normalizeSectionLayout([
             { id: "other", label: "Misc", hidden: false },
             { id: "needs-your-review", label: "  ", hidden: true },
             { id: "needs-your-review", label: "dup", hidden: false },
+            { id: "custom_abc", label: "Mine", hidden: false, filter: { cases: [] } },
         ]);
 
-        expect(layout[0]).toMatchObject({ id: "other", label: "Misc", color: "muted", icon: "inbox" });
+        expect(layout[0]).toMatchObject({ id: "other", label: "Misc", kind: "custom" });
         expect(layout.find((entry) => entry.id === "needs-your-review")).toMatchObject({
             label: "  ",
             hidden: true,
             color: "amber",
             icon: "eye",
+            kind: "preset",
         });
-        expect(layout).toHaveLength(DEFAULT_INBOX_SECTIONS.length);
+        expect(layout.find((entry) => entry.id === "custom_abc")).toMatchObject({
+            label: "Mine",
+            kind: "custom",
+        });
+        expect(layout).toHaveLength(DEFAULT_INBOX_SECTIONS.length + 2);
     });
 
     it("keeps custom color and icon, and falls back when invalid", () => {
@@ -167,12 +175,18 @@ describe("section layout", () => {
         expect(visibleSectionDefinitions(layout)[0]).toMatchObject({ id: "approved", label: "Ship it" });
         expect(visibleSectionDefinitions(layout).find((entry) => entry.id === "drafts")?.label).toBe("Drafts");
     });
+
+    it("ships default filters on a fresh layout", () => {
+        const layout = defaultSectionLayout();
+        expect(layout.find((entry) => entry.id === "needs-your-review")?.filter.cases.length).toBeGreaterThan(0);
+        expect(layout.some((entry) => entry.id === "other")).toBe(false);
+    });
 });
 
 describe("parseInboxSettings", () => {
     it("accepts a versioned document and normalizes layout + expanded defaults", () => {
         const settings = parseInboxSettings({
-            version: 1,
+            version: 2,
             expandedSections: ["drafts", "bogus"],
             sectionLayout: [
                 { id: "approved", label: "Ready", hidden: true, color: "rose", icon: "flame", defaultExpanded: false },
@@ -196,17 +210,32 @@ describe("parseInboxSettings", () => {
         expect(settings.sectionLayout).toHaveLength(DEFAULT_INBOX_SECTIONS.length);
     });
 
+    it("migrates v1 settings and treats other as custom", () => {
+        const settings = parseInboxSettings({
+            version: 1,
+            sectionLayout: [{ id: "other", label: "Misc", hidden: false }],
+        });
+        expect(settings.version).toBe(2);
+        expect(settings.sectionLayout.find((entry) => entry.id === "other")).toMatchObject({
+            kind: "custom",
+            label: "Misc",
+        });
+    });
+
     it("rejects unsupported versions", () => {
         expect(() => parseInboxSettings({ version: 99 })).toThrow(/Unsupported Inbox settings version/);
     });
 });
 
 describe("groupIntoSections", () => {
-    it("keeps every section visible, including the empty ones", () => {
-        const sections = groupIntoSections([pullRequest({ reviewRequests: [VIEWER] })], VIEWER);
+    it("keeps every visible section, including empty ones, and allows overlap", () => {
+        const layout = defaultSectionLayout().map((entry) => ({ ...entry, hidden: false }));
+        const definitions = visibleSectionDefinitions(layout);
+        const sections = groupIntoSections([pullRequest({ reviewRequests: [VIEWER] })], VIEWER, definitions);
 
         expect(sections).toHaveLength(DEFAULT_INBOX_SECTIONS.length);
-        expect(sections.map((section) => section.pullRequests.length)).toEqual([1, 0, 0, 0, 0, 0, 0, 0]);
+        expect(sections.find((section) => section.id === "needs-your-review")?.pullRequests).toHaveLength(1);
+        expect(sections.find((section) => section.id === "drafts")?.pullRequests).toHaveLength(0);
     });
 
     it("shows the freshest pull request first inside a section", () => {
@@ -223,7 +252,10 @@ describe("groupIntoSections", () => {
             updatedAt: "2026-07-09T00:00:00.000Z",
         });
 
-        const [needsReview] = groupIntoSections([older, newer], VIEWER);
+        const definitions = visibleSectionDefinitions(defaultSectionLayout());
+        const needsReview = groupIntoSections([older, newer], VIEWER, definitions).find(
+            (section) => section.id === "needs-your-review",
+        );
 
         expect(needsReview?.pullRequests.map((entry) => entry.number)).toEqual([2, 1]);
     });

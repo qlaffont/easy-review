@@ -54,7 +54,7 @@ import {
 
 import type { InboxSectionId, SectionColorId, SectionIconId } from "#/lib/session/inbox-sections.ts";
 
-import { DEFAULT_SECTION_APPEARANCE, normalizeHexColor } from "#/lib/session/inbox-sections.ts";
+import { appearanceForSectionId, normalizeHexColor } from "#/lib/session/inbox-sections.ts";
 
 export type SectionVisual = {
     icon: LucideIcon;
@@ -141,12 +141,12 @@ export const SECTION_COLOR_STYLES: Record<SectionColorId, SectionColorStyle> = {
         swatchClass: "bg-teal-500",
     },
     muted: {
-        iconClass: "text-muted-foreground",
-        chipClass: "bg-muted",
-        headerClass: "bg-muted/50 hover:bg-muted",
-        countClass: "bg-muted text-muted-foreground",
-        accentClass: "border-l-border",
-        swatchClass: "bg-muted-foreground/50",
+        iconClass: "text-zinc-600 dark:text-zinc-300",
+        chipClass: "bg-zinc-500/15",
+        headerClass: "bg-zinc-500/7 hover:bg-zinc-500/12",
+        countClass: "bg-zinc-500/15 text-zinc-700 dark:text-zinc-200",
+        accentClass: "border-l-zinc-400 dark:border-l-zinc-500",
+        swatchClass: "bg-zinc-500",
     },
 };
 
@@ -246,7 +246,7 @@ export function visualForSection(
     id: InboxSectionId,
     appearance?: { color?: SectionColorId; customColor?: string | null; icon?: SectionIconId },
 ): SectionVisual {
-    const defaults = DEFAULT_SECTION_APPEARANCE[id];
+    const defaults = appearanceForSectionId(id);
     return resolveSectionVisual(
         appearance?.color ?? defaults.color,
         appearance?.icon ?? defaults.icon,

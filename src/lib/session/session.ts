@@ -4,6 +4,7 @@ import type { SuggestionChange } from "#/lib/session/apply-suggestion.ts";
 import type { SessionError } from "#/lib/session/errors.ts";
 import type {
     InboxSection,
+    InboxSectionExport,
     InboxSectionId,
     InboxSectionLayoutEntry,
     InboxSettings,
@@ -11,6 +12,7 @@ import type {
     SectionIconId,
 } from "#/lib/session/inbox-sections.ts";
 import type { GithubClient, GithubViewer, KeyValueStore } from "#/lib/session/ports.ts";
+import type { SectionFilter, SectionRecipeId } from "#/lib/session/section-filters.ts";
 import type {
     DiffSide,
     FileDiff,
@@ -36,15 +38,27 @@ import type {
 import { EasyReviewError, missingToken, toSessionError, unauthorized } from "#/lib/session/errors.ts";
 import {
     defaultExpandedSections,
+    defaultLabelForSection,
     defaultSectionLayout,
     groupIntoSections,
     INBOX_SETTINGS_VERSION,
+    isPresetInboxSectionId,
+    newCustomSectionId,
     normalizeHexColor,
     normalizeSectionLayout,
+    parseInboxSectionExport,
     parseInboxSettings,
     visibleSectionDefinitions,
 } from "#/lib/session/inbox-sections.ts";
 import { mergeRelatedPullRequests, selectRelatedPullRequests } from "#/lib/session/related-pull-requests.ts";
+import {
+    defaultFilterForPreset,
+    emptySectionFilter,
+    filterFromRecipe,
+    matchSectionFilter,
+    normalizeSectionFilter,
+    recipeById,
+} from "#/lib/session/section-filters.ts";
 
 /** Pre-OAuth localStorage key — removed on restore/disconnect so leftovers cannot leak. */
 const LEGACY_BROWSER_TOKEN_KEY = "auth:token";
@@ -833,10 +847,100 @@ export function createEasyReviewSession({ github, store, oauth }: EasyReviewSess
         await persistSectionLayout(layout);
     }
 
+    /** Reorder a visible section to a new index among visible sections (hidden rows stay put). */
+    async function reorderVisibleSection(id: InboxSectionId, toVisibleIndex: number): Promise<void> {
+        const layout = state.state.inbox.sectionLayout;
+        const visible = layout.filter((entry) => !entry.hidden);
+        const fromVisibleIndex = visible.findIndex((entry) => entry.id === id);
+        if (
+            fromVisibleIndex < 0 ||
+            toVisibleIndex < 0 ||
+            toVisibleIndex >= visible.length ||
+            fromVisibleIndex === toVisibleIndex
+        ) {
+            return;
+        }
+
+        const nextVisible = [...visible];
+        const [moved] = nextVisible.splice(fromVisibleIndex, 1);
+        if (!moved) {
+            return;
+        }
+        nextVisible.splice(toVisibleIndex, 0, moved);
+
+        let visibleCursor = 0;
+        await persistSectionLayout(layout.map((entry) => (entry.hidden ? entry : nextVisible[visibleCursor++]!)));
+    }
+
     async function resetSectionLayout(): Promise<void> {
         const layout = defaultSectionLayout();
         await persistSectionLayout(layout);
         setInbox({ expandedSections: defaultExpandedSections(layout) });
+    }
+
+    async function setSectionFilter(id: InboxSectionId, filter: SectionFilter): Promise<void> {
+        await persistSectionLayout(
+            state.state.inbox.sectionLayout.map((entry) =>
+                entry.id === id ? { ...entry, filter: normalizeSectionFilter(filter, entry.filter) } : entry,
+            ),
+        );
+    }
+
+    async function resetSectionFilter(id: InboxSectionId): Promise<void> {
+        const filter = isPresetInboxSectionId(id) ? defaultFilterForPreset(id) : emptySectionFilter();
+        await setSectionFilter(id, filter);
+    }
+
+    async function addCustomSection(recipeId: SectionRecipeId): Promise<InboxSectionId> {
+        const recipe = recipeById(recipeId);
+        const id = newCustomSectionId();
+        const entry: InboxSectionLayoutEntry = {
+            id,
+            label: recipe?.suggestedLabel ?? "Custom section",
+            hidden: false,
+            defaultExpanded: true,
+            color: recipe?.color ?? "muted",
+            customColor: null,
+            icon: recipe?.icon ?? "filter",
+            filter: filterFromRecipe(recipeId),
+            kind: "custom",
+        };
+        const layout = [...state.state.inbox.sectionLayout, entry];
+        await persistSectionLayout(layout);
+        setInbox({ expandedSections: [...state.state.inbox.expandedSections, id] });
+        return id;
+    }
+
+    async function duplicateSection(id: InboxSectionId): Promise<InboxSectionId | null> {
+        const source = state.state.inbox.sectionLayout.find((entry) => entry.id === id);
+        if (!source) {
+            return null;
+        }
+        const newId = newCustomSectionId();
+        const entry: InboxSectionLayoutEntry = {
+            ...source,
+            id: newId,
+            label: `${source.label.trim() || defaultLabelForSection(source.id)} copy`,
+            hidden: false,
+            kind: "custom",
+            filter: normalizeSectionFilter(source.filter),
+        };
+        const index = state.state.inbox.sectionLayout.findIndex((row) => row.id === id);
+        const layout = [...state.state.inbox.sectionLayout];
+        layout.splice(index + 1, 0, entry);
+        await persistSectionLayout(layout);
+        return newId;
+    }
+
+    async function deleteSection(id: InboxSectionId): Promise<void> {
+        const entry = state.state.inbox.sectionLayout.find((row) => row.id === id);
+        if (!entry || entry.kind === "preset") {
+            return;
+        }
+        await persistSectionLayout(state.state.inbox.sectionLayout.filter((row) => row.id !== id));
+        setInbox({
+            expandedSections: state.state.inbox.expandedSections.filter((sectionId) => sectionId !== id),
+        });
     }
 
     function getInboxSettings(): InboxSettings {
@@ -845,6 +949,14 @@ export function createEasyReviewSession({ github, store, oauth }: EasyReviewSess
             expandedSections: defaultExpandedSections(state.state.inbox.sectionLayout),
             sectionLayout: state.state.inbox.sectionLayout,
         };
+    }
+
+    function exportInboxSection(id: InboxSectionId): InboxSectionExport | null {
+        const section = state.state.inbox.sectionLayout.find((entry) => entry.id === id);
+        if (!section) {
+            return null;
+        }
+        return { version: INBOX_SETTINGS_VERSION, section };
     }
 
     async function importInboxSettings(raw: unknown): Promise<void> {
@@ -857,6 +969,32 @@ export function createEasyReviewSession({ github, store, oauth }: EasyReviewSess
             store.remove(INBOX_EXPANDED_KEY),
             store.set(INBOX_SECTIONS_KEY, JSON.stringify(settings.sectionLayout)),
         ]);
+    }
+
+    async function importInboxSection(raw: unknown): Promise<InboxSectionId> {
+        const { section } = parseInboxSectionExport(raw);
+        const layout = [...state.state.inbox.sectionLayout, section];
+        await persistSectionLayout(layout);
+        setInbox({ expandedSections: [...state.state.inbox.expandedSections, section.id] });
+        return section.id;
+    }
+
+    /** Match preview against the current inbox pool (selected repos only). */
+    function previewSectionFilter(
+        filter: SectionFilter,
+        sampleSize = 8,
+    ): {
+        count: number;
+        sample: Array<PullRequestSummary>;
+    } {
+        const { inbox, repos, auth } = state.state;
+        const selected = new Set(repos.selected);
+        const viewerLogin = auth.viewer?.login ?? "";
+        const matched = inbox.pullRequests
+            .filter((pullRequest) => selected.has(pullRequest.repository))
+            .filter((pullRequest) => matchSectionFilter(pullRequest, filter, viewerLogin))
+            .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+        return { count: matched.length, sample: matched.slice(0, sampleSize) };
     }
 
     /** Ask GitHub for one pull request in full. */
@@ -2154,10 +2292,19 @@ export function createEasyReviewSession({ github, store, oauth }: EasyReviewSess
         setSectionCustomColor,
         setSectionIcon,
         setSectionDefaultExpanded,
+        setSectionFilter,
+        resetSectionFilter,
+        addCustomSection,
+        duplicateSection,
+        deleteSection,
         moveSection,
+        reorderVisibleSection,
         resetSectionLayout,
         getInboxSettings,
+        exportInboxSection,
         importInboxSettings,
+        importInboxSection,
+        previewSectionFilter,
         getInboxSections,
         loadPullRequest,
         refreshPullRequest,
@@ -2232,6 +2379,8 @@ function toInboxSummary(detail: PullRequestDetail): PullRequestSummary {
         changedFiles: detail.changedFiles,
         commentCount: detail.commentCount,
         mergeable: detail.mergeable,
+        assignees: detail.assignees,
+        labels: detail.labels,
     };
 }
 

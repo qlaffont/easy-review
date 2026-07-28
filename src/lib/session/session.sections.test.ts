@@ -72,7 +72,25 @@ describe("inbox section customization", () => {
             "drafts",
             "merging-and-recently-merged",
             "waiting-for-author",
-            "other",
+        ]);
+        expect(session.getSectionLayout().find((entry) => entry.id === "returned-to-you")?.hidden).toBe(true);
+    });
+
+    it("drag-reorders a visible section to an arbitrary index", async () => {
+        const session = await connectedWithInbox();
+        await session.setSectionHidden("returned-to-you", true);
+
+        // Visible: needs-your-review(0), waiting-for-reviewers(1), approved(2), …
+        await session.reorderVisibleSection("approved", 0);
+
+        expect(session.getSectionLayout().map((entry) => entry.id)).toEqual([
+            "approved",
+            "returned-to-you",
+            "needs-your-review",
+            "waiting-for-reviewers",
+            "drafts",
+            "merging-and-recently-merged",
+            "waiting-for-author",
         ]);
         expect(session.getSectionLayout().find((entry) => entry.id === "returned-to-you")?.hidden).toBe(true);
     });
@@ -93,7 +111,6 @@ describe("inbox section customization", () => {
             "drafts",
             "merging-and-recently-merged",
             "waiting-for-author",
-            "other",
         ]);
         expect(session.getSectionLayout().find((entry) => entry.id === "drafts")?.hidden).toBe(true);
         expect(session.getSectionLayout().find((entry) => entry.id === "merging-and-recently-merged")?.hidden).toBe(
@@ -153,18 +170,19 @@ describe("inbox section customization", () => {
         await session.setSectionLabel("approved", "Ship it");
         await session.setSectionColor("approved", "rose");
         await session.setSectionIcon("approved", "star");
-        await session.setSectionDefaultExpanded("other", true);
+        await session.setSectionDefaultExpanded("waiting-for-author", true);
+        await session.setSectionHidden("waiting-for-author", false);
         await session.toggleSection("drafts");
 
         const exported = session.getInboxSettings();
-        expect(exported.version).toBe(1);
+        expect(exported.version).toBe(2);
         expect(exported.expandedSections).toContain("approved");
-        expect(exported.expandedSections).toContain("other");
+        expect(exported.expandedSections).toContain("waiting-for-author");
         expect(exported.expandedSections).not.toContain("drafts");
         expect(session.state.state.inbox.expandedSections).toContain("drafts");
 
         await session.importInboxSettings({
-            version: 1,
+            version: 2,
             expandedSections: ["drafts"],
             sectionLayout: [],
         });

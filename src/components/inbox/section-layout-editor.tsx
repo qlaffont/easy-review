@@ -1,16 +1,60 @@
+import {
+    closestCenter,
+    DndContext,
+    KeyboardSensor,
+    PointerSensor,
+    useSensor,
+    useSensors,
+    type DragEndEvent,
+} from "@dnd-kit/core";
+import { restrictToVerticalAxis, restrictToParentElement } from "@dnd-kit/modifiers";
+import {
+    SortableContext,
+    sortableKeyboardCoordinates,
+    useSortable,
+    verticalListSortingStrategy,
+} from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
 import { useSelector } from "@tanstack/react-store";
-import { ArrowDown, ArrowUp, ChevronDown, ChevronRight, Download, Plus, Trash2, Upload } from "lucide-react";
+import {
+    ArrowDown,
+    ArrowUp,
+    ChevronDown,
+    ChevronRight,
+    Copy,
+    Download,
+    Filter,
+    GripVertical,
+    Plus,
+    Trash2,
+    Upload,
+} from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
-import type { InboxSectionLayoutEntry, SectionColorId, SectionIconId } from "#/lib/session/inbox-sections.ts";
+import type {
+    InboxSectionId,
+    InboxSectionLayoutEntry,
+    SectionColorId,
+    SectionIconId,
+} from "#/lib/session/inbox-sections.ts";
+import type { SectionRecipeId } from "#/lib/session/section-filters.ts";
 
-import { SECTION_COLOR_STYLES, SECTION_ICONS, visualForSection } from "#/components/inbox/section-visuals.ts";
+import { SectionFilterEditor, SectionFilterSummaryLine } from "#/components/inbox/section-filter-editor.tsx";
+import { notifySectionAdded } from "#/components/inbox/section-toast.tsx";
+import {
+    SECTION_COLOR_STYLES,
+    SECTION_ICONS,
+    resolveSectionVisual,
+    visualForSection,
+} from "#/components/inbox/section-visuals.ts";
 import { Button } from "#/components/ui/button.tsx";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "#/components/ui/dialog.tsx";
 import {
     DropdownMenu,
     DropdownMenuContent,
     DropdownMenuItem,
+    DropdownMenuLabel,
+    DropdownMenuSeparator,
     DropdownMenuTrigger,
 } from "#/components/ui/dropdown-menu.tsx";
 import { Input } from "#/components/ui/input.tsx";
@@ -22,6 +66,7 @@ import {
     normalizeHexColor,
 } from "#/lib/session/inbox-sections.ts";
 import { useSession } from "#/lib/session/provider.tsx";
+import { SECTION_RECIPES } from "#/lib/session/section-filters.ts";
 import { notifyError, notifySuccess } from "#/lib/toast.ts";
 import { cn } from "#/lib/utils.ts";
 
@@ -29,9 +74,31 @@ export function SectionLayoutEditor({ open, onOpenChange }: { open: boolean; onO
     const session = useSession();
     const layout = useSelector(session.state, () => session.getSectionLayout());
     const fileInputRef = useRef<HTMLInputElement>(null);
+    const sectionImportRef = useRef<HTMLInputElement>(null);
+    const [filterSectionId, setFilterSectionId] = useState<InboxSectionId | null>(null);
 
     const visible = layout.filter((entry) => !entry.hidden);
-    const removed = layout.filter((entry) => entry.hidden);
+    const hiddenPresetsById = new Map(
+        layout.filter((entry) => entry.hidden && entry.kind === "preset").map((entry) => [entry.id, entry]),
+    );
+
+    const sensors = useSensors(
+        useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
+        useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+    );
+
+    function handleDragEnd(event: DragEndEvent) {
+        const { active, over } = event;
+        if (!over || active.id === over.id) {
+            return;
+        }
+        const fromIndex = visible.findIndex((entry) => entry.id === active.id);
+        const toIndex = visible.findIndex((entry) => entry.id === over.id);
+        if (fromIndex < 0 || toIndex < 0 || fromIndex === toIndex) {
+            return;
+        }
+        void session.reorderVisibleSection(active.id as InboxSectionId, toIndex);
+    }
 
     function exportSettings() {
         const payload = JSON.stringify(session.getInboxSettings(), null, 2);
@@ -56,149 +123,222 @@ export function SectionLayoutEditor({ open, onOpenChange }: { open: boolean; onO
         }
     }
 
-    return (
-        <Dialog open={open} onOpenChange={onOpenChange}>
-            <DialogContent className="max-h-[85svh] overflow-y-auto sm:max-w-lg">
-                <DialogHeader>
-                    <DialogTitle>Inbox sections</DialogTitle>
-                    <DialogDescription>
-                        Remove, rename, reorder, and restyle the triage buckets. Classification rules stay the same.
-                        Preferences are saved in this browser — export to move them.
-                    </DialogDescription>
-                </DialogHeader>
+    async function importSectionFile(file: File) {
+        try {
+            const text = await file.text();
+            const parsed: unknown = JSON.parse(text);
+            await session.importInboxSection(parsed);
+            notifySuccess("Section imported");
+        } catch (cause) {
+            notifyError(cause instanceof Error ? cause.message : "Could not import section.");
+        }
+    }
 
-                <div className="flex w-full items-center justify-between gap-2">
-                    <div className="flex flex-wrap gap-2">
-                        <Button type="button" variant="outline" size="sm" className="gap-1.5" onClick={exportSettings}>
-                            <Download className="size-3.5" />
-                            Export
-                        </Button>
+    return (
+        <>
+            <Dialog open={open} onOpenChange={onOpenChange}>
+                <DialogContent className="flex max-h-[90svh] w-full flex-col gap-4 overflow-hidden sm:max-w-2xl">
+                    <DialogHeader className="min-w-0 shrink-0 space-y-1.5 pr-8 text-left">
+                        <DialogTitle>Inbox sections</DialogTitle>
+                        <DialogDescription className="text-pretty">
+                            Hide, rename, reorder, and restyle buckets — or edit their filters. Sections match
+                            independently, so the same PR can appear in more than one. Saved in this browser.
+                        </DialogDescription>
+                    </DialogHeader>
+
+                    <div className="flex w-full min-w-0 shrink-0 flex-wrap items-center justify-between gap-2">
+                        <div className="flex flex-wrap gap-2">
+                            <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                className="gap-1.5"
+                                onClick={exportSettings}
+                            >
+                                <Download className="size-3.5" />
+                                Export
+                            </Button>
+                            <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                className="gap-1.5"
+                                onClick={() => fileInputRef.current?.click()}
+                            >
+                                <Upload className="size-3.5" />
+                                Import
+                            </Button>
+                            <input
+                                ref={fileInputRef}
+                                type="file"
+                                accept="application/json,.json"
+                                className="hidden"
+                                onChange={(event) => {
+                                    const file = event.target.files?.[0];
+                                    event.target.value = "";
+                                    if (file) void importSettingsFile(file);
+                                }}
+                            />
+                            <input
+                                ref={sectionImportRef}
+                                type="file"
+                                accept="application/json,.json"
+                                className="hidden"
+                                onChange={(event) => {
+                                    const file = event.target.files?.[0];
+                                    event.target.value = "";
+                                    if (file) void importSectionFile(file);
+                                }}
+                            />
+                            <DropdownMenu>
+                                <DropdownMenuTrigger asChild>
+                                    <Button type="button" variant="outline" size="sm" className="gap-1.5">
+                                        <Plus className="size-3.5" />
+                                        Add section
+                                    </Button>
+                                </DropdownMenuTrigger>
+                                <DropdownMenuContent align="start" className="max-h-80 min-w-64 overflow-y-auto">
+                                    <DropdownMenuItem onSelect={() => sectionImportRef.current?.click()}>
+                                        Import section JSON…
+                                    </DropdownMenuItem>
+                                    <DropdownMenuSeparator />
+                                    <DropdownMenuLabel>Recipes</DropdownMenuLabel>
+                                    {SECTION_RECIPES.map((recipe) => {
+                                        const hiddenPreset = hiddenPresetsById.get(recipe.id);
+                                        const visual = hiddenPreset
+                                            ? visualForSection(hiddenPreset.id, hiddenPreset)
+                                            : resolveSectionVisual(recipe.color, recipe.icon);
+                                        const OptionIcon = visual.icon;
+                                        const label = hiddenPreset
+                                            ? hiddenPreset.label.trim() || defaultLabelForSection(hiddenPreset.id)
+                                            : recipe.label;
+                                        return (
+                                            <DropdownMenuItem
+                                                key={recipe.id}
+                                                className="gap-2"
+                                                title={recipe.description}
+                                                onSelect={() => {
+                                                    if (hiddenPreset) {
+                                                        void session
+                                                            .setSectionHidden(hiddenPreset.id, false)
+                                                            .then(() => notifySectionAdded(`Added “${label}”`, visual));
+                                                        return;
+                                                    }
+                                                    void session
+                                                        .addCustomSection(recipe.id as SectionRecipeId)
+                                                        .then(() =>
+                                                            notifySectionAdded(
+                                                                `Added “${recipe.suggestedLabel}”`,
+                                                                visual,
+                                                            ),
+                                                        );
+                                                }}
+                                            >
+                                                <span
+                                                    className={cn(
+                                                        "grid size-6 shrink-0 place-items-center rounded-md",
+                                                        visual.chipClass,
+                                                    )}
+                                                    style={visual.tones?.chip}
+                                                >
+                                                    <OptionIcon
+                                                        className={cn("size-3.5", visual.iconClass)}
+                                                        style={visual.tones?.icon}
+                                                        aria-hidden="true"
+                                                    />
+                                                </span>
+                                                <span className="min-w-0 truncate">{label}</span>
+                                            </DropdownMenuItem>
+                                        );
+                                    })}
+                                </DropdownMenuContent>
+                            </DropdownMenu>
+                        </div>
                         <Button
                             type="button"
                             variant="outline"
                             size="sm"
-                            className="gap-1.5"
-                            onClick={() => fileInputRef.current?.click()}
-                        >
-                            <Upload className="size-3.5" />
-                            Import
-                        </Button>
-                        <input
-                            ref={fileInputRef}
-                            type="file"
-                            accept="application/json,.json"
-                            className="hidden"
-                            onChange={(event) => {
-                                const file = event.target.files?.[0];
-                                event.target.value = "";
-                                if (file) {
-                                    void importSettingsFile(file);
-                                }
+                            className="shrink-0"
+                            onClick={() => {
+                                void session
+                                    .resetSectionLayout()
+                                    .then(() => notifySuccess("Sections reset to defaults"));
                             }}
-                        />
-                        <DropdownMenu>
-                            <DropdownMenuTrigger asChild>
-                                <Button
-                                    type="button"
-                                    variant="outline"
-                                    size="sm"
-                                    className="gap-1.5"
-                                    disabled={removed.length === 0}
-                                >
-                                    <Plus className="size-3.5" />
-                                    Add section
-                                </Button>
-                            </DropdownMenuTrigger>
-                            <DropdownMenuContent align="start" className="min-w-56">
-                                {removed.map((entry) => {
-                                    const visual = visualForSection(entry.id, entry);
-                                    const OptionIcon = visual.icon;
-                                    const label = entry.label.trim() || defaultLabelForSection(entry.id);
-                                    return (
-                                        <DropdownMenuItem
-                                            key={entry.id}
-                                            className="gap-2"
-                                            onSelect={() => {
-                                                void session
-                                                    .setSectionHidden(entry.id, false)
-                                                    .then(() => notifySuccess(`Added "${label}"`));
-                                            }}
-                                        >
-                                            <span
-                                                className={cn(
-                                                    "grid size-6 place-items-center rounded-md",
-                                                    visual.chipClass,
-                                                )}
-                                            >
-                                                <OptionIcon
-                                                    className={cn("size-3.5", visual.iconClass)}
-                                                    aria-hidden="true"
-                                                />
-                                            </span>
-                                            {label}
-                                        </DropdownMenuItem>
-                                    );
-                                })}
-                            </DropdownMenuContent>
-                        </DropdownMenu>
+                        >
+                            Reset
+                        </Button>
                     </div>
-                    <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        className="shrink-0"
-                        onClick={() => {
-                            void session.resetSectionLayout().then(() => notifySuccess("Sections reset to defaults"));
-                        }}
-                    >
-                        Reset
-                    </Button>
-                </div>
 
-                {visible.length === 0 ? (
-                    <p className="rounded-md border border-dashed px-3 py-6 text-center text-sm text-muted-foreground">
-                        No sections on the Inbox. Add one back above.
-                    </p>
-                ) : (
-                    <ul className="flex flex-col gap-2">
-                        {visible.map((entry, index) => (
-                            <SectionLayoutRow
-                                key={entry.id}
-                                entry={entry}
-                                isFirst={index === 0}
-                                isLast={index === visible.length - 1}
-                                onLabel={(label) => void session.setSectionLabel(entry.id, label)}
-                                onColor={(color) => void session.setSectionColor(entry.id, color)}
-                                onCustomColor={(customColor) =>
-                                    void session.setSectionCustomColor(entry.id, customColor)
-                                }
-                                onIcon={(icon) => void session.setSectionIcon(entry.id, icon)}
-                                onDefaultExpanded={(defaultExpanded) =>
-                                    void session.setSectionDefaultExpanded(entry.id, defaultExpanded)
-                                }
-                                onRemove={() => {
-                                    const label = entry.label.trim() || defaultLabelForSection(entry.id);
-                                    void session
-                                        .setSectionHidden(entry.id, true)
-                                        .then(() => notifySuccess(`Removed "${label}"`));
-                                }}
-                                onMove={(direction) => {
-                                    void session
-                                        .moveSection(entry.id, direction)
-                                        .then(() =>
-                                            notifySuccess(
-                                                direction === "up"
-                                                    ? `Moved "${entry.label}" up`
-                                                    : `Moved "${entry.label}" down`,
-                                            ),
-                                        );
-                                }}
-                            />
-                        ))}
-                    </ul>
-                )}
-            </DialogContent>
-        </Dialog>
+                    {visible.length === 0 ? (
+                        <p className="rounded-md border border-dashed px-3 py-6 text-center text-sm text-muted-foreground">
+                            No sections on the Inbox. Add one above.
+                        </p>
+                    ) : (
+                        <DndContext
+                            sensors={sensors}
+                            collisionDetection={closestCenter}
+                            modifiers={[restrictToVerticalAxis, restrictToParentElement]}
+                            onDragEnd={handleDragEnd}
+                        >
+                            <SortableContext
+                                items={visible.map((entry) => entry.id)}
+                                strategy={verticalListSortingStrategy}
+                            >
+                                <ul className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto pr-0.5">
+                                    {visible.map((entry, index) => (
+                                        <SectionLayoutRow
+                                            key={entry.id}
+                                            entry={entry}
+                                            isFirst={index === 0}
+                                            isLast={index === visible.length - 1}
+                                            onLabel={(nextLabel) => void session.setSectionLabel(entry.id, nextLabel)}
+                                            onColor={(color) => void session.setSectionColor(entry.id, color)}
+                                            onCustomColor={(customColor) =>
+                                                void session.setSectionCustomColor(entry.id, customColor)
+                                            }
+                                            onIcon={(icon) => void session.setSectionIcon(entry.id, icon)}
+                                            onDefaultExpanded={(defaultExpanded) =>
+                                                void session.setSectionDefaultExpanded(entry.id, defaultExpanded)
+                                            }
+                                            onEditFilters={() => setFilterSectionId(entry.id)}
+                                            onDuplicate={() => {
+                                                void session.duplicateSection(entry.id).then((id) => {
+                                                    if (id) notifySuccess("Section duplicated");
+                                                });
+                                            }}
+                                            onRemove={() => {
+                                                const sectionLabel =
+                                                    entry.label.trim() || defaultLabelForSection(entry.id);
+                                                if (entry.kind === "custom") {
+                                                    void session
+                                                        .deleteSection(entry.id)
+                                                        .then(() => notifySuccess(`Deleted “${sectionLabel}”`));
+                                                    return;
+                                                }
+                                                void session
+                                                    .setSectionHidden(entry.id, true)
+                                                    .then(() => notifySuccess(`Removed “${sectionLabel}”`));
+                                            }}
+                                            onMove={(direction) => {
+                                                void session.moveSection(entry.id, direction);
+                                            }}
+                                        />
+                                    ))}
+                                </ul>
+                            </SortableContext>
+                        </DndContext>
+                    )}
+                </DialogContent>
+            </Dialog>
+
+            <SectionFilterEditor
+                sectionId={filterSectionId}
+                open={filterSectionId !== null}
+                onOpenChange={(next) => {
+                    if (!next) setFilterSectionId(null);
+                }}
+            />
+        </>
     );
 }
 
@@ -211,6 +351,8 @@ function SectionLayoutRow({
     onCustomColor,
     onIcon,
     onDefaultExpanded,
+    onEditFilters,
+    onDuplicate,
     onRemove,
     onMove,
 }: {
@@ -222,9 +364,14 @@ function SectionLayoutRow({
     onCustomColor: (customColor: string) => void;
     onIcon: (icon: SectionIconId) => void;
     onDefaultExpanded: (defaultExpanded: boolean) => void;
+    onEditFilters: () => void;
+    onDuplicate: () => void;
     onRemove: () => void;
     onMove: (direction: "up" | "down") => void;
 }) {
+    const { attributes, listeners, setNodeRef, setActivatorNodeRef, transform, transition, isDragging } = useSortable({
+        id: entry.id,
+    });
     const visual = visualForSection(entry.id, entry);
     const Icon = visual.icon;
     const [appearanceOpen, setAppearanceOpen] = useState(false);
@@ -235,6 +382,7 @@ function SectionLayoutRow({
     }, [entry.customColor]);
 
     const usingCustom = Boolean(entry.customColor);
+    const sectionLabel = entry.label.trim() || defaultLabelForSection(entry.id);
 
     function commitHex(raw: string) {
         const hex = normalizeHexColor(raw);
@@ -248,10 +396,29 @@ function SectionLayoutRow({
 
     return (
         <li
-            className={cn("flex flex-col gap-2 rounded-md border border-l-[3px] px-3 py-2", visual.accentClass)}
-            style={visual.tones?.accent}
+            ref={setNodeRef}
+            className={cn(
+                "flex min-w-0 flex-col gap-2 rounded-md border border-l-[3px] px-3 py-2",
+                visual.accentClass,
+                isDragging && "z-10 opacity-80 shadow-md",
+            )}
+            style={{
+                ...visual.tones?.accent,
+                transform: CSS.Transform.toString(transform),
+                transition,
+            }}
         >
-            <div className="flex items-center gap-2">
+            <div className="flex min-w-0 items-center gap-1.5">
+                <button
+                    type="button"
+                    ref={setActivatorNodeRef}
+                    className="inline-flex size-7 shrink-0 cursor-grab touch-none items-center justify-center rounded-md text-muted-foreground hover:bg-muted/60 hover:text-foreground active:cursor-grabbing"
+                    aria-label={`Drag to reorder ${sectionLabel}`}
+                    {...attributes}
+                    {...listeners}
+                >
+                    <GripVertical className="size-4" aria-hidden="true" />
+                </button>
                 <span
                     className={cn("grid size-7 shrink-0 place-items-center rounded-md", visual.chipClass)}
                     style={visual.tones?.chip}
@@ -261,15 +428,34 @@ function SectionLayoutRow({
                 <Input
                     value={entry.label}
                     aria-label={`Name for ${entry.id}`}
+                    className="min-w-0 flex-1"
                     onChange={(event) => onLabel(event.target.value)}
                 />
-                <div className="flex shrink-0 items-center gap-1">
+                <div className="flex shrink-0 items-center gap-0.5">
+                    <Button
+                        type="button"
+                        size="icon-sm"
+                        variant="ghost"
+                        aria-label={`Edit filters for ${sectionLabel}`}
+                        onClick={onEditFilters}
+                    >
+                        <Filter />
+                    </Button>
+                    <Button
+                        type="button"
+                        size="icon-sm"
+                        variant="ghost"
+                        aria-label={`Duplicate ${sectionLabel}`}
+                        onClick={onDuplicate}
+                    >
+                        <Copy />
+                    </Button>
                     <Button
                         type="button"
                         size="icon-sm"
                         variant="ghost"
                         disabled={isFirst}
-                        aria-label={`Move ${entry.label} up`}
+                        aria-label={`Move ${sectionLabel} up`}
                         onClick={() => onMove("up")}
                     >
                         <ArrowUp />
@@ -279,7 +465,7 @@ function SectionLayoutRow({
                         size="icon-sm"
                         variant="ghost"
                         disabled={isLast}
-                        aria-label={`Move ${entry.label} down`}
+                        aria-label={`Move ${sectionLabel} down`}
                         onClick={() => onMove("down")}
                     >
                         <ArrowDown />
@@ -289,7 +475,7 @@ function SectionLayoutRow({
                         size="icon-sm"
                         variant="ghost"
                         className="text-muted-foreground hover:text-destructive"
-                        aria-label={`Remove ${entry.label}`}
+                        aria-label={entry.kind === "custom" ? `Delete ${sectionLabel}` : `Remove ${sectionLabel}`}
                         onClick={onRemove}
                     >
                         <Trash2 />
@@ -297,172 +483,104 @@ function SectionLayoutRow({
                 </div>
             </div>
 
-            <label className="flex cursor-pointer items-center justify-between gap-2 text-xs text-muted-foreground">
-                Expanded by default
-                <Switch checked={entry.defaultExpanded} onCheckedChange={onDefaultExpanded} />
-            </label>
+            <SectionFilterSummaryLine sectionId={entry.id} />
 
-            <button
-                type="button"
-                aria-expanded={appearanceOpen}
-                className="flex cursor-pointer items-center gap-1.5 self-start text-[11px] font-medium text-muted-foreground transition-colors hover:text-foreground"
-                onClick={() => setAppearanceOpen((open) => !open)}
-            >
-                <ChevronRight
-                    className={cn("size-3.5 transition-transform", appearanceOpen && "rotate-90")}
-                    aria-hidden="true"
-                />
-                Appearance
-                {!appearanceOpen ? (
-                    <span
-                        className={cn(
-                            "ml-0.5 size-2.5 rounded-full border border-black/10 dark:border-white/15",
-                            !usingCustom && SECTION_COLOR_STYLES[entry.color].swatchClass,
-                        )}
-                        style={usingCustom ? visual.tones?.swatch : undefined}
-                        aria-hidden="true"
+            <div className="flex min-w-0 flex-wrap items-center justify-between gap-2 pl-16">
+                <label className="flex items-center gap-2 text-xs text-muted-foreground">
+                    <Switch
+                        checked={entry.defaultExpanded}
+                        onCheckedChange={onDefaultExpanded}
+                        aria-label={`Expand ${sectionLabel} by default`}
                     />
-                ) : null}
-            </button>
+                    Expanded by default
+                </label>
+                <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="h-7 gap-1 px-2 text-xs text-muted-foreground"
+                    onClick={() => setAppearanceOpen((current) => !current)}
+                >
+                    {appearanceOpen ? <ChevronDown className="size-3.5" /> : <ChevronRight className="size-3.5" />}
+                    Appearance
+                </Button>
+            </div>
 
             {appearanceOpen ? (
-                <div className="flex flex-col gap-3 pl-4">
-                    <div className="flex min-w-0 flex-col gap-1.5">
-                        <p className="text-[11px] font-medium text-muted-foreground">Color</p>
-                        <div className="flex flex-wrap items-center gap-1.5">
-                            <div
-                                className="flex flex-wrap gap-1.5"
-                                role="radiogroup"
-                                aria-label={`Preset color for ${entry.label}`}
-                            >
-                                {SECTION_COLOR_IDS.map((colorId) => {
-                                    const selected = !usingCustom && entry.color === colorId;
-                                    return (
-                                        <button
-                                            key={colorId}
-                                            type="button"
-                                            role="radio"
-                                            aria-checked={selected}
-                                            aria-label={colorId}
-                                            className={cn(
-                                                "size-5 rounded-full border border-black/10 transition-[box-shadow,transform] dark:border-white/15",
-                                                SECTION_COLOR_STYLES[colorId].swatchClass,
-                                                selected
-                                                    ? "scale-110 ring-2 ring-ring ring-offset-2 ring-offset-background"
-                                                    : "hover:scale-105",
-                                            )}
-                                            onClick={() => {
-                                                setHexDraft("");
-                                                onColor(colorId);
-                                            }}
-                                        />
-                                    );
-                                })}
-                            </div>
-
-                            <label
-                                className={cn(
-                                    "relative size-5 shrink-0 cursor-pointer rounded-full border border-black/10 dark:border-white/15",
-                                    usingCustom && "scale-110 ring-2 ring-ring ring-offset-2 ring-offset-background",
-                                )}
-                                title="Custom color"
-                            >
-                                <span
-                                    className="block size-full rounded-full"
-                                    style={{
-                                        background:
-                                            entry.customColor ??
-                                            "conic-gradient(from 90deg, #f43f5e, #eab308, #22c55e, #0ea5e9, #8b5cf6, #f43f5e)",
-                                    }}
-                                    aria-hidden="true"
-                                />
-                                <input
-                                    type="color"
-                                    aria-label={`Custom color for ${entry.label}`}
-                                    value={entry.customColor ?? "#6366f1"}
-                                    className="absolute inset-0 cursor-pointer opacity-0"
-                                    onChange={(event) => {
-                                        const hex = normalizeHexColor(event.target.value);
-                                        if (!hex) {
-                                            return;
-                                        }
-                                        setHexDraft(hex);
-                                        onCustomColor(hex);
-                                    }}
-                                />
-                            </label>
-
+                <div className="flex flex-col gap-3 border-t pt-2 pl-16">
+                    <div className="flex flex-col gap-1.5">
+                        <span className="text-xs font-medium text-muted-foreground">Color</span>
+                        <div className="flex flex-wrap gap-1.5">
+                            {SECTION_COLOR_IDS.map((colorId) => {
+                                const swatch = SECTION_COLOR_STYLES[colorId];
+                                const selected = !usingCustom && entry.color === colorId;
+                                return (
+                                    <button
+                                        key={colorId}
+                                        type="button"
+                                        title={colorId}
+                                        aria-label={`Color ${colorId}`}
+                                        aria-pressed={selected}
+                                        className={cn(
+                                            "size-6 rounded-md border-2 transition-transform",
+                                            swatch.swatchClass,
+                                            selected
+                                                ? "scale-110 border-foreground"
+                                                : "border-transparent opacity-80 hover:opacity-100",
+                                        )}
+                                        onClick={() => onColor(colorId)}
+                                    />
+                                );
+                            })}
+                        </div>
+                        <div className="mt-1 flex items-center gap-2">
                             <Input
                                 value={hexDraft}
-                                placeholder="#hex"
-                                aria-label={`Hex color for ${entry.label}`}
-                                spellCheck={false}
-                                className="h-7 w-24 font-mono text-xs"
+                                placeholder="#RRGGBB"
+                                aria-label={`Custom hex for ${sectionLabel}`}
+                                className="h-8 font-mono text-xs"
                                 onChange={(event) => setHexDraft(event.target.value)}
                                 onBlur={() => commitHex(hexDraft)}
                                 onKeyDown={(event) => {
                                     if (event.key === "Enter") {
-                                        event.preventDefault();
-                                        commitHex(hexDraft);
+                                        event.currentTarget.blur();
                                     }
                                 }}
                             />
+                            {usingCustom ? (
+                                <span
+                                    className="size-6 shrink-0 rounded-md border-2 border-foreground"
+                                    style={{ backgroundColor: entry.customColor ?? undefined }}
+                                    title={entry.customColor ?? undefined}
+                                />
+                            ) : null}
                         </div>
                     </div>
-
-                    <div className="flex items-end justify-between gap-3">
-                        <div className="flex shrink-0 flex-col gap-1.5">
-                            <p className="text-[11px] font-medium text-muted-foreground">Icon</p>
-                            <DropdownMenu>
-                                <DropdownMenuTrigger asChild>
-                                    <Button
+                    <div className="flex flex-col gap-1.5">
+                        <span className="text-xs font-medium text-muted-foreground">Icon</span>
+                        <div className="flex max-h-28 flex-wrap gap-1 overflow-y-auto">
+                            {SECTION_ICON_IDS.map((iconId) => {
+                                const OptionIcon = SECTION_ICONS[iconId];
+                                const selected = entry.icon === iconId;
+                                return (
+                                    <button
+                                        key={iconId}
                                         type="button"
-                                        variant="outline"
-                                        size="sm"
-                                        className="gap-1.5"
-                                        aria-label={`Icon for ${entry.label}`}
+                                        title={iconId}
+                                        aria-label={`Icon ${iconId}`}
+                                        aria-pressed={selected}
+                                        className={cn(
+                                            "grid size-7 place-items-center rounded-md border transition-colors",
+                                            selected
+                                                ? "border-foreground bg-muted"
+                                                : "border-transparent hover:bg-muted/60",
+                                        )}
+                                        onClick={() => onIcon(iconId)}
                                     >
-                                        <Icon
-                                            className={cn("size-3.5", visual.iconClass)}
-                                            style={visual.tones?.icon}
-                                            aria-hidden="true"
-                                        />
-                                        <ChevronDown className="size-3.5 opacity-60" aria-hidden="true" />
-                                    </Button>
-                                </DropdownMenuTrigger>
-                                <DropdownMenuContent align="start" className="w-56 p-2">
-                                    <div
-                                        className="grid grid-cols-6 gap-1"
-                                        role="listbox"
-                                        aria-label={`Icon for ${entry.label}`}
-                                    >
-                                        {SECTION_ICON_IDS.map((iconId) => {
-                                            const OptionIcon = SECTION_ICONS[iconId];
-                                            const selected = entry.icon === iconId;
-                                            return (
-                                                <DropdownMenuItem
-                                                    key={iconId}
-                                                    role="option"
-                                                    aria-selected={selected}
-                                                    aria-label={iconId}
-                                                    className={cn(
-                                                        "flex size-8 cursor-pointer items-center justify-center rounded-md p-0",
-                                                        selected && cn(visual.chipClass, visual.iconClass),
-                                                    )}
-                                                    style={
-                                                        selected
-                                                            ? { ...visual.tones?.chip, ...visual.tones?.icon }
-                                                            : undefined
-                                                    }
-                                                    onSelect={() => onIcon(iconId)}
-                                                >
-                                                    <OptionIcon className="size-3.5" aria-hidden="true" />
-                                                </DropdownMenuItem>
-                                            );
-                                        })}
-                                    </div>
-                                </DropdownMenuContent>
-                            </DropdownMenu>
+                                        <OptionIcon className="size-3.5" aria-hidden="true" />
+                                    </button>
+                                );
+                            })}
                         </div>
                     </div>
                 </div>

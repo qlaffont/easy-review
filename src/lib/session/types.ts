@@ -46,6 +46,10 @@ export type PullRequestSummary = {
     commentCount: number;
     /** Whether GitHub can merge head into base — used for inbox conflict signals. */
     mergeable: MergeableState;
+    /** Assignees (logins) — needed for section filters. */
+    assignees: Array<string>;
+    /** Labels on the pull request — needed for section filters. */
+    labels: Array<Label>;
 };
 
 export type Label = {

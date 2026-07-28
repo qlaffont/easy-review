@@ -1,14 +1,25 @@
+import type { SectionFilter } from "#/lib/session/section-filters.ts";
 import type { PullRequestSummary } from "#/lib/session/types.ts";
 
-export type InboxSectionId =
+import {
+    defaultFilterForPreset,
+    emptySectionFilter,
+    matchSectionFilter,
+    normalizeSectionFilter,
+    summarizeSectionFilter,
+} from "#/lib/session/section-filters.ts";
+
+/** Built-in section ids. Custom sections use `custom_*`. Legacy `other` is treated as custom. */
+export type PresetInboxSectionId =
     | "needs-your-review"
     | "returned-to-you"
     | "approved"
     | "waiting-for-reviewers"
     | "drafts"
     | "merging-and-recently-merged"
-    | "waiting-for-author"
-    | "other";
+    | "waiting-for-author";
+
+export type InboxSectionId = PresetInboxSectionId | (string & {});
 
 export const SECTION_COLOR_IDS = ["amber", "rose", "emerald", "sky", "slate", "violet", "teal", "muted"] as const;
 
@@ -70,10 +81,11 @@ export type SectionIconId = (typeof SECTION_ICON_IDS)[number];
 export type InboxSectionDefinition = {
     id: InboxSectionId;
     label: string;
+    filter: SectionFilter;
 };
 
-/** Graphite's buckets, in Graphite's order. Customising them is issue 08. */
-export const DEFAULT_INBOX_SECTIONS: ReadonlyArray<InboxSectionDefinition> = [
+/** Graphite-like buckets without sacred “Other” — leftovers are a custom recipe. */
+export const DEFAULT_INBOX_SECTIONS: ReadonlyArray<{ id: PresetInboxSectionId; label: string }> = [
     { id: "needs-your-review", label: "Needs your review" },
     { id: "returned-to-you", label: "Returned to you" },
     { id: "waiting-for-reviewers", label: "Waiting for reviewers" },
@@ -81,74 +93,23 @@ export const DEFAULT_INBOX_SECTIONS: ReadonlyArray<InboxSectionDefinition> = [
     { id: "drafts", label: "Drafts" },
     { id: "merging-and-recently-merged", label: "Merging and recently merged" },
     { id: "waiting-for-author", label: "Waiting for author" },
-    { id: "other", label: "Other" },
 ];
 
-export const DEFAULT_SECTION_APPEARANCE: Record<InboxSectionId, { color: SectionColorId; icon: SectionIconId }> = {
-    "needs-your-review": { color: "amber", icon: "eye" },
-    "returned-to-you": { color: "rose", icon: "undo" },
-    approved: { color: "emerald", icon: "check" },
-    "waiting-for-reviewers": { color: "sky", icon: "users" },
-    drafts: { color: "slate", icon: "draft" },
-    "merging-and-recently-merged": { color: "violet", icon: "merge" },
-    "waiting-for-author": { color: "teal", icon: "hourglass" },
-    other: { color: "muted", icon: "inbox" },
+export const DEFAULT_SECTION_APPEARANCE: Record<PresetInboxSectionId, { color: SectionColorId; icon: SectionIconId }> =
+    {
+        "needs-your-review": { color: "amber", icon: "eye" },
+        "returned-to-you": { color: "rose", icon: "undo" },
+        approved: { color: "emerald", icon: "check" },
+        "waiting-for-reviewers": { color: "sky", icon: "users" },
+        drafts: { color: "slate", icon: "draft" },
+        "merging-and-recently-merged": { color: "violet", icon: "merge" },
+        "waiting-for-author": { color: "teal", icon: "hourglass" },
+    };
+
+export const FALLBACK_SECTION_APPEARANCE: { color: SectionColorId; icon: SectionIconId } = {
+    color: "muted",
+    icon: "inbox",
 };
-
-/**
- * Rules are derived from GitHub state only, and are deliberately ordered and total: every pull
- * request lands in exactly one section. Graphite has quirks we do not reverse-engineer; when in
- * doubt a pull request falls through to `other` rather than guessing.
- *
- * 1. Merged pull requests are done with, whoever wrote them.
- * 2. Closed-without-merging is noise, so it goes to `other`.
- * 3. Your own pull requests are bucketed by what is blocking them: draft, changes requested,
- *    approved, or simply waiting on reviewers.
- * 4. On someone else's pull request, an outstanding review request means it is your turn — GitHub
- *    clears that request once you review and re-adds it when review is re-requested.
- * 5. If you already reviewed and no new request came back, the ball is in the author's court.
- */
-export function classifyPullRequest(pullRequest: PullRequestSummary, viewerLogin: string): InboxSectionId {
-    if (pullRequest.state === "merged") {
-        return "merging-and-recently-merged";
-    }
-
-    if (pullRequest.state === "closed") {
-        return "other";
-    }
-
-    if (pullRequest.author === viewerLogin) {
-        if (pullRequest.isDraft) {
-            return "drafts";
-        }
-
-        if (pullRequest.reviewDecision === "changes-requested") {
-            return "returned-to-you";
-        }
-
-        if (pullRequest.reviewDecision === "approved") {
-            return "approved";
-        }
-
-        return "waiting-for-reviewers";
-    }
-
-    if (pullRequest.isDraft) {
-        return "other";
-    }
-
-    if (pullRequest.reviewRequests.includes(viewerLogin)) {
-        return "needs-your-review";
-    }
-
-    const viewerReview = pullRequest.reviewers.find((reviewer) => reviewer.login === viewerLogin);
-
-    if (viewerReview && viewerReview.state !== "pending") {
-        return "waiting-for-author";
-    }
-
-    return "other";
-}
 
 export type InboxSection = InboxSectionDefinition & {
     pullRequests: Array<PullRequestSummary>;
@@ -157,7 +118,7 @@ export type InboxSection = InboxSectionDefinition & {
 /** One row of the user's Inbox layout: order in the array is display order. */
 export type InboxSectionLayoutEntry = {
     id: InboxSectionId;
-    /** Display label; empty or whitespace falls back to the Graphite default. */
+    /** Display label; empty or whitespace falls back to the preset/default name. */
     label: string;
     hidden: boolean;
     /** Whether the section starts expanded when there is no saved collapse state (or after reset). */
@@ -166,11 +127,15 @@ export type InboxSectionLayoutEntry = {
     /** Custom accent as `#RRGGBB`; when set it overrides the preset `color` for rendering. */
     customColor: string | null;
     icon: SectionIconId;
+    /** Independent DNF filter. Empty cases / empty conditions match nothing. */
+    filter: SectionFilter;
+    /** Presets cannot be deleted — only hidden. Customs can be deleted. */
+    kind: "preset" | "custom";
 };
 
-export const INBOX_SETTINGS_VERSION = 1 as const;
+export const INBOX_SETTINGS_VERSION = 2 as const;
 
-/** Portable Inbox preferences: section layout (visibility, labels, colors, icons, default expand). */
+/** Portable Inbox preferences: section layout including filters. */
 export type InboxSettings = {
     version: typeof INBOX_SETTINGS_VERSION;
     /**
@@ -181,7 +146,13 @@ export type InboxSettings = {
     sectionLayout: Array<InboxSectionLayoutEntry>;
 };
 
-const SECTION_ID_SET = new Set<string>(DEFAULT_INBOX_SECTIONS.map((definition) => definition.id));
+/** Single-section export document. */
+export type InboxSectionExport = {
+    version: typeof INBOX_SETTINGS_VERSION;
+    section: InboxSectionLayoutEntry;
+};
+
+const PRESET_ID_SET = new Set<string>(DEFAULT_INBOX_SECTIONS.map((definition) => definition.id));
 const COLOR_ID_SET = new Set<string>(SECTION_COLOR_IDS);
 const ICON_ID_SET = new Set<string>(SECTION_ICON_IDS);
 
@@ -193,8 +164,20 @@ export function isSectionIconId(value: unknown): value is SectionIconId {
     return typeof value === "string" && ICON_ID_SET.has(value);
 }
 
+export function isPresetInboxSectionId(value: unknown): value is PresetInboxSectionId {
+    return typeof value === "string" && PRESET_ID_SET.has(value);
+}
+
+export function isCustomSectionId(value: unknown): value is string {
+    return typeof value === "string" && (value.startsWith("custom_") || value === "other");
+}
+
 export function isInboxSectionId(value: unknown): value is InboxSectionId {
-    return typeof value === "string" && SECTION_ID_SET.has(value);
+    return isPresetInboxSectionId(value) || isCustomSectionId(value);
+}
+
+export function newCustomSectionId(): string {
+    return `custom_${crypto.randomUUID().replaceAll("-", "").slice(0, 16)}`;
 }
 
 const HEX_COLOR_PATTERN = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i;
@@ -226,14 +209,14 @@ export function isHexColor(value: unknown): value is string {
     return normalizeHexColor(value) !== null;
 }
 
-/** Visible by default: Needs review → Returned → Waiting for reviewers → Approved → Other. */
-const DEFAULT_HIDDEN_SECTION_IDS = new Set<InboxSectionId>([
+/** Visible by default: Needs review → Returned → Waiting for reviewers → Approved. */
+const DEFAULT_HIDDEN_SECTION_IDS = new Set<PresetInboxSectionId>([
     "drafts",
     "merging-and-recently-merged",
     "waiting-for-author",
 ]);
 
-const DEFAULT_EXPANDED_SECTION_IDS = new Set<InboxSectionId>([
+const DEFAULT_EXPANDED_SECTION_IDS = new Set<PresetInboxSectionId>([
     "needs-your-review",
     "returned-to-you",
     "waiting-for-reviewers",
@@ -246,12 +229,13 @@ export function defaultSectionLayout(): Array<InboxSectionLayoutEntry> {
         return {
             id: definition.id,
             label: definition.label,
-            /** Drafts / merging / waiting-for-author stay available via Sections. */
             hidden: DEFAULT_HIDDEN_SECTION_IDS.has(definition.id),
             defaultExpanded: DEFAULT_EXPANDED_SECTION_IDS.has(definition.id),
             color: appearance.color,
             customColor: null,
             icon: appearance.icon,
+            filter: defaultFilterForPreset(definition.id),
+            kind: "preset" as const,
         };
     });
 }
@@ -264,13 +248,59 @@ export function defaultExpandedSections(
 }
 
 export function defaultLabelForSection(id: InboxSectionId): string {
-    return DEFAULT_INBOX_SECTIONS.find((definition) => definition.id === id)?.label ?? id;
+    return DEFAULT_INBOX_SECTIONS.find((definition) => definition.id === id)?.label ?? "Custom section";
+}
+
+export function appearanceForSectionId(id: InboxSectionId): { color: SectionColorId; icon: SectionIconId } {
+    if (isPresetInboxSectionId(id)) {
+        return DEFAULT_SECTION_APPEARANCE[id];
+    }
+    return FALLBACK_SECTION_APPEARANCE;
+}
+
+function parseLayoutEntry(entry: {
+    id: string;
+    label?: unknown;
+    hidden?: unknown;
+    defaultExpanded?: unknown;
+    color?: unknown;
+    customColor?: unknown;
+    icon?: unknown;
+    filter?: unknown;
+    kind?: unknown;
+}): InboxSectionLayoutEntry | null {
+    if (!isInboxSectionId(entry.id)) {
+        return null;
+    }
+
+    const preset = isPresetInboxSectionId(entry.id);
+    const kind = preset ? "preset" : "custom";
+    const appearance = appearanceForSectionId(entry.id);
+    const fallbackFilter = preset ? defaultFilterForPreset(entry.id) : emptySectionFilter();
+    const fallbackExpanded = preset ? DEFAULT_EXPANDED_SECTION_IDS.has(entry.id as PresetInboxSectionId) : false;
+
+    return {
+        id: entry.id,
+        label:
+            typeof entry.label === "string"
+                ? entry.label
+                : preset
+                  ? defaultLabelForSection(entry.id)
+                  : "Custom section",
+        hidden: entry.hidden === true,
+        defaultExpanded: typeof entry.defaultExpanded === "boolean" ? entry.defaultExpanded : fallbackExpanded,
+        color: isSectionColorId(entry.color) ? entry.color : appearance.color,
+        customColor: normalizeHexColor(entry.customColor),
+        icon: isSectionIconId(entry.icon) ? entry.icon : appearance.icon,
+        filter: normalizeSectionFilter(entry.filter, fallbackFilter),
+        kind,
+    };
 }
 
 /**
- * Normalize a stored layout: unknown ids are dropped and missing defaults are appended.
- * Blank labels are kept so the rename field can be cleared while typing; the board falls
- * back to the Graphite name only when resolving visible definitions.
+ * Normalize a stored layout: unknown ids are dropped, missing presets are appended,
+ * custom sections are kept. Blank labels are kept so the rename field can be cleared
+ * while typing; the board falls back to the default name only when resolving visible definitions.
  */
 export function normalizeSectionLayout(
     layout:
@@ -282,34 +312,29 @@ export function normalizeSectionLayout(
               color?: unknown;
               customColor?: unknown;
               icon?: unknown;
+              filter?: unknown;
+              kind?: unknown;
           }>
         | null
         | undefined,
 ): Array<InboxSectionLayoutEntry> {
     const defaults = defaultSectionLayout();
-    const byId = new Map(defaults.map((entry) => [entry.id, entry]));
+    const missingPresets = new Map(defaults.map((entry) => [entry.id, entry]));
 
     const ordered: Array<InboxSectionLayoutEntry> = [];
+    const seen = new Set<string>();
+
     for (const entry of layout ?? []) {
-        if (!isInboxSectionId(entry.id) || !byId.has(entry.id)) {
+        const parsed = parseLayoutEntry(entry);
+        if (!parsed || seen.has(parsed.id)) {
             continue;
         }
-
-        const fallback = byId.get(entry.id)!;
-        ordered.push({
-            id: entry.id,
-            label: typeof entry.label === "string" ? entry.label : fallback.label,
-            hidden: entry.hidden === true,
-            defaultExpanded:
-                typeof entry.defaultExpanded === "boolean" ? entry.defaultExpanded : fallback.defaultExpanded,
-            color: isSectionColorId(entry.color) ? entry.color : fallback.color,
-            customColor: normalizeHexColor(entry.customColor),
-            icon: isSectionIconId(entry.icon) ? entry.icon : fallback.icon,
-        });
-        byId.delete(entry.id);
+        seen.add(parsed.id);
+        missingPresets.delete(parsed.id as PresetInboxSectionId);
+        ordered.push(parsed);
     }
 
-    for (const remaining of byId.values()) {
+    for (const remaining of missingPresets.values()) {
         ordered.push(remaining);
     }
 
@@ -327,7 +352,7 @@ export function normalizeExpandedSections(
     const seen = new Set<InboxSectionId>();
     const next: Array<InboxSectionId> = [];
     for (const id of ids) {
-        if (!isInboxSectionId(id) || seen.has(id)) {
+        if (typeof id !== "string" || !isInboxSectionId(id) || seen.has(id)) {
             continue;
         }
         seen.add(id);
@@ -345,7 +370,36 @@ export function visibleSectionDefinitions(
         .map((entry) => ({
             id: entry.id,
             label: entry.label.trim() || defaultLabelForSection(entry.id),
+            filter: entry.filter,
         }));
+}
+
+function migrateV1Settings(document: Record<string, unknown>): InboxSettings {
+    const rawLayout = Array.isArray(document.sectionLayout) ? document.sectionLayout : null;
+    const migrated =
+        rawLayout?.map((entry) => {
+            if (entry === null || typeof entry !== "object" || Array.isArray(entry)) {
+                return entry;
+            }
+            const row = entry as Record<string, unknown>;
+            if (row.id === "other") {
+                return {
+                    ...row,
+                    id: "other",
+                    kind: "custom",
+                    filter: emptySectionFilter(),
+                };
+            }
+            return row;
+        }) ?? null;
+
+    const sectionLayout = normalizeSectionLayout(migrated as Parameters<typeof normalizeSectionLayout>[0]);
+
+    return {
+        version: INBOX_SETTINGS_VERSION,
+        expandedSections: defaultExpandedSections(sectionLayout),
+        sectionLayout,
+    };
 }
 
 /**
@@ -359,8 +413,11 @@ export function parseInboxSettings(raw: unknown): InboxSettings {
     }
 
     const document = raw as Record<string, unknown>;
+    if (document.version === 1) {
+        return migrateV1Settings(document);
+    }
     if (document.version !== INBOX_SETTINGS_VERSION) {
-        throw new Error(`Unsupported Inbox settings version (expected ${INBOX_SETTINGS_VERSION}).`);
+        throw new Error(`Unsupported Inbox settings version (expected ${INBOX_SETTINGS_VERSION} or 1).`);
     }
 
     const sectionLayout = normalizeSectionLayout(Array.isArray(document.sectionLayout) ? document.sectionLayout : null);
@@ -372,24 +429,47 @@ export function parseInboxSettings(raw: unknown): InboxSettings {
     };
 }
 
-/** Groups pull requests into the given sections, keeping empty sections visible. */
+export function parseInboxSectionExport(raw: unknown): InboxSectionExport {
+    if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+        throw new Error("Section export must be a JSON object.");
+    }
+    const document = raw as Record<string, unknown>;
+    if (document.version !== INBOX_SETTINGS_VERSION && document.version !== 1) {
+        throw new Error(`Unsupported section export version (expected ${INBOX_SETTINGS_VERSION} or 1).`);
+    }
+    if (document.section === null || typeof document.section !== "object" || Array.isArray(document.section)) {
+        throw new Error("Section export must include a section object.");
+    }
+    const parsed = parseLayoutEntry(document.section as { id: string });
+    if (!parsed) {
+        throw new Error("Section export has an invalid section id.");
+    }
+    // Imported single sections always become custom so they never collide with presets.
+    const section: InboxSectionLayoutEntry = {
+        ...parsed,
+        id: newCustomSectionId(),
+        kind: "custom",
+    };
+    return { version: INBOX_SETTINGS_VERSION, section };
+}
+
+export function sectionFilterSummary(entry: InboxSectionLayoutEntry): string {
+    return summarizeSectionFilter(entry.filter);
+}
+
+/**
+ * Groups pull requests into the given sections by independent filters (overlap allowed).
+ * Empty sections stay visible. Unmatched PRs appear nowhere.
+ */
 export function groupIntoSections(
     pullRequests: ReadonlyArray<PullRequestSummary>,
     viewerLogin: string,
-    definitions: ReadonlyArray<InboxSectionDefinition> = DEFAULT_INBOX_SECTIONS,
+    definitions: ReadonlyArray<InboxSectionDefinition>,
 ): Array<InboxSection> {
-    const grouped = new Map<InboxSectionId, Array<PullRequestSummary>>(
-        definitions.map((definition) => [definition.id, []]),
-    );
-
-    for (const pullRequest of pullRequests) {
-        grouped.get(classifyPullRequest(pullRequest, viewerLogin))?.push(pullRequest);
-    }
-
     return definitions.map((definition) => ({
         ...definition,
-        pullRequests: (grouped.get(definition.id) ?? []).sort((left, right) =>
-            right.updatedAt.localeCompare(left.updatedAt),
-        ),
+        pullRequests: pullRequests
+            .filter((pullRequest) => matchSectionFilter(pullRequest, definition.filter, viewerLogin))
+            .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt)),
     }));
 }

@@ -34,6 +34,8 @@ function summary(
         changedFiles: 0,
         commentCount: 0,
         mergeable: "unknown",
+        assignees: [],
+        labels: [],
         ...overrides,
     };
 }

@@ -1,6 +1,6 @@
 import { useNavigate } from "@tanstack/react-router";
 import { useSelector } from "@tanstack/react-store";
-import { ChevronRight, FolderGit2, Keyboard, RefreshCw } from "lucide-react";
+import { ChevronRight, FolderGit2, Keyboard, RefreshCw, Settings } from "lucide-react";
 import { useEffect, useEffectEvent, useState } from "react";
 
 import type { InboxSection, InboxSectionId, SectionColorId, SectionIconId } from "#/lib/session/inbox-sections.ts";
@@ -8,9 +8,17 @@ import type { PullRequestSummary } from "#/lib/session/types.ts";
 
 import { targetFromSummary, useSetActionTarget } from "#/components/actions/actions-provider.tsx";
 import { emptySectionRow, PullRequestRow } from "#/components/inbox/pull-request-row.tsx";
+import { SectionAppearanceEditor } from "#/components/inbox/section-appearance-editor.tsx";
+import { SectionFilterEditor } from "#/components/inbox/section-filter-editor.tsx";
 import { visualForSection } from "#/components/inbox/section-visuals.ts";
 import { useOpenRepoPicker } from "#/components/repos/repo-picker.tsx";
 import { Button } from "#/components/ui/button.tsx";
+import {
+    DropdownMenu,
+    DropdownMenuContent,
+    DropdownMenuItem,
+    DropdownMenuTrigger,
+} from "#/components/ui/dropdown-menu.tsx";
 import { InboxLoadingSkeleton } from "#/components/ui/loading.tsx";
 import { RelativeTime } from "#/components/ui/relative-time.tsx";
 import { useSession, useSessionState } from "#/lib/session/provider.tsx";
@@ -30,6 +38,8 @@ export function InboxBoard() {
     const sectionLayout = useSelector(session.state, () => session.getSectionLayout());
     const [selectedKey, setSelectedKey] = useState<string | null>(null);
     const [visibleCountBySection, setVisibleCountBySection] = useState<Partial<Record<InboxSectionId, number>>>({});
+    const [filterSectionId, setFilterSectionId] = useState<InboxSectionId | null>(null);
+    const [appearanceSectionId, setAppearanceSectionId] = useState<InboxSectionId | null>(null);
 
     function visibleCountFor(id: InboxSectionId): number {
         return visibleCountBySection[id] ?? INBOX_SECTION_PAGE_SIZE;
@@ -230,6 +240,8 @@ export function InboxBoard() {
                                     }
                                     void session.toggleSection(section.id);
                                 }}
+                                onEditFilters={() => setFilterSectionId(section.id)}
+                                onChangeAppearance={() => setAppearanceSectionId(section.id)}
                                 onLoadMore={() => {
                                     setVisibleCountBySection((current) => ({
                                         ...current,
@@ -242,6 +254,21 @@ export function InboxBoard() {
                     })}
                 </div>
             )}
+
+            <SectionFilterEditor
+                sectionId={filterSectionId}
+                open={filterSectionId !== null}
+                onOpenChange={(next) => {
+                    if (!next) setFilterSectionId(null);
+                }}
+            />
+            <SectionAppearanceEditor
+                sectionId={appearanceSectionId}
+                open={appearanceSectionId !== null}
+                onOpenChange={(next) => {
+                    if (!next) setAppearanceSectionId(null);
+                }}
+            />
         </div>
     );
 }
@@ -255,6 +282,8 @@ function InboxSectionPanel({
     isExpanded,
     visibleCount,
     onToggle,
+    onEditFilters,
+    onChangeAppearance,
     onLoadMore,
     onSelect,
 }: {
@@ -266,6 +295,8 @@ function InboxSectionPanel({
     isExpanded: boolean;
     visibleCount: number;
     onToggle: () => void;
+    onEditFilters: () => void;
+    onChangeAppearance: () => void;
     onLoadMore: () => void;
     onSelect: (key: string) => void;
 }) {
@@ -280,16 +311,12 @@ function InboxSectionPanel({
             className={cn("overflow-hidden rounded-lg border border-l-[3px]", visual.accentClass)}
             style={visual.tones?.accent}
         >
-            <h2>
+            <h2 className={cn("flex items-stretch transition-colors", visual.headerClass)} style={visual.tones?.header}>
                 <button
                     type="button"
                     onClick={onToggle}
                     aria-expanded={isExpanded}
-                    className={cn(
-                        "flex w-full cursor-pointer items-center gap-2 px-3 py-2 text-left text-sm font-medium transition-colors",
-                        visual.headerClass,
-                    )}
-                    style={visual.tones?.header}
+                    className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 px-3 py-2 text-left text-sm font-medium"
                 >
                     <ChevronRight
                         aria-hidden="true"
@@ -319,6 +346,23 @@ function InboxSectionPanel({
                         {count}
                     </span>
                 </button>
+                <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                        <Button
+                            type="button"
+                            size="icon-sm"
+                            variant="ghost"
+                            className="my-1 mr-1 shrink-0"
+                            aria-label={`Section options for ${section.label}`}
+                        >
+                            <Settings className="size-4" />
+                        </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end">
+                        <DropdownMenuItem onSelect={onEditFilters}>Edit filters…</DropdownMenuItem>
+                        <DropdownMenuItem onSelect={onChangeAppearance}>Change appearance…</DropdownMenuItem>
+                    </DropdownMenuContent>
+                </DropdownMenu>
             </h2>
 
             {isExpanded ? (

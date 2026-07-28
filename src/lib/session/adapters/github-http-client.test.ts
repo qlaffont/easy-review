@@ -31,6 +31,8 @@ function pullRequestNode(repository: string, number: number) {
         reviewRequests: { nodes: [] },
         latestReviews: { nodes: [] },
         commits: { nodes: [] },
+        labels: { nodes: [] },
+        assignees: { nodes: [] },
     };
 }
 

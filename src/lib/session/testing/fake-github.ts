@@ -171,6 +171,8 @@ const SUMMARY_FIELDS = [
     "changedFiles",
     "commentCount",
     "mergeable",
+    "assignees",
+    "labels",
 ] as const satisfies ReadonlyArray<keyof PullRequestSummary>;
 
 /** The Inbox only ever sees the row-shaped fields, exactly as the real batch query returns. */

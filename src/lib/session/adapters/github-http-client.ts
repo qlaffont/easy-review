@@ -1238,6 +1238,8 @@ type PullRequestNode = {
     };
     commits: { nodes: Array<{ commit: { statusCheckRollup: { state: string } | null } }> };
     mergeable: "MERGEABLE" | "CONFLICTING" | "UNKNOWN";
+    labels: { nodes: Array<{ name: string; color: string }> } | null;
+    assignees: { nodes: Array<{ login: string }> };
 };
 
 type RelatedPullRequestNode = {
@@ -1352,6 +1354,8 @@ function toPullRequestSummary(node: PullRequestNode): PullRequestSummary {
         changedFiles: node.changedFiles,
         commentCount: node.totalCommentsCount ?? 0,
         mergeable: toMergeableState(node.mergeable),
+        assignees: node.assignees.nodes.map((assignee) => assignee.login),
+        labels: node.labels?.nodes ?? [],
     };
 }
 
@@ -1383,6 +1387,8 @@ function toRelatedPullRequestSummary(node: RelatedPullRequestNode): PullRequestS
         changedFiles: 0,
         commentCount: 0,
         mergeable: "unknown",
+        assignees: [],
+        labels: [],
     };
 }
 
@@ -1528,6 +1534,17 @@ const PULL_REQUEST_FIELDS = `
                     state
                 }
             }
+        }
+    }
+    labels(first: 20) {
+        nodes {
+            name
+            color
+        }
+    }
+    assignees(first: 10) {
+        nodes {
+            login
         }
     }
 `;
