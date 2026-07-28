@@ -34,6 +34,12 @@ export function PrSettingsEditor({ open, onOpenChange }: { open: boolean; onOpen
                             checked={preferences.showFileList}
                             onCheckedChange={(showFileList) => setPreferences({ showFileList })}
                         />
+                        <PreferenceRow
+                            title="File tree"
+                            description="Group changed files by folder instead of a flat path list."
+                            checked={preferences.fileListLayout === "tree"}
+                            onCheckedChange={(tree) => setPreferences({ fileListLayout: tree ? "tree" : "flat" })}
+                        />
                     </section>
 
                     <section className="flex flex-col gap-3">

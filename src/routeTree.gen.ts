@@ -15,6 +15,7 @@ import { Route as ApiAuthLogoutRouteImport } from './routes/api/auth/logout'
 import { Route as ApiGithubSplatRouteImport } from './routes/api/github/$'
 import { Route as ApiGithubGraphqlRouteImport } from './routes/api/github/graphql'
 import { Route as ApiAuthGithubCallbackRouteImport } from './routes/api/auth/github.callback'
+import { Route as ApiAuthGithubInstallRouteImport } from './routes/api/auth/github.install'
 import { Route as PrOwnerRepoNumberRouteImport } from './routes/pr.$owner.$repo.$number'
 import { Route as PrOwnerRepoNumberFilesRouteImport } from './routes/pr.$owner.$repo.$number_.files'
 
@@ -48,6 +49,11 @@ const ApiAuthGithubCallbackRoute = ApiAuthGithubCallbackRouteImport.update({
   path: '/callback',
   getParentRoute: () => ApiAuthGithubRoute,
 } as any)
+const ApiAuthGithubInstallRoute = ApiAuthGithubInstallRouteImport.update({
+  id: '/install',
+  path: '/install',
+  getParentRoute: () => ApiAuthGithubRoute,
+} as any)
 const PrOwnerRepoNumberRoute = PrOwnerRepoNumberRouteImport.update({
   id: '/pr/$owner/$repo/$number',
   path: '/pr/$owner/$repo/$number',
@@ -66,6 +72,7 @@ export interface FileRoutesByFullPath {
   '/api/github/$': typeof ApiGithubSplatRoute
   '/api/github/graphql': typeof ApiGithubGraphqlRoute
   '/api/auth/github/callback': typeof ApiAuthGithubCallbackRoute
+  '/api/auth/github/install': typeof ApiAuthGithubInstallRoute
   '/pr/$owner/$repo/$number': typeof PrOwnerRepoNumberRoute
   '/pr/$owner/$repo/$number/files': typeof PrOwnerRepoNumberFilesRoute
 }
@@ -76,6 +83,7 @@ export interface FileRoutesByTo {
   '/api/github/$': typeof ApiGithubSplatRoute
   '/api/github/graphql': typeof ApiGithubGraphqlRoute
   '/api/auth/github/callback': typeof ApiAuthGithubCallbackRoute
+  '/api/auth/github/install': typeof ApiAuthGithubInstallRoute
   '/pr/$owner/$repo/$number': typeof PrOwnerRepoNumberRoute
   '/pr/$owner/$repo/$number/files': typeof PrOwnerRepoNumberFilesRoute
 }
@@ -87,6 +95,7 @@ export interface FileRoutesById {
   '/api/github/$': typeof ApiGithubSplatRoute
   '/api/github/graphql': typeof ApiGithubGraphqlRoute
   '/api/auth/github/callback': typeof ApiAuthGithubCallbackRoute
+  '/api/auth/github/install': typeof ApiAuthGithubInstallRoute
   '/pr/$owner/$repo/$number': typeof PrOwnerRepoNumberRoute
   '/pr/$owner/$repo/$number_/files': typeof PrOwnerRepoNumberFilesRoute
 }
@@ -99,6 +108,7 @@ export interface FileRouteTypes {
     | '/api/github/$'
     | '/api/github/graphql'
     | '/api/auth/github/callback'
+    | '/api/auth/github/install'
     | '/pr/$owner/$repo/$number'
     | '/pr/$owner/$repo/$number/files'
   fileRoutesByTo: FileRoutesByTo
@@ -109,6 +119,7 @@ export interface FileRouteTypes {
     | '/api/github/$'
     | '/api/github/graphql'
     | '/api/auth/github/callback'
+    | '/api/auth/github/install'
     | '/pr/$owner/$repo/$number'
     | '/pr/$owner/$repo/$number/files'
   id:
@@ -119,6 +130,7 @@ export interface FileRouteTypes {
     | '/api/github/$'
     | '/api/github/graphql'
     | '/api/auth/github/callback'
+    | '/api/auth/github/install'
     | '/pr/$owner/$repo/$number'
     | '/pr/$owner/$repo/$number_/files'
   fileRoutesById: FileRoutesById
@@ -177,6 +189,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiAuthGithubCallbackRouteImport
       parentRoute: typeof ApiAuthGithubRoute
     }
+    '/api/auth/github/install': {
+      id: '/api/auth/github/install'
+      path: '/install'
+      fullPath: '/api/auth/github/install'
+      preLoaderRoute: typeof ApiAuthGithubInstallRouteImport
+      parentRoute: typeof ApiAuthGithubRoute
+    }
     '/pr/$owner/$repo/$number': {
       id: '/pr/$owner/$repo/$number'
       path: '/pr/$owner/$repo/$number'
@@ -196,10 +215,12 @@ declare module '@tanstack/react-router' {
 
 interface ApiAuthGithubRouteChildren {
   ApiAuthGithubCallbackRoute: typeof ApiAuthGithubCallbackRoute
+  ApiAuthGithubInstallRoute: typeof ApiAuthGithubInstallRoute
 }
 
 const ApiAuthGithubRouteChildren: ApiAuthGithubRouteChildren = {
   ApiAuthGithubCallbackRoute: ApiAuthGithubCallbackRoute,
+  ApiAuthGithubInstallRoute: ApiAuthGithubInstallRoute,
 }
 
 const ApiAuthGithubRouteWithChildren = ApiAuthGithubRoute._addFileChildren(

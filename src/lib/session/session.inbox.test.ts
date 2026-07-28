@@ -173,7 +173,6 @@ describe("cache and revalidation", () => {
         await pending;
 
         expect(session.state.state.inbox.pullRequests).toEqual([]);
-        expect(await store.get("inbox:cache")).toBeNull();
     });
 });
 

@@ -80,6 +80,19 @@ export function DiffSettingsMenu({
                     </span>
                 </DropdownMenuCheckboxItem>
                 <DropdownMenuCheckboxItem
+                    checked={preferences.fileListLayout === "tree"}
+                    onCheckedChange={(checked) => onChange({ fileListLayout: checked === true ? "tree" : "flat" })}
+                >
+                    <span className="flex flex-1 items-center gap-1.5">
+                        File tree
+                        <HelpTooltip label="Group changed files by folder instead of a flat path list.">
+                            <span className="inline-flex">
+                                <Info className="size-3.5 text-muted-foreground" aria-hidden="true" />
+                            </span>
+                        </HelpTooltip>
+                    </span>
+                </DropdownMenuCheckboxItem>
+                <DropdownMenuCheckboxItem
                     checked={preferences.minimizeComments}
                     onCheckedChange={(checked) => onChange({ minimizeComments: checked === true })}
                 >

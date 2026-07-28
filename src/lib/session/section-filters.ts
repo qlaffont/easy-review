@@ -343,12 +343,13 @@ export function defaultFilterForPreset(id: string): SectionFilter {
                 condition("reviewDecision", "is_not", "approved"),
             ]);
         case "waiting-for-reviewers":
-            return singleCaseFilter("My open PR waiting on review", [
+            return singleCaseFilter("Others' open PR waiting on review", [
                 condition("author", "is_not", VIEWER_PERSON),
                 condition("state", "is", "open"),
                 condition("isDraft", "is", false),
                 condition("reviewDecision", "is_not", "changes-requested"),
                 condition("reviewDecision", "is_not", "approved"),
+                condition("reviewRequests", "does_not_include", VIEWER_PERSON),
             ]);
         case "approved":
             return singleCaseFilter("My PR approved", [
@@ -430,7 +431,7 @@ export const SECTION_RECIPES: ReadonlyArray<SectionRecipe> = [
     {
         id: "waiting-for-reviewers",
         label: "Waiting for reviewers",
-        description: "Others' open PRs not yet approved or blocked.",
+        description: "Others' open PRs waiting on review — not requested of you.",
         filter: defaultFilterForPreset("waiting-for-reviewers"),
         suggestedLabel: "Waiting for reviewers",
         color: "sky",
@@ -515,7 +516,7 @@ const FIELD_LABELS: Record<SectionFilterField, string> = {
     state: "PR status",
     isDraft: "Draft",
     reviewDecision: "Review decision",
-    reviewRequests: "Active reviewers",
+    reviewRequests: "Requested reviewers",
     viewerReviewState: "My review",
     checks: "Checks",
     mergeable: "Mergeable",

@@ -4,7 +4,7 @@ import { useEffect } from "react";
 import { ThemeMenuButton } from "#/components/theme-menu.tsx";
 import { Alert, AlertDescription, AlertTitle } from "#/components/ui/alert.tsx";
 import { Button } from "#/components/ui/button.tsx";
-import { GITHUB_OAUTH_SCOPE_DEFS } from "#/lib/github/oauth-scopes.ts";
+import { GITHUB_APP_PERMISSION_DEFS } from "#/lib/github/oauth-scopes.ts";
 import { usePageSeo } from "#/lib/seo.ts";
 import { useSession, useSessionState } from "#/lib/session/provider.tsx";
 import { notifyError } from "#/lib/toast.ts";
@@ -65,8 +65,8 @@ export function ConnectGithubScreen({ onClose }: { onClose?: () => void }) {
                         {isReplacing ? "Reconnect GitHub" : "Connect Easy Review to GitHub"}
                     </h1>
                     <p className="text-sm text-muted-foreground">
-                        Sign in with a GitHub OAuth app. Easy Review’s server holds the client secret and proxies API
-                        calls; your access token stays in an HTTP-only cookie.
+                        Install the GitHub App on your account and organizations first, then sign in. The server holds
+                        the client secret; your access token stays in an HTTP-only cookie.
                     </p>
                 </div>
             </header>
@@ -75,6 +75,12 @@ export function ConnectGithubScreen({ onClose }: { onClose?: () => void }) {
                 <Button type="button" disabled={auth.status === "verifying"} onClick={() => session.beginOAuthLogin()}>
                     <Github aria-hidden="true" />
                     {auth.status === "verifying" ? "Redirecting…" : "Sign in with GitHub"}
+                </Button>
+                <Button type="button" variant="outline" asChild>
+                    <a href="/api/auth/github/install">
+                        <ExternalLink aria-hidden="true" />
+                        Install GitHub App
+                    </a>
                 </Button>
                 {isReplacing ? (
                     <Button type="button" variant="ghost" onClick={handleCancel}>
@@ -87,18 +93,11 @@ export function ConnectGithubScreen({ onClose }: { onClose?: () => void }) {
                 <Building2 aria-hidden="true" />
                 <AlertTitle>Organization repositories</AlertTitle>
                 <AlertDescription>
-                    Want org repos in Easy Review? On GitHub’s authorize screen, grant access to each organization (or
-                    later open{" "}
-                    <a
-                        href="https://github.com/settings/applications"
-                        target="_blank"
-                        rel="noreferrer"
-                        className="inline-flex items-center gap-1 font-medium text-foreground underline-offset-4 hover:underline"
-                    >
-                        Authorized OAuth Apps
-                        <ExternalLink className="size-3" aria-hidden="true" />
-                    </a>{" "}
-                    → this app → Organization access → Grant). Restricted orgs need an admin approval.
+                    <p>
+                        Use <strong>Install GitHub App</strong> and choose each organization (and the repositories). The
+                        app must allow install on <strong>Any account</strong>. After installing, sign in again and
+                        refresh the repo list.
+                    </p>
                 </AlertDescription>
             </Alert>
 
@@ -110,25 +109,23 @@ export function ConnectGithubScreen({ onClose }: { onClose?: () => void }) {
             ) : null}
 
             <section className="flex flex-col gap-3">
-                <h2 className="text-sm font-medium">OAuth scopes this app requests</h2>
+                <h2 className="text-sm font-medium">GitHub App permissions this product needs</h2>
                 <dl className="divide-y divide-border overflow-hidden rounded-lg border text-sm">
-                    {GITHUB_OAUTH_SCOPE_DEFS.map((scope) => (
-                        <div key={scope.name} className="grid gap-1 px-3 py-2.5 sm:grid-cols-[11rem_1fr] sm:gap-3">
-                            <dt className="font-medium font-mono text-xs sm:text-sm">{scope.name}</dt>
-                            <dd className="text-muted-foreground">{scope.why}</dd>
+                    {GITHUB_APP_PERMISSION_DEFS.map((permission) => (
+                        <div key={permission.name} className="grid gap-1 px-3 py-2.5 sm:grid-cols-[11rem_1fr] sm:gap-3">
+                            <dt className="font-medium text-xs sm:text-sm">
+                                {permission.name}
+                                <span className="mt-0.5 block font-normal text-muted-foreground">
+                                    {permission.access}
+                                </span>
+                            </dt>
+                            <dd className="text-muted-foreground">{permission.why}</dd>
                         </div>
                     ))}
                 </dl>
                 <p className="text-sm text-muted-foreground">
-                    <a
-                        href="https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/scopes-for-oauth-apps"
-                        target="_blank"
-                        rel="noreferrer"
-                        className="inline-flex items-center gap-1"
-                    >
-                        GitHub OAuth scope reference
-                        <ExternalLink className="size-3.5" aria-hidden="true" />
-                    </a>
+                    Set these under the app’s Permissions &amp; events, then reinstall / reconnect. Guide:{" "}
+                    <code className="text-xs">docs/github-setup.md</code>.
                 </p>
             </section>
 
@@ -136,7 +133,7 @@ export function ConnectGithubScreen({ onClose }: { onClose?: () => void }) {
                 <ShieldCheck aria-hidden="true" />
                 <AlertTitle>Where credentials live</AlertTitle>
                 <AlertDescription>
-                    The OAuth client secret never leaves the Easy Review server. Your user access token is stored in an
+                    The client secret never leaves the Easy Review server. Your user access token is stored in an
                     HTTP-only cookie and is attached by the server when proxying requests to GitHub.
                 </AlertDescription>
             </Alert>

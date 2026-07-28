@@ -295,9 +295,44 @@ function parseLayoutEntry(entry: {
         color: isSectionColorId(entry.color) ? entry.color : appearance.color,
         customColor: normalizeHexColor(entry.customColor),
         icon: isSectionIconId(entry.icon) ? entry.icon : appearance.icon,
-        filter: normalizeSectionFilter(entry.filter, fallbackFilter),
+        filter: migratePresetFilter(entry.id, normalizeSectionFilter(entry.filter, fallbackFilter)),
         kind,
     };
+}
+
+/** Fingerprint a condition for legacy-default detection (ignores ids / case names). */
+function conditionFingerprint(condition: { field: string; op: string; value: string | number | boolean }): string {
+    const value =
+        condition.field === "isDraft"
+            ? condition.value === true || condition.value === "true"
+                ? "true"
+                : "false"
+            : String(condition.value);
+    return `${condition.field}|${condition.op}|${value}`;
+}
+
+/**
+ * Upgrade known stale preset defaults in place. Custom edits (extra/missing conditions) are left alone.
+ */
+function migratePresetFilter(id: InboxSectionId, filter: SectionFilter): SectionFilter {
+    if (id !== "waiting-for-reviewers") {
+        return filter;
+    }
+    if (filter.cases.length !== 1) {
+        return filter;
+    }
+    const fingerprints = new Set(filter.cases[0]!.conditions.map(conditionFingerprint));
+    const legacy = new Set([
+        "author|is_not|@me",
+        "state|is|open",
+        "isDraft|is|false",
+        "reviewDecision|is_not|changes-requested",
+        "reviewDecision|is_not|approved",
+    ]);
+    if (fingerprints.size !== legacy.size || [...legacy].some((entry) => !fingerprints.has(entry))) {
+        return filter;
+    }
+    return defaultFilterForPreset("waiting-for-reviewers");
 }
 
 /**

@@ -125,7 +125,7 @@ describe("getPullRequest", () => {
 
         expect(detail.title).toBe("Ship checks");
         expect(detail.checks).toBe("failure");
-        expect(detail.checkRuns).toEqual([{ name: "CodeRabbit", state: "success", url: null, summary: null }]);
+        expect(detail.checkRuns).toEqual([{ name: "CodeRabbit", state: "success", url: null, summary: "Successful" }]);
         // Suite totals, not readable StatusContext-only nodes (forbidden CheckRuns strip out).
         expect(detail.checkCount).toBe(6);
         expect(detail.requiredApprovingReviewCount).toBe(2);
@@ -187,38 +187,70 @@ describe("getPullRequest", () => {
 });
 
 describe("listRepositories", () => {
-    it("uses REST /user/repos so org-scoped credentials see organization repos", async () => {
+    it("lists repos from each GitHub App installation the user can access", async () => {
         const github = createGithubHttpClient(async (input) => {
             const url = String(input);
-            expect(url).toContain("/user/repos");
-            expect(url).toContain("affiliation=owner,collaborator,organization_member");
 
-            return new Response(
-                JSON.stringify([
-                    {
-                        full_name: "latomate/medical-web",
-                        name: "medical-web",
-                        private: true,
-                        archived: false,
-                        pushed_at: "2026-07-20T00:00:00Z",
-                        owner: { login: "latomate" },
-                    },
-                    {
-                        full_name: "qlaffont/raycast-extensions",
-                        name: "raycast-extensions",
-                        private: false,
-                        archived: false,
-                        pushed_at: "2026-07-19T00:00:00Z",
-                        owner: { login: "qlaffont" },
-                    },
-                ]),
-                { status: 200, headers: { "content-type": "application/json" } },
-            );
+            if (url.includes("/user/installations?") || url.endsWith("/user/installations")) {
+                return new Response(
+                    JSON.stringify({
+                        installations: [{ id: 11 }, { id: 22 }],
+                    }),
+                    { status: 200, headers: { "content-type": "application/json" } },
+                );
+            }
+
+            if (url.includes("/user/installations/11/repositories")) {
+                return new Response(
+                    JSON.stringify({
+                        repositories: [
+                            {
+                                full_name: "latomate/medical-web",
+                                name: "medical-web",
+                                private: true,
+                                archived: false,
+                                pushed_at: "2026-07-20T00:00:00Z",
+                                owner: { login: "latomate" },
+                            },
+                        ],
+                    }),
+                    { status: 200, headers: { "content-type": "application/json" } },
+                );
+            }
+
+            if (url.includes("/user/installations/22/repositories")) {
+                return new Response(
+                    JSON.stringify({
+                        repositories: [
+                            {
+                                full_name: "acme/platform",
+                                name: "platform",
+                                private: true,
+                                archived: false,
+                                pushed_at: "2026-07-21T00:00:00Z",
+                                owner: { login: "acme" },
+                            },
+                            {
+                                full_name: "qlaffont/raycast-extensions",
+                                name: "raycast-extensions",
+                                private: false,
+                                archived: false,
+                                pushed_at: "2026-07-19T00:00:00Z",
+                                owner: { login: "qlaffont" },
+                            },
+                        ],
+                    }),
+                    { status: 200, headers: { "content-type": "application/json" } },
+                );
+            }
+
+            throw new Error(`Unexpected URL: ${url}`);
         });
 
         const repositories = await github.listRepositories("token");
 
         expect(repositories.map((repository) => repository.nameWithOwner)).toEqual([
+            "acme/platform",
             "latomate/medical-web",
             "qlaffont/raycast-extensions",
         ]);

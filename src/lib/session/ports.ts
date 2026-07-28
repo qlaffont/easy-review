@@ -199,6 +199,29 @@ export type GithubClient = {
     mergePullRequest(token: string, repository: string, number: number, method: MergeMethod): Promise<void>;
     /** Close an open pull request without merging. */
     closePullRequest(token: string, repository: string, number: number): Promise<void>;
+    /**
+     * Upload an image/video for a PR comment composer. Stores the file on a hidden git ref
+     * (`refs/uploads/pr/{number}`) so it never lands on the PR branch, then returns a raw blob URL.
+     */
+    uploadPullRequestMedia(
+        token: string,
+        input: {
+            repository: string;
+            number: number;
+            fileName: string;
+            contentType: string;
+            bytes: Uint8Array;
+        },
+    ): Promise<{ url: string; markdown: string }>;
+    /**
+     * Resolve a bare `user-attachments` URL to a short-lived signed CDN URL via GitHub’s
+     * markdown API (same path github.com uses to embed private images/videos).
+     */
+    resolveUserAttachment(
+        token: string,
+        repository: string,
+        attachmentUrl: string,
+    ): Promise<{ kind: "image" | "video"; src: string; name?: string } | null>;
 };
 
 /** Browser persistence, narrowed to what the session needs so IndexedDB can replace it later. */

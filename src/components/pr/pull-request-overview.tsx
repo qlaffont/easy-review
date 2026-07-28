@@ -754,7 +754,7 @@ function PullRequestHeader({ page, headline }: { page: PullRequestPage; headline
                             Syncing…
                         </span>
                     ) : null}
-                    <HelpTooltip label="Reload this pull request from GitHub">
+                    <HelpTooltip label="Reload this pull request from GitHub (⌘R)">
                         <Button
                             variant="ghost"
                             size="icon-sm"
@@ -1108,6 +1108,7 @@ function Description({
                         placeholder="Add a description…"
                         previewBaseUrl={baseUrl}
                         repository={headline.repository}
+                        pullRequestNumber={headline.number}
                         onSubmitKey={() => void save()}
                         footer={
                             <>

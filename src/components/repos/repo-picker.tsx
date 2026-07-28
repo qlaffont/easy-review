@@ -128,8 +128,9 @@ function RepoPickerDialog({ open, onOpenChange }: { open: boolean; onOpenChange:
                             </p>
                             {repos.available.length === 0 ? (
                                 <p>
-                                    Missing an org repo? Grant that organization access to the OAuth app (or install the
-                                    GitHub App on the org), then sign in again and refresh.
+                                    Missing an org repo? Install the GitHub App on that organization (Any account
+                                    installability, select the repos, org approval if required), then sign in again and
+                                    refresh. Details: <code className="text-xs">docs/github-setup.md</code>.
                                 </p>
                             ) : null}
                         </div>

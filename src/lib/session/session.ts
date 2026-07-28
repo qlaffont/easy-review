@@ -427,8 +427,8 @@ export function createEasyReviewSession({ github, store, oauth }: EasyReviewSess
         }
     }
 
-    /** Drops everything that describes one account's work: repos, allowlist, cached Inbox. */
-    async function forgetAccountData(): Promise<void> {
+    /** Cancels in-flight PR loads and empties the in-memory workspace (not the persisted store). */
+    function resetSessionUi(): void {
         for (const [key, attempt] of latestPullRequestLoads) {
             latestPullRequestLoads.set(key, attempt + 1);
         }
@@ -449,15 +449,6 @@ export function createEasyReviewSession({ github, store, oauth }: EasyReviewSess
             latestRelatedPullRequestLoads.set(key, attempt + 1);
         }
 
-        await Promise.all([
-            store.remove(SELECTED_REPOS_KEY),
-            store.remove(REPOS_CACHE_KEY),
-            store.remove(REPOS_ACCOUNT_KEY),
-            store.remove(INBOX_CACHE_KEY),
-            store.remove(INBOX_EXPANDED_KEY),
-            store.remove(INBOX_SECTIONS_KEY),
-            clearDraftStorage(),
-        ]);
         setRepos({ ...initialRepositoriesState });
         setInbox({ ...initialInboxState });
         state.setState((prev) => ({
@@ -470,6 +461,20 @@ export function createEasyReviewSession({ github, store, oauth }: EasyReviewSess
             relatedPullRequests: {},
             repositoryMetadata: {},
         }));
+    }
+
+    /** Drops everything that describes one account's work: repos, allowlist, cached Inbox. */
+    async function forgetAccountData(): Promise<void> {
+        resetSessionUi();
+        await Promise.all([
+            store.remove(SELECTED_REPOS_KEY),
+            store.remove(REPOS_CACHE_KEY),
+            store.remove(REPOS_ACCOUNT_KEY),
+            store.remove(INBOX_CACHE_KEY),
+            store.remove(INBOX_EXPANDED_KEY),
+            store.remove(INBOX_SECTIONS_KEY),
+            clearDraftStorage(),
+        ]);
     }
 
     /**
@@ -621,8 +626,9 @@ export function createEasyReviewSession({ github, store, oauth }: EasyReviewSess
     }
 
     /**
-     * Sign out and forget everything derived from the session. Repository names are cleared too:
-     * on a shared machine they would otherwise say which private repos this person reviews.
+     * Sign out and clear the in-memory workspace. Persisted allowlist / Inbox layout / drafts stay
+     * so the same GitHub login can reconnect without re-setup. A different login still wipes them
+     * in `loadAccountPreferences`.
      */
     async function disconnect(): Promise<void> {
         latestAuthAttempt++;
@@ -636,7 +642,8 @@ export function createEasyReviewSession({ github, store, oauth }: EasyReviewSess
                 // Local wipe still proceeds if the logout endpoint is unreachable.
             }
         }
-        await Promise.all([store.remove(LEGACY_BROWSER_TOKEN_KEY), forgetAccountData()]);
+        await store.remove(LEGACY_BROWSER_TOKEN_KEY);
+        resetSessionUi();
         setAuth({ status: "unauthenticated", viewer: null, tokenStored: false, error: null });
     }
 
@@ -2266,6 +2273,25 @@ export function createEasyReviewSession({ github, store, oauth }: EasyReviewSess
         await refreshAfterMutation(repository, number);
     }
 
+    async function uploadPullRequestMedia(
+        repository: string,
+        number: number,
+        file: File,
+    ): Promise<{ url: string; markdown: string }> {
+        const bytes = new Uint8Array(await file.arrayBuffer());
+        return github.uploadPullRequestMedia(requireToken(), {
+            repository,
+            number,
+            fileName: file.name,
+            contentType: file.type || "application/octet-stream",
+            bytes,
+        });
+    }
+
+    async function resolveUserAttachment(repository: string, attachmentUrl: string) {
+        return github.resolveUserAttachment(requireToken(), repository, attachmentUrl);
+    }
+
     /** Visible sections in the user's layout order, empty ones included when not hidden. */
     function getInboxSections(): Array<InboxSection> {
         const { inbox, repos, auth } = state.state;
@@ -2423,6 +2449,8 @@ export function createEasyReviewSession({ github, store, oauth }: EasyReviewSess
         toggleIssueCommentReaction,
         mergePullRequest,
         closePullRequest,
+        uploadPullRequestMedia,
+        resolveUserAttachment,
     };
 }
 

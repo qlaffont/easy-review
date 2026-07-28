@@ -1,10 +1,11 @@
-import { Check, Copy, PencilLine } from "lucide-react";
+import { Check, Copy, ExternalLink, Film, PencilLine } from "lucide-react";
 import {
     Children,
     createContext,
     isValidElement,
     memo,
     useContext,
+    useEffect,
     useMemo,
     useState,
     type ComponentPropsWithoutRef,
@@ -17,9 +18,17 @@ import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 import remarkGfm from "remark-gfm";
 import { remarkAlert } from "remark-github-blockquote-alert";
 
+import { MermaidDiagram } from "#/components/pr/mermaid-diagram.tsx";
 import { SuggestionApplyActions, type SuggestionApplyTarget } from "#/components/pr/suggestion-apply.tsx";
+import {
+    isGithubUserAttachmentUrl,
+    repositoryFromGithubBaseUrl,
+    shouldEmbedGithubAttachment,
+    type ResolvedGithubAttachment,
+} from "#/lib/github-attachment.ts";
 import { prepareMarkdownSource } from "#/lib/markdown-source.ts";
 import { remarkBoldMentions } from "#/lib/remark-bold-mentions.ts";
+import { useOptionalSession } from "#/lib/session/provider.tsx";
 import { notifyCopied, notifyError } from "#/lib/toast.ts";
 import { cn } from "#/lib/utils.ts";
 
@@ -37,7 +46,7 @@ const OCTICON_CLASS = /^octicon$/;
  */
 const sanitizeSchema = {
     ...defaultSchema,
-    tagNames: [...(defaultSchema.tagNames ?? []), "svg", "path", "section"],
+    tagNames: [...(defaultSchema.tagNames ?? []), "svg", "path", "section", "video"],
     attributes: {
         ...defaultSchema.attributes,
         div: [...(defaultSchema.attributes?.div ?? []), ["className", ALERT_CLASS], ["class", ALERT_CLASS], "dir"],
@@ -66,6 +75,7 @@ const sanitizeSchema = {
         ],
         path: ["d", "fill", "fillRule", "fill-rule", "clipRule", "clip-rule"],
         input: [...(defaultSchema.attributes?.input ?? []), "disabled", "checked", "type"],
+        video: ["src", "controls", "playsInline", "playsinline", "preload", "width", "height"],
     },
 };
 
@@ -326,18 +336,170 @@ function DiffFenceBlock({ code }: { code: string }) {
     );
 }
 
-const components = {
-    a: ({ href, children, className, ...props }: ComponentPropsWithoutRef<"a">) => (
+function linkChildrenText(children: ReactNode): string {
+    return Children.toArray(children)
+        .map((child) => {
+            if (typeof child === "string" || typeof child === "number") {
+                return String(child);
+            }
+            if (isValidElement<{ children?: ReactNode }>(child)) {
+                return linkChildrenText(child.props.children);
+            }
+            return "";
+        })
+        .join("");
+}
+
+const MarkdownRepoContext = createContext<string | null>(null);
+
+function AttachmentFallback({ href, name }: { href: string; name?: string }) {
+    return (
         <a
             href={href}
             target="_blank"
             rel="noreferrer noopener ugc"
-            className={cn(isGithubUserMentionHref(href) && "font-semibold", className)}
-            {...props}
+            className="my-2 flex items-center gap-2 rounded-md border bg-muted/40 px-3 py-2 text-sm text-foreground no-underline hover:bg-muted/70"
         >
-            {children}
+            <Film className="size-4 shrink-0 text-muted-foreground" aria-hidden />
+            <span className="min-w-0 flex-1 truncate font-medium">{name ?? "Open attachment on GitHub"}</span>
+            <ExternalLink className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
         </a>
-    ),
+    );
+}
+
+/**
+ * GitHub auto-embeds bare `user-attachments` URLs as image or video. The CDN path has no
+ * extension. Resolve via GitHub’s markdown API to a signed private-user-images URL (cookies are
+ * not sent on cross-origin `<img>`/`<video>` from Easy Review). Fall back to img→video probing,
+ * then a link if the browser still cannot play the file (e.g. QuickTime `.mov` in Firefox).
+ */
+function GithubAttachmentMedia({ src }: { src: string }) {
+    const repository = useContext(MarkdownRepoContext);
+    const session = useOptionalSession();
+    const [resolved, setResolved] = useState<ResolvedGithubAttachment | null>(null);
+    const [mode, setMode] = useState<"image" | "video">("image");
+    const [failed, setFailed] = useState(false);
+    const [retried, setRetried] = useState(false);
+
+    useEffect(() => {
+        if (!session || !repository) {
+            return;
+        }
+
+        let cancelled = false;
+        void session
+            .resolveUserAttachment(repository, src)
+            .then((next) => {
+                if (!cancelled && next) {
+                    setResolved(next);
+                    setFailed(false);
+                }
+            })
+            .catch(() => {
+                /* keep bare URL fallback */
+            });
+
+        return () => {
+            cancelled = true;
+        };
+    }, [session, repository, src, retried]);
+
+    async function retryOrFail() {
+        if (!retried && session && repository) {
+            setRetried(true);
+            return;
+        }
+        setFailed(true);
+    }
+
+    if (failed) {
+        return <AttachmentFallback href={src} name={resolved?.name} />;
+    }
+
+    const mediaSrc = resolved?.src ?? src;
+    const kind = resolved?.kind ?? mode;
+
+    if (kind === "video") {
+        return (
+            <div className="my-2 overflow-hidden rounded-md border bg-muted/20">
+                {resolved?.name ? (
+                    <div className="border-b px-3 py-1.5 text-xs font-medium text-muted-foreground">
+                        {resolved.name}
+                    </div>
+                ) : null}
+                <video
+                    key={mediaSrc}
+                    src={mediaSrc}
+                    controls
+                    playsInline
+                    preload="metadata"
+                    className="max-h-[min(480px,70vh)] w-full max-w-full bg-muted"
+                    onError={() => {
+                        void retryOrFail();
+                    }}
+                >
+                    <a href={src} target="_blank" rel="noreferrer noopener ugc">
+                        {src}
+                    </a>
+                </video>
+            </div>
+        );
+    }
+
+    return (
+        <img
+            key={mediaSrc}
+            src={mediaSrc}
+            alt=""
+            loading="lazy"
+            className="my-2 max-h-[min(480px,70vh)] max-w-full rounded-md"
+            onError={() => {
+                if (resolved?.kind === "image") {
+                    void retryOrFail();
+                    return;
+                }
+                setMode("video");
+            }}
+        />
+    );
+}
+
+function MarkdownVideo({ src, ...props }: ComponentPropsWithoutRef<"video">) {
+    const [failed, setFailed] = useState(false);
+    if (failed || typeof src !== "string") {
+        return typeof src === "string" ? <AttachmentFallback href={src} /> : null;
+    }
+    return (
+        <video
+            src={src}
+            controls
+            playsInline
+            preload="metadata"
+            className="my-2 max-h-[min(480px,70vh)] w-full max-w-full rounded-md bg-muted"
+            onError={() => setFailed(true)}
+            {...props}
+        />
+    );
+}
+
+const components = {
+    a: ({ href, children, className, ...props }: ComponentPropsWithoutRef<"a">) => {
+        if (shouldEmbedGithubAttachment(href, linkChildrenText(children))) {
+            return <GithubAttachmentMedia src={href!} />;
+        }
+
+        return (
+            <a
+                href={href}
+                target="_blank"
+                rel="noreferrer noopener ugc"
+                className={cn(isGithubUserMentionHref(href) && "font-semibold", className)}
+                {...props}
+            >
+                {children}
+            </a>
+        );
+    },
     strong: ({ children, className, ...props }: ComponentPropsWithoutRef<"strong">) => (
         <strong className={cn("font-semibold", className)} {...props}>
             {children}
@@ -352,6 +514,11 @@ const components = {
         const diff = fencedCodeFromPre(children, "diff");
         if (diff !== null) {
             return <DiffFenceBlock code={diff} />;
+        }
+
+        const mermaid = fencedCodeFromPre(children, "mermaid");
+        if (mermaid !== null) {
+            return <MermaidDiagram code={mermaid} />;
         }
 
         const codeChild = codeChildFromPre(children);
@@ -408,7 +575,16 @@ const components = {
         if (!isAllowedMarkdownImageSrc(src)) {
             return null;
         }
+        if (isGithubUserAttachmentUrl(src) && typeof src === "string") {
+            return <GithubAttachmentMedia src={src} />;
+        }
         return <img src={src} alt={alt ?? ""} loading="lazy" referrerPolicy="no-referrer" {...props} />;
+    },
+    video: ({ src, ...props }: ComponentPropsWithoutRef<"video">) => {
+        if (!isAllowedMarkdownImageSrc(typeof src === "string" ? src : undefined)) {
+            return null;
+        }
+        return <MarkdownVideo src={typeof src === "string" ? src : undefined} {...props} />;
     },
     input: ({ type, ...props }: ComponentPropsWithoutRef<"input">) => {
         if (type === "checkbox") {
@@ -495,16 +671,18 @@ export const Markdown = memo(function Markdown({
 
     return (
         <SuggestionContext.Provider value={suggestionContext}>
-            <div className="prose prose-sm max-w-none text-foreground dark:prose-invert prose-p:my-2 prose-hr:my-3 prose-pre:my-0 prose-pre:bg-transparent prose-pre:p-0 prose-code:text-foreground prose-code:before:content-none prose-code:after:content-none prose-strong:text-foreground [&_li:has(>input[type=checkbox])]:list-none [&_ul:has(li>input[type=checkbox])]:list-none [&_ul:has(li>input[type=checkbox])]:pl-0">
-                <ReactMarkdown
-                    remarkPlugins={remarkPlugins}
-                    rehypePlugins={rehypePlugins}
-                    components={components}
-                    urlTransform={urlTransform}
-                >
-                    {prepared}
-                </ReactMarkdown>
-            </div>
+            <MarkdownRepoContext.Provider value={repositoryFromGithubBaseUrl(baseUrl)}>
+                <div className="prose prose-sm max-w-none text-foreground dark:prose-invert prose-p:my-2 prose-hr:my-3 prose-pre:my-0 prose-pre:bg-transparent prose-pre:p-0 prose-code:text-foreground prose-code:before:content-none prose-code:after:content-none prose-strong:text-foreground [&_li:has(>input[type=checkbox])]:list-none [&_ul:has(li>input[type=checkbox])]:list-none [&_ul:has(li>input[type=checkbox])]:pl-0">
+                    <ReactMarkdown
+                        remarkPlugins={remarkPlugins}
+                        rehypePlugins={rehypePlugins}
+                        components={components}
+                        urlTransform={urlTransform}
+                    >
+                        {prepared}
+                    </ReactMarkdown>
+                </div>
+            </MarkdownRepoContext.Provider>
         </SuggestionContext.Provider>
     );
 });

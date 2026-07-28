@@ -189,6 +189,8 @@ export const APP_ACTIONS: ReadonlyArray<AppAction> = [
         id: "pr.refresh",
         label: "Refresh pull request",
         group: "Pull request",
+        keywords: ["reload", "sync"],
+        shortcut: "⌘R",
         when: (context) => onPullRequest(context) && hasTarget(context),
         run: async (context) => {
             if (!context.target) return;

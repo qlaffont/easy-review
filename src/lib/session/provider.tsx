@@ -64,6 +64,11 @@ export function useSession(): EasyReviewSession {
     return session;
 }
 
+/** Null outside `SessionProvider` — for markdown embeds that also render in unit tests. */
+export function useOptionalSession(): EasyReviewSession | null {
+    return use(SessionContext);
+}
+
 export function useSessionState<TSelected>(selector: (state: SessionState) => TSelected): TSelected {
     return useSelector(useSession().state, selector);
 }

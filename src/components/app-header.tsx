@@ -84,7 +84,7 @@ export function AppHeader() {
                     <DropdownMenuItem
                         variant="destructive"
                         onSelect={() => {
-                            void session.disconnect().then(() => notifySuccess("Disconnected — session cleared"));
+                            void session.disconnect().then(() => notifySuccess("Signed out"));
                         }}
                     >
                         <LogOut aria-hidden="true" />

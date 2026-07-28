@@ -29,6 +29,9 @@ describe("isAllowedGraphqlQuery", () => {
 
 describe("isAllowedGithubProxyRequest", () => {
     it("allows inbox and review REST surfaces", () => {
+        expect(isAllowedGithubProxyRequest("POST", "/markdown", new ArrayBuffer(0))).toBe(true);
+        expect(isAllowedGithubProxyRequest("GET", "/user/installations", undefined)).toBe(true);
+        expect(isAllowedGithubProxyRequest("GET", "/user/installations/42/repositories", undefined)).toBe(true);
         expect(isAllowedGithubProxyRequest("GET", "/user/repos", undefined)).toBe(true);
         expect(isAllowedGithubProxyRequest("GET", "/repos/acme/api/labels", undefined)).toBe(true);
         expect(isAllowedGithubProxyRequest("POST", "/repos/acme/api/pulls/1/reviews", new ArrayBuffer(0))).toBe(true);

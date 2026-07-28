@@ -907,6 +907,33 @@ export function createFakeGithub(): FakeGithub {
                 });
             });
         },
+        uploadPullRequestMedia(token, input) {
+            return respond("uploadPullRequestMedia", () => {
+                authenticate(token);
+                requirePullRequest(token, input.repository, input.number);
+                const [owner = "", name = ""] = input.repository.split("/");
+                const safe = input.fileName.replaceAll(/[^\w.-]+/g, "_") || "upload.bin";
+                const url = `https://github.com/${owner}/${name}/blob/upload-sha/${safe}?raw=true`;
+                const isVideo = input.contentType.startsWith("video/");
+                return {
+                    url,
+                    markdown: isVideo ? `<video src="${url}" controls></video>` : `![${safe}](${url})`,
+                };
+            });
+        },
+        resolveUserAttachment(token, _repository, attachmentUrl) {
+            return respond("resolveUserAttachment", () => {
+                authenticate(token);
+                if (!attachmentUrl.includes("user-attachments/assets/")) {
+                    return null;
+                }
+                return {
+                    kind: "image" as const,
+                    src: `https://private-user-images.githubusercontent.com/1/${attachmentUrl.split("/").pop()}.png?jwt=test`,
+                    name: "fixture.png",
+                };
+            });
+        },
         updatePullRequestBody(token, repository, number, body) {
             return respond("updatePullRequestBody", () => {
                 authenticate(token);

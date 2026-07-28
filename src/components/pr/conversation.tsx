@@ -253,6 +253,7 @@ export function PullRequestConversation({
                         placeholder="Leave a comment — @mention or / for commands"
                         previewBaseUrl={baseUrl}
                         repository={repository}
+                        pullRequestNumber={number}
                         mentionUsers={mentionUsers}
                         onSubmitKey={() => void post()}
                         footer={
@@ -550,6 +551,7 @@ function TimelineReviewThread({
                                             disabled={sending}
                                             previewBaseUrl={baseUrl}
                                             repository={repository}
+                                            pullRequestNumber={number}
                                             mentionUsers={mentionUsers}
                                             onSubmitKey={() => void sendReply()}
                                             footer={

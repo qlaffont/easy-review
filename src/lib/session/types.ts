@@ -127,7 +127,7 @@ export type PullRequestDetail = PullRequestSummary & {
     /**
      * GitHub Checks-tab badge: check-run count from suites (excludes legacy commit statuses).
      * Prefer this over `checkRuns.length` — GitHub often omits CheckRun nodes depending on
-     * credential permissions (classic OAuth vs limited scopes).
+     * credential permissions (GitHub App permissions / scopes).
      */
     checkCount: number;
     /**

@@ -430,6 +430,7 @@ function LineCommentComposer({
     disabled,
     previewBaseUrl,
     repository,
+    number,
     mentionUsers,
     viewerLogin,
     viewerAvatarUrl,
@@ -446,6 +447,7 @@ function LineCommentComposer({
     disabled?: boolean;
     previewBaseUrl: string;
     repository: string;
+    number: number;
     mentionUsers?: Array<{ login: string; name?: string | null; avatarUrl?: string | null }>;
     viewerLogin: string | null;
     viewerAvatarUrl: string | null;
@@ -532,6 +534,7 @@ function LineCommentComposer({
                         suggestionLine={compose.line}
                         repository={repository}
                         mentionUsers={mentionUsers}
+                        pullRequestNumber={number}
                         onSubmitKey={() => onSave("stage")}
                         className="shadow-sm"
                         footer={
@@ -1013,6 +1016,7 @@ function VirtualDiffLines({
                                         disabled={disabled}
                                         previewBaseUrl={previewBaseUrl}
                                         repository={repository}
+                                        number={number}
                                         mentionUsers={mentionUsers}
                                         viewerLogin={viewerLogin}
                                         viewerAvatarUrl={viewerAvatarUrl}

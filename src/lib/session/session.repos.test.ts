@@ -171,7 +171,7 @@ describe("switching account", () => {
 });
 
 describe("disconnect", () => {
-    it("forgets which repositories this person reviews", async () => {
+    it("clears the in-memory workspace but keeps prefs for the same login", async () => {
         const session = await connectedSession();
         await session.refreshRepositories();
         await session.setSelectedRepositories(["acme/api"]);
@@ -179,6 +179,32 @@ describe("disconnect", () => {
         await session.disconnect();
 
         expect(session.state.state.repos).toMatchObject({ status: "idle", available: [], selected: [] });
-        expect(store.entries()).toEqual({});
+        expect(store.entries()["repos:account"]).toBe("quentin");
+        expect(JSON.parse(store.entries()["repos:selected"]!)).toEqual(["acme/api"]);
+    });
+
+    it("restores the allowlist when the same account signs back in", async () => {
+        const session = await connectedSession();
+        await session.refreshRepositories();
+        await session.setSelectedRepositories(["acme/api"]);
+        await session.disconnect();
+
+        const reloaded = newSession();
+        await reloaded.connect(TOKEN);
+
+        expect(reloaded.state.state.repos.selected).toEqual(["acme/api"]);
+    });
+
+    it("forgets prefs when a different account signs in after disconnect", async () => {
+        const session = await connectedSession();
+        await session.refreshRepositories();
+        await session.setSelectedRepositories(["acme/api"]);
+        await session.disconnect();
+
+        github.addAccount("test_cred_other", { login: "octocat" });
+        const reloaded = newSession();
+        await reloaded.connect("test_cred_other");
+
+        expect(reloaded.state.state.repos).toMatchObject({ status: "idle", available: [], selected: [] });
     });
 });

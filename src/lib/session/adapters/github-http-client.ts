@@ -1,6 +1,5 @@
 import type { GithubClient, GithubViewer } from "#/lib/session/ports.ts";
 import type {
-    CheckRun,
     CheckState,
     CommitSignature,
     ContentEdit,
@@ -26,8 +25,11 @@ import type {
     ReviewThreadComment,
 } from "#/lib/session/types.ts";
 
+import { mediaKindForNameAndType, mediaMarkdown, sanitizeMediaFileName } from "#/lib/composer-media.ts";
+import { isGithubUserAttachmentUrl, parseGithubAttachmentMarkdownHtml } from "#/lib/github-attachment.ts";
 import { applySuggestionsToFile, type SuggestionChange } from "#/lib/session/apply-suggestion.ts";
 import { buildFileDiff } from "#/lib/session/build-file-diff.ts";
+import { mapCheckRuns, type CheckContextInput } from "#/lib/session/check-runs.ts";
 import { HUGE_FILE_BYTES, stubForPath } from "#/lib/session/diff-policy.ts";
 import { EasyReviewError } from "#/lib/session/errors.ts";
 import {
@@ -112,10 +114,7 @@ function errorForStatus(response: Response): EasyReviewError {
             return rateLimitedError(resetHeaderToIso(response.headers));
         }
 
-        return new EasyReviewError(
-            "forbidden",
-            "This GitHub session is missing a permission required for that action. Reconnect with the repo scope.",
-        );
+        return new EasyReviewError("forbidden", FORBIDDEN_PERMISSION_MESSAGE);
     }
 
     if (response.status === 404) {
@@ -137,10 +136,16 @@ function isFatalGraphqlError(error: { type?: string }): boolean {
     return error.type === "RATE_LIMITED" || error.type === "UNAUTHORIZED";
 }
 
-/** Rewrite GitHub copy that still says “personal access token” for OAuth sessions. */
+const FORBIDDEN_PERMISSION_MESSAGE =
+    "This GitHub session is missing a permission required for that action. Check the GitHub App permissions (and installation), then reconnect.";
+
+const MEDIA_UPLOAD_PERMISSION_MESSAGE =
+    "Media upload needs Contents: Read and write on your GitHub App. Update Permissions & events, reinstall if needed, then reconnect.";
+
+/** Rewrite GitHub copy that still says “personal access token” / “integration” for OAuth sessions. */
 function humanizeGithubMessage(message: string): string {
-    if (/personal access token/i.test(message)) {
-        return "This GitHub session is missing a permission required for that action. Reconnect and grant organization access if needed.";
+    if (/personal access token|accessible by integration/i.test(message)) {
+        return FORBIDDEN_PERMISSION_MESSAGE;
     }
 
     return message;
@@ -258,39 +263,47 @@ export function createGithubHttpClient(
 
         async listRepositories(token) {
             /**
-             * Prefer REST `/user/repos` over GraphQL `viewer.repositories`. Org-scoped
-             * credentials often see organization repos on REST, while GraphQL returns only
-             * personal repositories — which is exactly the empty-Inbox failure mode we hit
-             * when org access is limited.
+             * GitHub App user tokens only see repos covered by an installation. List via
+             * `/user/installations` → `/user/installations/{id}/repositories` (not `/user/repos`),
+             * otherwise org repos never appear even when the user is an org member.
              */
-            const repositories: Array<Repository> = [];
-            let path: string | null =
-                `/user/repos?per_page=${REPOSITORY_PAGE_SIZE}&sort=pushed&affiliation=owner,collaborator,organization_member`;
+            const byName = new Map<string, Repository>();
+            const installationIds = await listInstallationIds(token, rest);
 
-            for (let page = 0; page < REPOSITORY_PAGE_LIMIT && path; page++) {
-                const response = await rest(token, path);
+            await Promise.all(
+                installationIds.map(async (installationId) => {
+                    let path: string | null =
+                        `/user/installations/${installationId}/repositories?per_page=${REPOSITORY_PAGE_SIZE}`;
 
-                if (!response.ok) {
-                    throw errorForStatus(response);
-                }
+                    for (let page = 0; page < REPOSITORY_PAGE_LIMIT && path; page++) {
+                        const response = await rest(token, path);
 
-                const nodes = (await response.json()) as Array<RestRepositoryNode>;
+                        if (!response.ok) {
+                            throw errorForStatus(response);
+                        }
 
-                for (const node of nodes) {
-                    repositories.push({
-                        nameWithOwner: node.full_name,
-                        owner: node.owner.login,
-                        name: node.name,
-                        isPrivate: node.private,
-                        isArchived: node.archived,
-                        pushedAt: node.pushed_at,
-                    });
-                }
+                        const payload = (await response.json()) as { repositories?: Array<RestRepositoryNode> };
+                        for (const node of payload.repositories ?? []) {
+                            byName.set(node.full_name, {
+                                nameWithOwner: node.full_name,
+                                owner: node.owner.login,
+                                name: node.name,
+                                isPrivate: node.private,
+                                isArchived: node.archived,
+                                pushedAt: node.pushed_at,
+                            });
+                        }
 
-                path = nextRestPath(response.headers.get("link"));
-            }
+                        path = nextRestPath(response.headers.get("link"));
+                    }
+                }),
+            );
 
-            return repositories;
+            return [...byName.values()].toSorted((a, b) => {
+                const aTime = a.pushedAt ? Date.parse(a.pushedAt) : 0;
+                const bTime = b.pushedAt ? Date.parse(b.pushedAt) : 0;
+                return bTime - aTime;
+            });
         },
 
         async listPullRequests(token, repositories) {
@@ -993,6 +1006,117 @@ export function createGithubHttpClient(
             await restJson(token, "PATCH", `/repos/${owner}/${name}/pulls/${number}`, { state: "closed" });
         },
 
+        async uploadPullRequestMedia(token, input) {
+            try {
+                const [owner = "", name = ""] = input.repository.split("/");
+                const kind = mediaKindForNameAndType(input.fileName, input.contentType) ?? "image";
+                const safeName = sanitizeMediaFileName(input.fileName);
+                const uniqueName = `${crypto.randomUUID().replaceAll("-", "").slice(0, 12)}-${safeName}`;
+                const refSuffix = `uploads/pr/${input.number}`;
+
+                let parentSha: string | undefined;
+                let baseTreeSha: string | undefined;
+                const existing = await rest(token, `/repos/${owner}/${name}/git/ref/${encodePath(refSuffix)}`);
+                if (existing.ok) {
+                    const ref = (await existing.json()) as { object?: { sha?: string } };
+                    parentSha = ref.object?.sha;
+                    if (parentSha) {
+                        const commit = (await restJson(
+                            token,
+                            "GET",
+                            `/repos/${owner}/${name}/git/commits/${parentSha}`,
+                        )) as { tree: { sha: string } };
+                        baseTreeSha = commit.tree.sha;
+                    }
+                } else if (existing.status !== 404) {
+                    throw errorForStatus(existing);
+                }
+
+                const blob = (await restJson(token, "POST", `/repos/${owner}/${name}/git/blobs`, {
+                    content: bytesToBase64(input.bytes),
+                    encoding: "base64",
+                })) as { sha: string };
+
+                const treePayload: Record<string, unknown> = {
+                    tree: [{ path: uniqueName, mode: "100644", type: "blob", sha: blob.sha }],
+                };
+                if (baseTreeSha) {
+                    treePayload.base_tree = baseTreeSha;
+                }
+                const tree = (await restJson(token, "POST", `/repos/${owner}/${name}/git/trees`, treePayload)) as {
+                    sha: string;
+                };
+
+                const commitPayload: Record<string, unknown> = {
+                    message: `Upload ${safeName} for pull request #${input.number}`,
+                    tree: tree.sha,
+                    parents: parentSha ? [parentSha] : [],
+                };
+                const commit = (await restJson(
+                    token,
+                    "POST",
+                    `/repos/${owner}/${name}/git/commits`,
+                    commitPayload,
+                )) as {
+                    sha: string;
+                };
+
+                if (parentSha) {
+                    await restJson(token, "PATCH", `/repos/${owner}/${name}/git/refs/${encodePath(refSuffix)}`, {
+                        sha: commit.sha,
+                        force: true,
+                    });
+                } else {
+                    await restJson(token, "POST", `/repos/${owner}/${name}/git/refs`, {
+                        ref: `refs/${refSuffix}`,
+                        sha: commit.sha,
+                    });
+                }
+
+                const url = `https://github.com/${owner}/${name}/blob/${commit.sha}/${encodePath(uniqueName)}?raw=true`;
+                return { url, markdown: mediaMarkdown(kind, safeName, url) };
+            } catch (cause) {
+                if (cause instanceof EasyReviewError && cause.kind === "forbidden") {
+                    throw new EasyReviewError("forbidden", MEDIA_UPLOAD_PERMISSION_MESSAGE, { cause });
+                }
+                throw cause;
+            }
+        },
+
+        async resolveUserAttachment(token, repository, attachmentUrl) {
+            if (!isGithubUserAttachmentUrl(attachmentUrl)) {
+                return null;
+            }
+
+            let response: Response;
+            try {
+                response = await fetchImpl(`${REST_URL}/markdown`, {
+                    method: "POST",
+                    headers: {
+                        ...authorizationHeaders(token),
+                        accept: "application/vnd.github+json",
+                        "content-type": "application/json",
+                    },
+                    body: JSON.stringify({
+                        text: attachmentUrl,
+                        mode: "gfm",
+                        context: repository,
+                    }),
+                    credentials,
+                });
+            } catch (cause) {
+                throw new EasyReviewError("network", "Could not reach GitHub. Check your connection and try again.", {
+                    cause,
+                });
+            }
+
+            if (!response.ok) {
+                throw errorForStatus(response);
+            }
+
+            return parseGithubAttachmentMarkdownHtml(await response.text());
+        },
+
         async updatePullRequestBody(token, repository, number, body) {
             const [owner = "", name = ""] = repository.split("/");
             await restJson(token, "PATCH", `/repos/${owner}/${name}/pulls/${number}`, { body });
@@ -1292,6 +1416,15 @@ function encodePath(path: string): string {
         .split("/")
         .map((segment) => encodeURIComponent(segment).replaceAll(".", "%2E"))
         .join("/");
+}
+
+function bytesToBase64(bytes: Uint8Array): string {
+    let binary = "";
+    const chunk = 0x8000;
+    for (let offset = 0; offset < bytes.length; offset += chunk) {
+        binary += String.fromCharCode(...bytes.subarray(offset, offset + chunk));
+    }
+    return btoa(binary);
 }
 
 type PullRequestNode = {
@@ -1728,18 +1861,7 @@ const PULL_REQUEST_FIELDS = `
     }
 `;
 
-type CheckContextNode =
-    | {
-          __typename: "CheckRun";
-          name: string;
-          status: string;
-          conclusion: string | null;
-          detailsUrl: string | null;
-          startedAt: string | null;
-          completedAt: string | null;
-      }
-    | { __typename: "StatusContext"; context: string; state: string; targetUrl: string | null }
-    | null;
+type CheckContextNode = CheckContextInput | null;
 
 /**
  * The overview asks for the same fields as an Inbox row plus the ones only a whole page has
@@ -1906,6 +2028,14 @@ const PULL_REQUEST_QUERY = `
                                             detailsUrl
                                             startedAt
                                             completedAt
+                                            checkSuite {
+                                                workflowRun {
+                                                    event
+                                                    workflow {
+                                                        name
+                                                    }
+                                                }
+                                            }
                                         }
                                         ... on StatusContext {
                                             context
@@ -2138,6 +2268,14 @@ const PULL_REQUEST_TIMELINE_QUERY = `
                                                 detailsUrl
                                                 startedAt
                                                 completedAt
+                                                checkSuite {
+                                                    workflowRun {
+                                                        event
+                                                        workflow {
+                                                            name
+                                                        }
+                                                    }
+                                                }
                                             }
                                             ... on StatusContext {
                                                 context
@@ -2545,9 +2683,7 @@ function toTimelineItem(node: TimelineNode): PullRequestTimelineItem | null {
                 abbreviatedOid: commit.abbreviatedOid,
                 url: commit.url,
                 checkState: toCheckState(commit.statusCheckRollup?.state),
-                checkRuns: (commit.statusCheckRollup?.contexts?.nodes ?? [])
-                    .filter((context): context is NonNullable<CheckContextNode> => context !== null)
-                    .map(toCheckRun),
+                checkRuns: mapCheckRuns(commit.statusCheckRollup?.contexts?.nodes ?? []),
                 signature: toCommitSignature(commit.signature),
             };
         }
@@ -2709,28 +2845,6 @@ function toPullRequestFile(node: PullRequestFileNode): PullRequestFile {
     };
 }
 
-/** A run GitHub has not finished is pending whatever it ends up concluding. */
-function toCheckRunState(status: string, conclusion: string | null): CheckState {
-    if (status !== "COMPLETED") {
-        return "pending";
-    }
-
-    switch (conclusion) {
-        case "SUCCESS":
-        case "NEUTRAL":
-        case "SKIPPED":
-            return "success";
-        case "FAILURE":
-        case "TIMED_OUT":
-        case "CANCELLED":
-        case "ACTION_REQUIRED":
-        case "STARTUP_FAILURE":
-            return "failure";
-        default:
-            return "none";
-    }
-}
-
 /**
  * GitHub’s Checks-tab badge counts CheckRuns only (not legacy StatusContexts like CodeRabbit).
  * When CheckRun context slots are forbidden, GitHub nulls them out while leaving StatusContext
@@ -2754,70 +2868,6 @@ function toCheckCount(
         }
     }
     return checkRuns + redacted;
-}
-
-function toCheckRun(context: NonNullable<CheckContextNode>): CheckRun {
-    if (context.__typename === "CheckRun") {
-        const state = toCheckRunState(context.status, context.conclusion);
-        return {
-            name: context.name,
-            state,
-            url: context.detailsUrl,
-            summary: checkRunSummary(state, context.startedAt, context.completedAt),
-        };
-    }
-
-    return {
-        name: context.context,
-        state: toCheckState(context.state),
-        url: context.targetUrl,
-        summary: null,
-    };
-}
-
-function checkRunSummary(state: CheckState, startedAt: string | null, completedAt: string | null): string | null {
-    const duration = formatCheckDuration(startedAt, completedAt);
-
-    if (state === "failure") {
-        return duration ? `Failing after ${duration}` : "Failing";
-    }
-
-    if (state === "success") {
-        return duration ? `Successful in ${duration}` : "Successful";
-    }
-
-    if (state === "pending") {
-        return duration ? `Running for ${duration}` : "Pending";
-    }
-
-    return null;
-}
-
-function formatCheckDuration(startedAt: string | null, completedAt: string | null): string | null {
-    if (!startedAt) {
-        return null;
-    }
-
-    const start = Date.parse(startedAt);
-    const end = completedAt ? Date.parse(completedAt) : Date.now();
-    if (!Number.isFinite(start) || !Number.isFinite(end) || end < start) {
-        return null;
-    }
-
-    const seconds = Math.round((end - start) / 1000);
-    if (seconds < 60) {
-        return `${Math.max(seconds, 1)}s`;
-    }
-
-    const minutes = Math.floor(seconds / 60);
-    const remainder = seconds % 60;
-    if (minutes < 60) {
-        return remainder === 0 ? `${minutes}m` : `${minutes}m ${remainder}s`;
-    }
-
-    const hours = Math.floor(minutes / 60);
-    const remMinutes = minutes % 60;
-    return remMinutes === 0 ? `${hours}h` : `${hours}h ${remMinutes}m`;
 }
 
 function toMergeableState(mergeable: PullRequestNode["mergeable"] | null | undefined): MergeableState {
@@ -2995,9 +3045,7 @@ function toPullRequestDetail(node: PullRequestDetailNode, settings: RepositoryMe
         baseSha: node.baseRefOid,
         labels: node.labels?.nodes ?? [],
         assignees: node.assignees.nodes.map((assignee) => assignee.login),
-        checkRuns: (commit?.statusCheckRollup?.contexts.nodes ?? [])
-            .filter((context): context is NonNullable<CheckContextNode> => context !== null)
-            .map(toCheckRun),
+        checkRuns: mapCheckRuns(commit?.statusCheckRollup?.contexts.nodes ?? []),
         checkCount: toCheckCount(commit),
         requiredApprovingReviewCount: toRequiredApprovingReviewCount(node),
         allowedMergeMethods,
@@ -3014,6 +3062,35 @@ type RestRepositoryNode = {
     pushed_at: string | null;
     owner: { login: string };
 };
+
+type RestInstallationNode = {
+    id: number;
+};
+
+async function listInstallationIds(
+    token: string,
+    rest: (token: string, path: string, accept?: string) => Promise<Response>,
+): Promise<Array<number>> {
+    const ids: Array<number> = [];
+    let path: string | null = `/user/installations?per_page=${REPOSITORY_PAGE_SIZE}`;
+
+    for (let page = 0; page < REPOSITORY_PAGE_LIMIT && path; page++) {
+        const response = await rest(token, path);
+
+        if (!response.ok) {
+            throw errorForStatus(response);
+        }
+
+        const payload = (await response.json()) as { installations?: Array<RestInstallationNode> };
+        for (const installation of payload.installations ?? []) {
+            ids.push(installation.id);
+        }
+
+        path = nextRestPath(response.headers.get("link"));
+    }
+
+    return ids;
+}
 
 type RestUserNode = {
     login: string;

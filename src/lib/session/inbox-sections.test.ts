@@ -89,6 +89,16 @@ describe("default section filters", () => {
         expect(matchSectionFilter(subject, defaultFilterForPreset("waiting-for-reviewers-me"), VIEWER)).toBe(false);
     });
 
+    it("keeps PRs requested of you out of Waiting for reviewers", () => {
+        const subject = pullRequest({
+            author: "octocat",
+            reviewDecision: "review-required",
+            reviewRequests: [VIEWER],
+        });
+        expect(matchSectionFilter(subject, defaultFilterForPreset("waiting-for-reviewers"), VIEWER)).toBe(false);
+        expect(matchSectionFilter(subject, defaultFilterForPreset("needs-your-review"), VIEWER)).toBe(true);
+    });
+
     it("puts your own draft in Drafts, whatever its review state", () => {
         const subject = pullRequest({ author: VIEWER, isDraft: true, reviewDecision: "approved" });
         expect(matchSectionFilter(subject, defaultFilterForPreset("drafts"), VIEWER)).toBe(true);
@@ -112,11 +122,36 @@ describe("default section filters", () => {
         }
     });
 
-    it("treats empty filter and empty cases as match-nothing", () => {
-        expect(matchSectionFilter(pullRequest(), { cases: [] }, VIEWER)).toBe(false);
+    it("upgrades a legacy Waiting for reviewers default to exclude requested-of-you", () => {
+        const layout = normalizeSectionLayout([
+            {
+                id: "waiting-for-reviewers",
+                filter: {
+                    cases: [
+                        {
+                            id: "case_old",
+                            name: "My open PR waiting on review",
+                            conditions: [
+                                { id: "c1", field: "author", op: "is_not", value: "@me" },
+                                { id: "c2", field: "state", op: "is", value: "open" },
+                                { id: "c3", field: "isDraft", op: "is", value: false },
+                                { id: "c4", field: "reviewDecision", op: "is_not", value: "changes-requested" },
+                                { id: "c5", field: "reviewDecision", op: "is_not", value: "approved" },
+                            ],
+                        },
+                    ],
+                },
+            },
+        ]);
+        const waiting = layout.find((entry) => entry.id === "waiting-for-reviewers");
         expect(
-            matchSectionFilter(pullRequest(), { cases: [{ id: "c1", name: "Empty", conditions: [] }] }, VIEWER),
-        ).toBe(false);
+            waiting?.filter.cases[0]?.conditions.some(
+                (condition) =>
+                    condition.field === "reviewRequests" &&
+                    condition.op === "does_not_include" &&
+                    condition.value === "@me",
+            ),
+        ).toBe(true);
     });
 });
 

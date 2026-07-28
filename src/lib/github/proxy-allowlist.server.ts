@@ -13,6 +13,12 @@ type Rule = {
 
 /** Repo-scoped REST surfaces used by `createGithubHttpClient`. */
 const REST_RULES: Array<Rule> = [
+    /** Resolve `user-attachments` media to signed CDN URLs (images/videos in comments). */
+    { methods: new Set(["POST"]), pattern: /^\/markdown$/ },
+    /** GitHub App: list installations + repos the user token can see (org + personal). */
+    { methods: GET, pattern: /^\/user\/installations$/ },
+    { methods: GET, pattern: /^\/user\/installations\/\d+\/repositories$/ },
+    /** Legacy personal-repo listing (kept for older sessions / tests). */
     { methods: GET, pattern: /^\/user\/repos$/ },
     { methods: GET, pattern: /^\/repos\/[^/]+\/[^/]+\/assignees$/ },
     { methods: GET, pattern: /^\/repos\/[^/]+\/[^/]+\/labels$/ },

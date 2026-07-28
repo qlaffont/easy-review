@@ -202,6 +202,7 @@ export function ReviewChangesMenu({ repository, number }: { repository: string; 
                         placeholder="Leave a comment — @mention or / for commands"
                         previewBaseUrl={blobBase}
                         repository={repository}
+                        pullRequestNumber={number}
                         mentionUsers={mentionUsers}
                         onChange={(body) => void session.setReviewBody(repository, number, body)}
                         onSubmitKey={() => void handleSubmit()}

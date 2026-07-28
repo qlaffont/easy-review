@@ -38,7 +38,7 @@ const FIELD_OPTIONS: Array<{ value: SectionFilterField; label: string }> = [
     { value: "state", label: "PR status" },
     { value: "isDraft", label: "Draft" },
     { value: "reviewDecision", label: "Review decision" },
-    { value: "reviewRequests", label: "Active reviewers" },
+    { value: "reviewRequests", label: "Requested reviewers" },
     { value: "viewerReviewState", label: "My review" },
     { value: "checks", label: "Checks" },
     { value: "mergeable", label: "Mergeable" },

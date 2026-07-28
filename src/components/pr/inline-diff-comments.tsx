@@ -333,6 +333,7 @@ function ThreadCommentCard({
                                     suggestionLine={suggestionLine}
                                     repository={repository}
                                     mentionUsers={mentionUsers}
+                                    pullRequestNumber={number}
                                     onSubmitKey={() => void sendReply()}
                                     footer={
                                         <>

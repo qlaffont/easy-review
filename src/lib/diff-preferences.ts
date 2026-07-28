@@ -2,6 +2,8 @@ import { useEffect, useState } from "react";
 
 export type DiffLayout = "unified" | "split";
 
+export type FileListLayout = "flat" | "tree";
+
 export type DiffPreferences = {
     layout: DiffLayout;
     hideWhitespace: boolean;
@@ -11,7 +13,22 @@ export type DiffPreferences = {
     showFileList: boolean;
     /** Expand only the Files changed panel to the full viewport width. */
     fullWidth: boolean;
+    /** Flat list of paths, or a compactable directory tree. */
+    fileListLayout: FileListLayout;
+    /** Desktop width of the changed-files sidebar in pixels. */
+    fileListWidth: number;
 };
+
+export const FILE_LIST_WIDTH_DEFAULT = 256;
+export const FILE_LIST_WIDTH_MIN = 180;
+export const FILE_LIST_WIDTH_MAX = 520;
+
+export function clampFileListWidth(width: number): number {
+    if (!Number.isFinite(width)) {
+        return FILE_LIST_WIDTH_DEFAULT;
+    }
+    return Math.min(FILE_LIST_WIDTH_MAX, Math.max(FILE_LIST_WIDTH_MIN, Math.round(width)));
+}
 
 const STORAGE_KEY = "easy-review:diff-prefs:v1";
 
@@ -22,6 +39,8 @@ const DEFAULT_PREFERENCES: DiffPreferences = {
     minimizeComments: false,
     showFileList: true,
     fullWidth: false,
+    fileListLayout: "flat",
+    fileListWidth: FILE_LIST_WIDTH_DEFAULT,
 };
 
 function readPreferences(): DiffPreferences {
@@ -43,6 +62,10 @@ function readPreferences(): DiffPreferences {
             minimizeComments: Boolean(parsed.minimizeComments),
             showFileList: parsed.showFileList !== false,
             fullWidth: Boolean(parsed.fullWidth),
+            fileListLayout: parsed.fileListLayout === "tree" ? "tree" : "flat",
+            fileListWidth: clampFileListWidth(
+                typeof parsed.fileListWidth === "number" ? parsed.fileListWidth : FILE_LIST_WIDTH_DEFAULT,
+            ),
         };
     } catch {
         return DEFAULT_PREFERENCES;

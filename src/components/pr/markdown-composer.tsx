@@ -15,7 +15,16 @@ import {
     Strikethrough,
     Table,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import {
+    useEffect,
+    useMemo,
+    useRef,
+    useState,
+    type ClipboardEvent,
+    type DragEvent,
+    type KeyboardEvent,
+    type ReactNode,
+} from "react";
 
 import type { MarkdownEditResult } from "#/lib/markdown-edit.ts";
 
@@ -34,8 +43,15 @@ import {
     type ComposerTrigger,
     type SlashCommand,
 } from "#/lib/composer-commands.ts";
+import {
+    collectUploadableMediaFromDataTransfer,
+    insertMediaPlaceholders,
+    removeMediaPlaceholder,
+    replaceMediaPlaceholder,
+} from "#/lib/composer-media.ts";
 import { insertBlock, insertLink, prefixLines, wrapSelection } from "#/lib/markdown-edit.ts";
 import { useSession } from "#/lib/session/provider.tsx";
+import { notifyError } from "#/lib/toast.ts";
 import { cn } from "#/lib/utils.ts";
 
 type Tool = {
@@ -133,6 +149,7 @@ export function MarkdownComposer({
     footer,
     onSubmitKey,
     repository,
+    pullRequestNumber,
     mentionUsers,
     compact = false,
     autoFocus = false,
@@ -151,6 +168,8 @@ export function MarkdownComposer({
     onSubmitKey?: () => void;
     /** When set, loads repository assignees for `@` autocomplete. */
     repository?: string;
+    /** Required with `repository` to upload pasted/dropped images and videos. */
+    pullRequestNumber?: number;
     /** Extra mention candidates (PR author, reviewers, …). */
     mentionUsers?: Array<MentionCandidate>;
     /** Tighter chrome for inline line comments. */
@@ -161,10 +180,15 @@ export function MarkdownComposer({
     const [tab, setTab] = useState<"write" | "preview">("write");
     const textareaRef = useRef<HTMLTextAreaElement>(null);
     const pendingSelection = useRef<{ start: number; end: number } | null>(null);
+    const valueRef = useRef(value);
     const [caret, setCaret] = useState(0);
     const [activeIndex, setActiveIndex] = useState(0);
     const [menuDismissed, setMenuDismissed] = useState(false);
+    const [draggingMedia, setDraggingMedia] = useState(false);
+    const [uploadingCount, setUploadingCount] = useState(0);
     const meta = useSelector(session.state, () => (repository ? session.getRepositoryMetadata(repository) : null));
+
+    valueRef.current = value;
 
     useEffect(() => {
         if (repository) {
@@ -305,9 +329,98 @@ export function MarkdownComposer({
         apply(tool);
     }
 
+    async function uploadMediaFiles(files: Array<File>) {
+        if (!repository || pullRequestNumber == null) {
+            notifyError("Open a pull request to upload media.");
+            return;
+        }
+        if (disabled || files.length === 0) {
+            return;
+        }
+
+        const node = textareaRef.current;
+        const start = node?.selectionStart ?? valueRef.current.length;
+        const end = node?.selectionEnd ?? valueRef.current.length;
+        const items = files.map((file) => ({
+            file,
+            name: file.name,
+            token: crypto.randomUUID().replaceAll("-", "").slice(0, 10),
+        }));
+
+        const withPlaceholders = insertMediaPlaceholders(
+            valueRef.current,
+            start,
+            end,
+            items.map(({ name, token }) => ({ name, token })),
+        );
+        applyEdit(withPlaceholders);
+
+        setUploadingCount((count) => count + items.length);
+        let nextValue = withPlaceholders.value;
+
+        for (const item of items) {
+            try {
+                const uploaded = await session.uploadPullRequestMedia(repository, pullRequestNumber, item.file);
+                nextValue = replaceMediaPlaceholder(nextValue, item.token, item.name, uploaded.markdown);
+                onChange(nextValue);
+                valueRef.current = nextValue;
+            } catch (cause) {
+                nextValue = removeMediaPlaceholder(nextValue, item.token, item.name);
+                onChange(nextValue);
+                valueRef.current = nextValue;
+                notifyError(cause instanceof Error ? cause.message : `Could not upload ${item.name}`);
+            } finally {
+                setUploadingCount((count) => Math.max(0, count - 1));
+            }
+        }
+
+        setTab("write");
+    }
+
+    function onPaste(event: ClipboardEvent<HTMLTextAreaElement>) {
+        const media = collectUploadableMediaFromDataTransfer(event.clipboardData);
+        if (media.length === 0) {
+            return;
+        }
+        event.preventDefault();
+        void uploadMediaFiles(media.map((entry) => entry.file));
+    }
+
+    function onDragOver(event: DragEvent<HTMLTextAreaElement>) {
+        if (!collectUploadableMediaFromDataTransfer(event.dataTransfer).length) {
+            return;
+        }
+        event.preventDefault();
+        event.dataTransfer.dropEffect = "copy";
+        setDraggingMedia(true);
+    }
+
+    function onDragLeave(event: DragEvent<HTMLTextAreaElement>) {
+        if (event.currentTarget.contains(event.relatedTarget as Node | null)) {
+            return;
+        }
+        setDraggingMedia(false);
+    }
+
+    function onDrop(event: DragEvent<HTMLTextAreaElement>) {
+        const media = collectUploadableMediaFromDataTransfer(event.dataTransfer);
+        setDraggingMedia(false);
+        if (media.length === 0) {
+            return;
+        }
+        event.preventDefault();
+        void uploadMediaFiles(media.map((entry) => entry.file));
+    }
+
     const toolbarTools = compact
         ? TOOLS.filter((tool) => ["Bold", "Italic", "Code", "Link", "Bulleted list", "Quote"].includes(tool.label))
         : TOOLS;
+
+    const writePlaceholder =
+        placeholder ??
+        (repository && pullRequestNumber != null
+            ? "Write a comment… Paste or drop images/videos, @ to mention, / for commands"
+            : "Write a comment… Use @ to mention, / for commands");
 
     return (
         <div className={cn("overflow-hidden rounded-md border bg-background", className)}>
@@ -384,13 +497,14 @@ export function MarkdownComposer({
                     <Textarea
                         ref={textareaRef}
                         value={value}
-                        disabled={disabled}
+                        disabled={disabled || uploadingCount > 0}
                         rows={rows}
                         autoFocus={autoFocus}
-                        placeholder={placeholder ?? "Write a comment… Use @ to mention, / for commands"}
+                        placeholder={writePlaceholder}
                         className={cn(
                             "resize-y rounded-none border-0 shadow-none focus-visible:ring-0",
                             compact ? "min-h-16 px-3 py-2 text-sm" : "min-h-24",
+                            draggingMedia && "bg-sky-500/5 ring-2 ring-inset ring-sky-500/40",
                         )}
                         onChange={(event) => {
                             onChange(event.target.value);
@@ -400,7 +514,16 @@ export function MarkdownComposer({
                         onKeyUp={() => syncCaret()}
                         onSelect={() => syncCaret()}
                         onKeyDown={onKeyDown}
+                        onPaste={onPaste}
+                        onDragOver={onDragOver}
+                        onDragLeave={onDragLeave}
+                        onDrop={onDrop}
                     />
+                    {uploadingCount > 0 ? (
+                        <p className="border-t px-3 py-1.5 text-xs text-muted-foreground">
+                            Uploading {uploadingCount} file{uploadingCount === 1 ? "" : "s"}…
+                        </p>
+                    ) : null}
                     {menuOpen && trigger ? (
                         <ComposerAutocomplete
                             mode={trigger.type}

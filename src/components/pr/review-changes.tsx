@@ -1,16 +1,22 @@
 import { useSelector } from "@tanstack/react-store";
 import {
+    ChevronDown,
+    ChevronRight,
     FileCode2,
     FileDiff,
     FileMinus2,
     FilePlus2,
+    Folder,
+    FolderOpen,
+    List,
+    ListTree,
     Maximize2,
     Minimize2,
     PanelLeftClose,
     PanelLeftOpen,
     RefreshCw,
 } from "lucide-react";
-import { useEffect, useMemo, useState, lazy, Suspense } from "react";
+import { useEffect, useMemo, useRef, useState, lazy, Suspense, type CSSProperties } from "react";
 
 import type { PullRequestFile } from "#/lib/session/types.ts";
 
@@ -20,7 +26,15 @@ import { Button } from "#/components/ui/button.tsx";
 import { HelpTooltip } from "#/components/ui/help-tooltip.tsx";
 import { DiffLoadingSkeleton, FileListLoadingSkeleton } from "#/components/ui/loading.tsx";
 import { mentionCandidatesFromPullRequest } from "#/lib/composer-commands.ts";
-import { readViewedPaths, useDiffPreferences, writeViewedPaths } from "#/lib/diff-preferences.ts";
+import {
+    clampFileListWidth,
+    FILE_LIST_WIDTH_MAX,
+    FILE_LIST_WIDTH_MIN,
+    readViewedPaths,
+    useDiffPreferences,
+    writeViewedPaths,
+} from "#/lib/diff-preferences.ts";
+import { buildFileTree, defaultExpandedDirPaths, type FileTreeDirNode, type FileTreeNode } from "#/lib/file-tree.ts";
 import { useSession } from "#/lib/session/provider.tsx";
 import { notifyAction } from "#/lib/toast.ts";
 import { cn } from "#/lib/utils.ts";
@@ -52,6 +66,8 @@ export function ReviewChanges({
     const mentionUsers = useMemo(() => mentionCandidatesFromPullRequest(page.detail), [page.detail]);
     const [viewedPaths, setViewedPaths] = useState<Set<string>>(() => new Set());
     const [collapsedPaths, setCollapsedPaths] = useState<Set<string>>(() => new Set());
+    const [resizingFileList, setResizingFileList] = useState(false);
+    const fileListWidth = preferences.fileListWidth;
 
     useEffect(() => {
         void session.loadPullRequestFiles(repository, number);
@@ -227,27 +243,42 @@ export function ReviewChanges({
                 <div className="flex min-h-0 h-[min(70svh,52rem)] flex-col md:flex-row">
                     <aside
                         className={cn(
-                            "min-h-0 shrink-0 overflow-hidden border-border",
+                            "relative min-h-0 shrink-0 overflow-hidden border-border",
                             "max-md:border-b max-md:transition-[max-height,opacity,border-color] max-md:duration-300 max-md:ease-[cubic-bezier(0.32,0.72,0,1)]",
-                            "md:border-r md:transition-[width,opacity,border-color] md:duration-300 md:ease-[cubic-bezier(0.32,0.72,0,1)]",
+                            !resizingFileList &&
+                                "md:transition-[width,opacity,border-color] md:duration-300 md:ease-[cubic-bezier(0.32,0.72,0,1)]",
                             "motion-reduce:transition-none",
                             preferences.showFileList
-                                ? "max-md:max-h-48 max-md:opacity-100 md:w-64 md:opacity-100"
+                                ? "max-md:max-h-48 max-md:w-full max-md:opacity-100 md:w-[var(--file-list-width)] md:opacity-100 md:border-r"
                                 : "max-md:max-h-0 max-md:border-b-transparent max-md:opacity-0 md:w-0 md:border-r-transparent md:opacity-0",
                         )}
+                        style={
+                            {
+                                ["--file-list-width" as string]: `${fileListWidth}px`,
+                            } as CSSProperties
+                        }
                         aria-hidden={!preferences.showFileList}
                         inert={!preferences.showFileList ? true : undefined}
                     >
-                        <div className="h-full max-md:max-h-48 md:w-64">
+                        <div className="h-full max-md:max-h-48 md:w-full">
                             <FileList
                                 files={page.files.items}
                                 status={page.files.status}
                                 selectedPath={selectedPath}
                                 viewedPaths={viewedPaths}
                                 pendingPaths={new Set(draft.comments.map((comment) => comment.path))}
+                                layout={preferences.fileListLayout}
+                                onLayoutChange={(fileListLayout) => setPreferences({ fileListLayout })}
                                 onSelect={setSelectedPath}
                             />
                         </div>
+                        {preferences.showFileList ? (
+                            <FileListResizeHandle
+                                width={fileListWidth}
+                                onChange={(next) => setPreferences({ fileListWidth: next })}
+                                onDraggingChange={setResizingFileList}
+                            />
+                        ) : null}
                     </aside>
                     <div className="flex min-h-0 min-w-0 flex-1 flex-col p-2 transition-[padding] duration-300 ease-out motion-reduce:transition-none">
                         {selectedPath ? (
@@ -397,12 +428,85 @@ function ViewedProgress({ viewed, total }: { viewed: number; total: number }) {
     );
 }
 
+function FileListResizeHandle({
+    width,
+    onChange,
+    onDraggingChange,
+}: {
+    width: number;
+    onChange: (width: number) => void;
+    onDraggingChange: (dragging: boolean) => void;
+}) {
+    const draggingRef = useRef(false);
+    const startRef = useRef({ x: 0, width: 0 });
+
+    return (
+        <div
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="Resize file list"
+            aria-valuenow={width}
+            aria-valuemin={FILE_LIST_WIDTH_MIN}
+            aria-valuemax={FILE_LIST_WIDTH_MAX}
+            tabIndex={0}
+            className="group absolute inset-y-0 right-0 z-10 hidden w-3 translate-x-1/2 cursor-col-resize touch-none md:block"
+            onPointerDown={(event) => {
+                event.preventDefault();
+                draggingRef.current = true;
+                startRef.current = { x: event.clientX, width };
+                onDraggingChange(true);
+                event.currentTarget.setPointerCapture(event.pointerId);
+            }}
+            onPointerMove={(event) => {
+                if (!draggingRef.current) {
+                    return;
+                }
+                const delta = event.clientX - startRef.current.x;
+                onChange(clampFileListWidth(startRef.current.width + delta));
+            }}
+            onPointerUp={(event) => {
+                draggingRef.current = false;
+                onDraggingChange(false);
+                if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+                    event.currentTarget.releasePointerCapture(event.pointerId);
+                }
+            }}
+            onPointerCancel={() => {
+                draggingRef.current = false;
+                onDraggingChange(false);
+            }}
+            onKeyDown={(event) => {
+                if (event.key === "ArrowLeft") {
+                    event.preventDefault();
+                    onChange(clampFileListWidth(width - 16));
+                }
+                if (event.key === "ArrowRight") {
+                    event.preventDefault();
+                    onChange(clampFileListWidth(width + 16));
+                }
+                if (event.key === "Home") {
+                    event.preventDefault();
+                    onChange(FILE_LIST_WIDTH_MIN);
+                }
+                if (event.key === "End") {
+                    event.preventDefault();
+                    onChange(FILE_LIST_WIDTH_MAX);
+                }
+            }}
+        >
+            <div className="mx-auto h-full w-px bg-border transition-colors group-hover:w-0.5 group-hover:bg-sky-500 group-focus-visible:w-0.5 group-focus-visible:bg-sky-500 group-active:bg-sky-500" />
+        </div>
+    );
+}
+
 function FileList({
     files,
     status,
     selectedPath,
     viewedPaths,
     pendingPaths,
+    layout,
+    onLayoutChange,
     onSelect,
 }: {
     files: Array<PullRequestFile>;
@@ -410,8 +514,17 @@ function FileList({
     selectedPath: string | null;
     viewedPaths: Set<string>;
     pendingPaths: Set<string>;
+    layout: "flat" | "tree";
+    onLayoutChange: (layout: "flat" | "tree") => void;
     onSelect: (path: string) => void;
 }) {
+    const tree = useMemo(() => buildFileTree(files), [files]);
+    const [expandedDirs, setExpandedDirs] = useState<Set<string>>(() => defaultExpandedDirPaths(tree));
+
+    useEffect(() => {
+        setExpandedDirs(defaultExpandedDirPaths(tree));
+    }, [tree]);
+
     if (status === "loading" || status === "idle") {
         return <FileListLoadingSkeleton />;
     }
@@ -420,40 +533,228 @@ function FileList({
         return <p className="p-3 text-sm text-muted-foreground">No files changed.</p>;
     }
 
+    function toggleDir(path: string) {
+        setExpandedDirs((current) => {
+            const next = new Set(current);
+            if (next.has(path)) {
+                next.delete(path);
+            } else {
+                next.add(path);
+            }
+            return next;
+        });
+    }
+
     return (
-        <nav aria-label="Changed files" className="min-h-0 overflow-y-auto">
-            <ul className="flex flex-col py-1">
-                {files.map((file) => (
-                    <li key={file.path}>
-                        <button
-                            type="button"
-                            onClick={() => onSelect(file.path)}
-                            className={cn(
-                                "flex w-full cursor-pointer items-start gap-2 px-3 py-1.5 text-left text-xs hover:bg-accent",
-                                selectedPath === file.path && "bg-accent",
-                                viewedPaths.has(file.path) && "opacity-60",
-                            )}
-                        >
-                            <FileStatusIcon status={file.status} />
-                            <span className="min-w-0 flex-1">
-                                <span className="block truncate font-mono">
-                                    {file.path}
-                                    {pendingPaths.has(file.path) ? (
-                                        <span className="ml-1 text-amber-600">•</span>
-                                    ) : null}
-                                </span>
-                                <span className="mt-0.5 flex gap-2 text-[10px] text-muted-foreground tabular-nums">
-                                    <span className="text-emerald-600 dark:text-emerald-400">+{file.additions}</span>
-                                    <span className="text-red-600 dark:text-red-400">−{file.deletions}</span>
-                                    {file.stub ? <span className="uppercase tracking-wide">{file.stub}</span> : null}
-                                    {viewedPaths.has(file.path) ? <span>viewed</span> : null}
-                                </span>
-                            </span>
-                        </button>
-                    </li>
-                ))}
-            </ul>
-        </nav>
+        <div className="flex h-full min-h-0 flex-col">
+            <div className="flex shrink-0 items-center justify-end gap-0.5 border-b px-1.5 py-1">
+                <HelpTooltip label="Flat file list">
+                    <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon-sm"
+                        className={cn("size-7", layout === "flat" && "bg-accent")}
+                        aria-pressed={layout === "flat"}
+                        aria-label="Flat file list"
+                        onClick={() => onLayoutChange("flat")}
+                    >
+                        <List className="size-3.5" aria-hidden="true" />
+                    </Button>
+                </HelpTooltip>
+                <HelpTooltip label="Directory tree">
+                    <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon-sm"
+                        className={cn("size-7", layout === "tree" && "bg-accent")}
+                        aria-pressed={layout === "tree"}
+                        aria-label="Directory tree"
+                        onClick={() => onLayoutChange("tree")}
+                    >
+                        <ListTree className="size-3.5" aria-hidden="true" />
+                    </Button>
+                </HelpTooltip>
+            </div>
+            <nav aria-label="Changed files" className="min-h-0 flex-1 overflow-y-auto">
+                {layout === "tree" ? (
+                    <ul className="flex flex-col py-1">
+                        {tree.map((node) => (
+                            <FileTreeRows
+                                key={node.kind === "dir" ? `dir:${node.path}` : node.file.path}
+                                node={node}
+                                depth={0}
+                                expandedDirs={expandedDirs}
+                                selectedPath={selectedPath}
+                                viewedPaths={viewedPaths}
+                                pendingPaths={pendingPaths}
+                                onToggleDir={toggleDir}
+                                onSelect={onSelect}
+                            />
+                        ))}
+                    </ul>
+                ) : (
+                    <ul className="flex flex-col py-1">
+                        {files.map((file) => (
+                            <li key={file.path}>
+                                <FileRow
+                                    file={file}
+                                    label={file.path}
+                                    depth={0}
+                                    selected={selectedPath === file.path}
+                                    viewed={viewedPaths.has(file.path)}
+                                    pending={pendingPaths.has(file.path)}
+                                    onSelect={onSelect}
+                                />
+                            </li>
+                        ))}
+                    </ul>
+                )}
+            </nav>
+        </div>
+    );
+}
+
+function FileTreeRows({
+    node,
+    depth,
+    expandedDirs,
+    selectedPath,
+    viewedPaths,
+    pendingPaths,
+    onToggleDir,
+    onSelect,
+}: {
+    node: FileTreeNode;
+    depth: number;
+    expandedDirs: Set<string>;
+    selectedPath: string | null;
+    viewedPaths: Set<string>;
+    pendingPaths: Set<string>;
+    onToggleDir: (path: string) => void;
+    onSelect: (path: string) => void;
+}) {
+    if (node.kind === "file") {
+        return (
+            <li>
+                <FileRow
+                    file={node.file}
+                    label={node.name}
+                    depth={depth}
+                    selected={selectedPath === node.file.path}
+                    viewed={viewedPaths.has(node.file.path)}
+                    pending={pendingPaths.has(node.file.path)}
+                    onSelect={onSelect}
+                />
+            </li>
+        );
+    }
+
+    return (
+        <li>
+            <DirRow dir={node} depth={depth} expanded={expandedDirs.has(node.path)} onToggle={onToggleDir} />
+            {expandedDirs.has(node.path) ? (
+                <ul className="flex flex-col">
+                    {node.children.map((child) => (
+                        <FileTreeRows
+                            key={child.kind === "dir" ? `dir:${child.path}` : child.file.path}
+                            node={child}
+                            depth={depth + 1}
+                            expandedDirs={expandedDirs}
+                            selectedPath={selectedPath}
+                            viewedPaths={viewedPaths}
+                            pendingPaths={pendingPaths}
+                            onToggleDir={onToggleDir}
+                            onSelect={onSelect}
+                        />
+                    ))}
+                </ul>
+            ) : null}
+        </li>
+    );
+}
+
+function DirRow({
+    dir,
+    depth,
+    expanded,
+    onToggle,
+}: {
+    dir: FileTreeDirNode;
+    depth: number;
+    expanded: boolean;
+    onToggle: (path: string) => void;
+}) {
+    const Chevron = expanded ? ChevronDown : ChevronRight;
+    const FolderIcon = expanded ? FolderOpen : Folder;
+
+    return (
+        <button
+            type="button"
+            onClick={() => onToggle(dir.path)}
+            className="flex w-full cursor-pointer items-center gap-1 py-1 pr-2 text-left text-xs text-muted-foreground hover:bg-accent hover:text-foreground"
+            style={{ paddingLeft: `${0.5 + depth * 0.75}rem` }}
+            aria-expanded={expanded}
+        >
+            <Chevron className="size-3.5 shrink-0" aria-hidden="true" />
+            <FolderIcon className="size-3.5 shrink-0" aria-hidden="true" />
+            <span className="min-w-0 truncate font-mono">{dir.name}</span>
+        </button>
+    );
+}
+
+function FileRow({
+    file,
+    label,
+    depth,
+    selected,
+    viewed,
+    pending,
+    onSelect,
+}: {
+    file: PullRequestFile;
+    label: string;
+    depth: number;
+    selected: boolean;
+    viewed: boolean;
+    pending: boolean;
+    onSelect: (path: string) => void;
+}) {
+    return (
+        <button
+            type="button"
+            onClick={() => onSelect(file.path)}
+            title={file.path}
+            className={cn(
+                "flex w-full cursor-pointer items-start gap-1.5 py-1.5 pr-2 text-left text-xs hover:bg-accent",
+                selected && "bg-accent",
+                viewed && "opacity-60",
+            )}
+            style={{ paddingLeft: `${0.75 + depth * 0.75}rem` }}
+        >
+            <FileStatusIcon status={file.status} />
+            <span className="min-w-0 flex-1">
+                <span
+                    className={cn(
+                        "block truncate font-mono",
+                        file.status === "added" && "text-emerald-700 dark:text-emerald-400",
+                        file.status === "removed" && "text-red-700 dark:text-red-400",
+                    )}
+                >
+                    {label}
+                    {pending ? <span className="ml-1 text-amber-600">•</span> : null}
+                </span>
+                <span className="mt-0.5 flex gap-2 text-[10px] text-muted-foreground tabular-nums">
+                    {file.additions > 0 ? (
+                        <span className="text-emerald-600 dark:text-emerald-400">+{file.additions}</span>
+                    ) : null}
+                    {file.deletions > 0 ? (
+                        <span className="text-red-600 dark:text-red-400">−{file.deletions}</span>
+                    ) : null}
+                    {file.stub ? <span className="uppercase tracking-wide">{file.stub}</span> : null}
+                    {viewed ? <span>viewed</span> : null}
+                </span>
+            </span>
+        </button>
     );
 }
 
