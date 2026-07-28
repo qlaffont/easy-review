@@ -3,6 +3,7 @@ import { HeadContent, Outlet, Scripts, createRootRoute } from "@tanstack/react-r
 import { TanStackRouterDevtoolsPanel } from "@tanstack/react-router-devtools";
 
 import { SessionGate } from "#/components/session-gate.tsx";
+import { ThemeProvider } from "#/components/theme-provider.tsx";
 import { Toaster } from "#/components/ui/sonner.tsx";
 import { TooltipProvider } from "#/components/ui/tooltip.tsx";
 import { buildHead, siteName } from "#/lib/seo.ts";
@@ -54,10 +55,12 @@ function RootDocument({ children }: { children: React.ReactNode }) {
                 <HeadContent />
             </head>
             <body suppressHydrationWarning>
-                <TooltipProvider delayDuration={400} skipDelayDuration={200}>
-                    <SessionProvider>{children}</SessionProvider>
-                    <Toaster />
-                </TooltipProvider>
+                <ThemeProvider>
+                    <TooltipProvider delayDuration={400} skipDelayDuration={200}>
+                        <SessionProvider>{children}</SessionProvider>
+                        <Toaster />
+                    </TooltipProvider>
+                </ThemeProvider>
                 {import.meta.env.DEV ? (
                     <TanStackDevtools
                         config={{

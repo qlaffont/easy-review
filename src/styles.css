@@ -1,13 +1,16 @@
-@import url("https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap");
+@import url("https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=Manrope:wght@400;500;600;700;800&display=swap");
 @import "tailwindcss";
 @plugin '@tailwindcss/typography';
 
 @import "tw-animate-css";
 @import "remark-github-blockquote-alert/alert.css";
 
-@custom-variant dark (&:is(.dark *));
+/* Include custom dark themes so existing `dark:` utilities stay correct. */
+@custom-variant dark (&:is(.dark *, .matrix *, .midnight *));
 
-:root {
+:root,
+.light {
+    color-scheme: light;
     --background: oklch(1 0 0);
     --foreground: oklch(0.141 0.005 285.823);
     --card: oklch(1 0 0);
@@ -44,6 +47,7 @@
 }
 
 .dark {
+    color-scheme: dark;
     --background: oklch(0.141 0.005 285.823);
     --foreground: oklch(0.985 0 0);
     --card: oklch(0.141 0.005 285.823);
@@ -76,6 +80,114 @@
     --sidebar-accent-foreground: oklch(0.985 0 0);
     --sidebar-border: oklch(0.274 0.006 286.033);
     --sidebar-ring: oklch(0.442 0.017 285.786);
+}
+
+.matrix {
+    color-scheme: dark;
+    --background: oklch(0.14 0.04 145);
+    --foreground: oklch(0.88 0.2 145);
+    --card: oklch(0.17 0.045 145);
+    --card-foreground: oklch(0.88 0.2 145);
+    --popover: oklch(0.16 0.045 145);
+    --popover-foreground: oklch(0.88 0.2 145);
+    --primary: oklch(0.82 0.24 145);
+    --primary-foreground: oklch(0.16 0.05 145);
+    --secondary: oklch(0.24 0.055 145);
+    --secondary-foreground: oklch(0.86 0.18 145);
+    --muted: oklch(0.22 0.05 145);
+    --muted-foreground: oklch(0.68 0.14 145);
+    --accent: oklch(0.26 0.07 145);
+    --accent-foreground: oklch(0.9 0.2 145);
+    --destructive: oklch(0.55 0.2 25);
+    --destructive-foreground: oklch(0.85 0.12 25);
+    --border: oklch(0.3 0.08 145);
+    --input: oklch(0.28 0.07 145);
+    --ring: oklch(0.72 0.2 145);
+    --chart-1: oklch(0.78 0.22 145);
+    --chart-2: oklch(0.7 0.16 160);
+    --chart-3: oklch(0.62 0.14 130);
+    --chart-4: oklch(0.84 0.18 110);
+    --chart-5: oklch(0.58 0.12 175);
+    --sidebar: oklch(0.12 0.035 145);
+    --sidebar-foreground: oklch(0.86 0.18 145);
+    --sidebar-primary: oklch(0.78 0.22 145);
+    --sidebar-primary-foreground: oklch(0.14 0.04 145);
+    --sidebar-accent: oklch(0.22 0.055 145);
+    --sidebar-accent-foreground: oklch(0.88 0.2 145);
+    --sidebar-border: oklch(0.28 0.07 145);
+    --sidebar-ring: oklch(0.72 0.2 145);
+}
+
+.midnight {
+    color-scheme: dark;
+    --background: oklch(0.16 0.035 255);
+    --foreground: oklch(0.93 0.02 230);
+    --card: oklch(0.19 0.04 255);
+    --card-foreground: oklch(0.93 0.02 230);
+    --popover: oklch(0.18 0.04 255);
+    --popover-foreground: oklch(0.93 0.02 230);
+    --primary: oklch(0.82 0.1 220);
+    --primary-foreground: oklch(0.18 0.04 255);
+    --secondary: oklch(0.26 0.04 255);
+    --secondary-foreground: oklch(0.9 0.03 230);
+    --muted: oklch(0.24 0.035 255);
+    --muted-foreground: oklch(0.7 0.04 240);
+    --accent: oklch(0.28 0.05 250);
+    --accent-foreground: oklch(0.92 0.04 220);
+    --destructive: oklch(0.5 0.16 25);
+    --destructive-foreground: oklch(0.82 0.12 25);
+    --border: oklch(0.3 0.04 255);
+    --input: oklch(0.28 0.04 255);
+    --ring: oklch(0.7 0.1 220);
+    --chart-1: oklch(0.72 0.12 220);
+    --chart-2: oklch(0.68 0.12 180);
+    --chart-3: oklch(0.62 0.1 260);
+    --chart-4: oklch(0.78 0.1 200);
+    --chart-5: oklch(0.58 0.14 300);
+    --sidebar: oklch(0.14 0.03 255);
+    --sidebar-foreground: oklch(0.9 0.02 230);
+    --sidebar-primary: oklch(0.75 0.11 220);
+    --sidebar-primary-foreground: oklch(0.16 0.035 255);
+    --sidebar-accent: oklch(0.24 0.04 255);
+    --sidebar-accent-foreground: oklch(0.92 0.03 230);
+    --sidebar-border: oklch(0.28 0.04 255);
+    --sidebar-ring: oklch(0.7 0.1 220);
+}
+
+.paper {
+    color-scheme: light;
+    --background: oklch(0.955 0.012 95);
+    --foreground: oklch(0.24 0.02 55);
+    --card: oklch(0.98 0.008 95);
+    --card-foreground: oklch(0.24 0.02 55);
+    --popover: oklch(0.985 0.006 95);
+    --popover-foreground: oklch(0.24 0.02 55);
+    --primary: oklch(0.38 0.04 160);
+    --primary-foreground: oklch(0.97 0.01 95);
+    --secondary: oklch(0.92 0.015 95);
+    --secondary-foreground: oklch(0.3 0.025 55);
+    --muted: oklch(0.92 0.014 95);
+    --muted-foreground: oklch(0.5 0.02 60);
+    --accent: oklch(0.9 0.02 145);
+    --accent-foreground: oklch(0.28 0.04 160);
+    --destructive: oklch(0.55 0.2 30);
+    --destructive-foreground: oklch(0.55 0.2 30);
+    --border: oklch(0.86 0.02 95);
+    --input: oklch(0.88 0.018 95);
+    --ring: oklch(0.55 0.05 160);
+    --chart-1: oklch(0.55 0.08 160);
+    --chart-2: oklch(0.58 0.08 70);
+    --chart-3: oklch(0.5 0.06 220);
+    --chart-4: oklch(0.65 0.08 120);
+    --chart-5: oklch(0.48 0.07 30);
+    --sidebar: oklch(0.94 0.014 95);
+    --sidebar-foreground: oklch(0.24 0.02 55);
+    --sidebar-primary: oklch(0.38 0.04 160);
+    --sidebar-primary-foreground: oklch(0.97 0.01 95);
+    --sidebar-accent: oklch(0.9 0.02 145);
+    --sidebar-accent-foreground: oklch(0.28 0.04 160);
+    --sidebar-border: oklch(0.86 0.02 95);
+    --sidebar-ring: oklch(0.55 0.05 160);
 }
 
 @theme inline {
@@ -117,6 +229,10 @@
     --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
     --color-sidebar-border: var(--sidebar-border);
     --color-sidebar-ring: var(--sidebar-ring);
+}
+
+.matrix {
+    --font-sans: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 
 html {
@@ -220,7 +336,7 @@ body {
 }
 
 /* Prefer the app theme class over prefers-color-scheme for GitHub alert colors. */
-.dark .markdown-alert {
+:is(.dark, .matrix, .midnight) .markdown-alert {
     --color-border-default: #30363d;
     --color-accent-fg: #58a6ff;
     --color-accent-emphasis: #1f6feb;
@@ -232,6 +348,14 @@ body {
     --color-done-emphasis: #8957e5;
     --color-success-fg: #3fb950;
     --color-success-emphasis: #238636;
+}
+
+.matrix .markdown-alert {
+    --color-border-default: #1f4d2e;
+    --color-accent-fg: #5dff8a;
+    --color-accent-emphasis: #1f8a45;
+    --color-success-fg: #33ff66;
+    --color-success-emphasis: #1a7a38;
 }
 
 @layer base {

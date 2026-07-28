@@ -2,11 +2,13 @@ import { FileDiff, Inbox, LogOut, Settings2 } from "lucide-react";
 import { lazy, Suspense, useState } from "react";
 
 import { RepoPickerTrigger } from "#/components/repos/repo-picker.tsx";
+import { ThemeMenuSub } from "#/components/theme-menu.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import {
     DropdownMenu,
     DropdownMenuContent,
     DropdownMenuItem,
+    DropdownMenuSeparator,
     DropdownMenuTrigger,
 } from "#/components/ui/dropdown-menu.tsx";
 import { LazyChunkFallback } from "#/components/ui/loading.tsx";
@@ -77,6 +79,8 @@ export function AppHeader() {
                         <FileDiff aria-hidden="true" />
                         PR Settings
                     </DropdownMenuItem>
+                    <ThemeMenuSub />
+                    <DropdownMenuSeparator />
                     <DropdownMenuItem
                         variant="destructive"
                         onSelect={() => {
