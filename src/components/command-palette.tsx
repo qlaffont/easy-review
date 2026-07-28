@@ -1,3 +1,4 @@
+import { Loader2 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import type { AppAction } from "#/lib/actions/catalog.ts";
@@ -9,7 +10,6 @@ import { ChecksDot } from "#/components/pr/checks-dot.tsx";
 import { ChordKeys } from "#/components/ui/chord-keys.tsx";
 import {
     CommandDialog,
-    CommandEmpty,
     CommandGroup,
     CommandInput,
     CommandItem,
@@ -19,11 +19,14 @@ import {
 } from "#/components/ui/command.tsx";
 import { TruncatedText } from "#/components/ui/truncated-text.tsx";
 import { availableActions } from "#/lib/actions/catalog.ts";
-import { useSessionState } from "#/lib/session/provider.tsx";
+import { useSession, useSessionState } from "#/lib/session/provider.tsx";
+import { matchesPullRequestSearchQuery } from "#/lib/session/pull-request-search.ts";
 
 const GROUPS = ["Navigation", "Clipboard", "Inbox", "Pull request"] as const;
 const MAX_PR_RESULTS = 25;
 const MAX_INDEX_SHORTCUTS = 9;
+/** Avoid hammering GitHub search on every keystroke. */
+const PR_SEARCH_DEBOUNCE_MS = 280;
 
 type PaletteEntry = { kind: "action"; action: AppAction } | { kind: "pullRequest"; pullRequest: PullRequestSummary };
 
@@ -44,23 +47,26 @@ function actionMatchesQuery(action: AppAction, query: string): boolean {
 }
 
 function pullRequestMatchesQuery(pullRequest: PullRequestSummary, query: string): boolean {
-    const trimmed = query.trim().toLowerCase();
-    if (!trimmed) {
-        return false;
+    return matchesPullRequestSearchQuery(pullRequest, query);
+}
+
+function pullRequestSearchValue(pullRequest: PullRequestSummary): string {
+    return `${pullRequest.key} ${pullRequest.title} ${pullRequest.headRefName} #${pullRequest.number}`;
+}
+
+function findEntryByCommandValue(
+    entries: ReadonlyArray<PaletteEntry>,
+    value: string | null | undefined,
+): PaletteEntry | undefined {
+    if (!value) {
+        return undefined;
     }
-    const haystack = [
-        pullRequest.title,
-        pullRequest.repository,
-        String(pullRequest.number),
-        `#${pullRequest.number}`,
-        `${pullRequest.repository}#${pullRequest.number}`,
-        pullRequest.author,
-        pullRequest.headRefName,
-        pullRequest.baseRefName,
-    ]
-        .join(" ")
-        .toLowerCase();
-    return trimmed.split(/\s+/).every((token) => haystack.includes(token));
+    return entries.find((entry) => {
+        if (entry.kind === "action") {
+            return entry.action.id === value;
+        }
+        return value === entry.pullRequest.key || value.startsWith(`${entry.pullRequest.key} `);
+    });
 }
 
 function pullRequestParams(repository: string, number: number): { owner: string; repo: string; number: string } {
@@ -90,10 +96,14 @@ function IndexShortcutKeys({ index }: { index: number }) {
 }
 
 export function CommandPalette() {
+    const session = useSession();
     const bridge = useActionsBridge();
-    const pullRequests = useSessionState((state) => state.inbox.pullRequests);
+    const inboxPullRequests = useSessionState((state) => state.inbox.pullRequests);
+    const selectedRepos = useSessionState((state) => state.repos.selected);
     const [open, setOpen] = useState(false);
     const [query, setQuery] = useState("");
+    const [remotePullRequests, setRemotePullRequests] = useState<Array<PullRequestSummary>>([]);
+    const [searchingPullRequests, setSearchingPullRequests] = useState(false);
     const entriesRef = useRef<Array<PaletteEntry>>([]);
 
     useEffect(() => {
@@ -111,6 +121,8 @@ export function CommandPalette() {
     useEffect(() => {
         if (!open) {
             setQuery("");
+            setRemotePullRequests([]);
+            setSearchingPullRequests(false);
         }
     }, [open]);
 
@@ -122,14 +134,65 @@ export function CommandPalette() {
         [actions, query],
     );
 
-    const matchingPullRequests = useMemo(() => {
-        if (!query.trim() || matchingActions.length > 0) {
+    // Fetch PRs only when the query matches no commands (palette falls back to GitHub search).
+    const shouldFetchPullRequests = open && query.trim().length > 0 && matchingActions.length === 0;
+
+    const localPullRequests = useMemo(() => {
+        if (!shouldFetchPullRequests) {
             return [];
         }
-        return pullRequests
-            .filter((pullRequest) => pullRequestMatchesQuery(pullRequest, query))
+        const selected = new Set(selectedRepos);
+        return inboxPullRequests
+            .filter(
+                (pullRequest) => selected.has(pullRequest.repository) && pullRequestMatchesQuery(pullRequest, query),
+            )
             .slice(0, MAX_PR_RESULTS);
-    }, [matchingActions.length, pullRequests, query]);
+    }, [inboxPullRequests, query, selectedRepos, shouldFetchPullRequests]);
+
+    useEffect(() => {
+        if (!shouldFetchPullRequests) {
+            setRemotePullRequests([]);
+            setSearchingPullRequests(false);
+            return;
+        }
+
+        const trimmed = query.trim();
+        let cancelled = false;
+        setSearchingPullRequests(true);
+
+        const timer = window.setTimeout(() => {
+            void session
+                .searchPullRequests(trimmed)
+                .then((results) => {
+                    if (!cancelled) {
+                        setRemotePullRequests(results.slice(0, MAX_PR_RESULTS));
+                        setSearchingPullRequests(false);
+                    }
+                })
+                .catch(() => {
+                    if (!cancelled) {
+                        setRemotePullRequests([]);
+                        setSearchingPullRequests(false);
+                    }
+                });
+        }, PR_SEARCH_DEBOUNCE_MS);
+
+        return () => {
+            cancelled = true;
+            window.clearTimeout(timer);
+        };
+    }, [query, session, shouldFetchPullRequests]);
+
+    // Prefer GitHub search hits; keep inbox matches visible while the request is in flight.
+    const matchingPullRequests = useMemo(() => {
+        if (!shouldFetchPullRequests) {
+            return [];
+        }
+        if (remotePullRequests.length > 0 || !searchingPullRequests) {
+            return remotePullRequests;
+        }
+        return localPullRequests;
+    }, [localPullRequests, remotePullRequests, searchingPullRequests, shouldFetchPullRequests]);
 
     const visibleGroups = GROUPS.map((group) => ({
         group,
@@ -192,13 +255,7 @@ export function CommandPalette() {
 
         function selectedEntry(): PaletteEntry | undefined {
             const selected = document.querySelector<HTMLElement>('[cmdk-item][aria-selected="true"]');
-            const value = selected?.getAttribute("data-value");
-            if (!value) {
-                return undefined;
-            }
-            return entriesRef.current.find((entry) =>
-                entry.kind === "action" ? entry.action.id === value : entry.pullRequest.key === value,
-            );
+            return findEntryByCommandValue(entriesRef.current, selected?.getAttribute("data-value"));
         }
 
         function onKeyDown(event: KeyboardEvent) {
@@ -242,12 +299,24 @@ export function CommandPalette() {
             title="Command palette"
             description="Run an Easy Review action or open a pull request"
             shouldFilter={false}
+            className="sm:max-w-2xl"
         >
             <CommandInput placeholder="Search commands or pull requests…" value={query} onValueChange={setQuery} />
             <CommandList>
-                <CommandEmpty>
-                    {query.trim() ? "No matching actions or pull requests." : "No actions available."}
-                </CommandEmpty>
+                {flatEntries.length === 0 ? (
+                    <div className="py-6 text-center text-sm text-muted-foreground" role="status">
+                        {searchingPullRequests ? (
+                            <span className="inline-flex items-center justify-center gap-2">
+                                <Loader2 aria-hidden="true" className="size-3.5 shrink-0 motion-safe:animate-spin" />
+                                <span className="motion-safe:animate-pulse">Searching pull requests…</span>
+                            </span>
+                        ) : query.trim() ? (
+                            "No matching actions or pull requests."
+                        ) : (
+                            "No actions available."
+                        )}
+                    </div>
+                ) : null}
                 {visibleGroups.map((entry, index) => (
                     <div key={entry.group}>
                         {index > 0 ? <CommandSeparator /> : null}
@@ -280,7 +349,7 @@ export function CommandPalette() {
                 {matchingPullRequests.length > 0 ? (
                     <>
                         {visibleGroups.length > 0 ? <CommandSeparator /> : null}
-                        <CommandGroup heading="Pull requests">
+                        <CommandGroup heading={searchingPullRequests ? "Pull requests…" : "Pull requests"}>
                             {matchingPullRequests.map((pullRequest) => {
                                 const shortcutIndex = indexById.get(pullRequest.key);
                                 const href = pullRequestPath(pullRequest.repository, pullRequest.number);
@@ -288,7 +357,7 @@ export function CommandPalette() {
                                 return (
                                     <CommandItem
                                         key={pullRequest.key}
-                                        value={pullRequest.key}
+                                        value={pullRequestSearchValue(pullRequest)}
                                         className="items-center gap-2.5 py-2 [&_svg:not([class*='size-'])]:size-3.5"
                                         onMouseDown={(event) => {
                                             if (

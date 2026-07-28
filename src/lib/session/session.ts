@@ -50,6 +50,11 @@ import {
     parseInboxSettings,
     visibleSectionDefinitions,
 } from "#/lib/session/inbox-sections.ts";
+import {
+    comparePullRequestsByUpdatedAtDesc,
+    matchesPullRequestSearchQuery,
+    parseGitHubPullRequestUrl,
+} from "#/lib/session/pull-request-search.ts";
 import { mergeRelatedPullRequests, selectRelatedPullRequests } from "#/lib/session/related-pull-requests.ts";
 import {
     defaultFilterForPreset,
@@ -2270,6 +2275,69 @@ export function createEasyReviewSession({ github, store, oauth }: EasyReviewSess
         return groupIntoSections(visible, auth.viewer?.login ?? "", visibleSectionDefinitions(inbox.sectionLayout));
     }
 
+    /**
+     * Command-palette fallback: pull requests matching `query` by title, branch, number,
+     * or pasted GitHub PR URL. Newest updated first.
+     */
+    async function searchPullRequests(query: string): Promise<Array<PullRequestSummary>> {
+        const trimmed = query.trim();
+        if (!trimmed) {
+            return [];
+        }
+
+        const link = parseGitHubPullRequestUrl(trimmed);
+        const selected = state.state.repos.selected;
+        const selectedSet = new Set(selected);
+        const byKey = new Map<string, PullRequestSummary>();
+
+        // URL paste is explicit: resolve that PR even when the allowlist is empty.
+        if (link) {
+            const cached = state.state.inbox.pullRequests.find(
+                (pullRequest) =>
+                    pullRequest.repository.toLowerCase() === link.repository.toLowerCase() &&
+                    pullRequest.number === link.number,
+            );
+            if (cached) {
+                return [cached];
+            }
+
+            try {
+                return await github.searchPullRequests(requireToken(), {
+                    query: trimmed,
+                    repositories: [link.repository],
+                    limit: 1,
+                });
+            } catch {
+                return [];
+            }
+        }
+
+        if (selected.length === 0) {
+            return [];
+        }
+
+        for (const pullRequest of state.state.inbox.pullRequests) {
+            if (selectedSet.has(pullRequest.repository) && matchesPullRequestSearchQuery(pullRequest, trimmed)) {
+                byKey.set(pullRequest.key, pullRequest);
+            }
+        }
+
+        try {
+            const remote = await github.searchPullRequests(requireToken(), {
+                query: trimmed,
+                repositories: selected,
+                limit: 25,
+            });
+            for (const pullRequest of remote) {
+                byKey.set(pullRequest.key, pullRequest);
+            }
+        } catch {
+            // Inbox matches alone are still useful when search is rate-limited.
+        }
+
+        return [...byKey.values()].sort(comparePullRequestsByUpdatedAtDesc).slice(0, 25);
+    }
+
     return {
         state,
         restore,
@@ -2313,6 +2381,7 @@ export function createEasyReviewSession({ github, store, oauth }: EasyReviewSess
         refreshPullRequest,
         revalidatePullRequest,
         getPullRequestPage,
+        searchPullRequests,
         loadPullRequestFiles,
         refreshPullRequestFiles,
         loadFileDiff,

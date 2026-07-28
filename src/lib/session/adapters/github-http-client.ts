@@ -31,11 +31,12 @@ import { buildFileDiff } from "#/lib/session/build-file-diff.ts";
 import { HUGE_FILE_BYTES, stubForPath } from "#/lib/session/diff-policy.ts";
 import { EasyReviewError } from "#/lib/session/errors.ts";
 import {
-    RELATED_CLOSED_OR_MERGED_FETCH_CAP,
-    RELATED_OPEN_FETCH_CAP,
-    isRelatedAgeEligible,
-    matchesRelatedRefs,
-} from "#/lib/session/related-pull-requests.ts";
+    comparePullRequestsByUpdatedAtDesc,
+    matchesPullRequestSearchQuery,
+    parseGitHubPullRequestUrl,
+    parsePullRequestNumberQuery,
+} from "#/lib/session/pull-request-search.ts";
+import { matchesRelatedRefs } from "#/lib/session/related-pull-requests.ts";
 
 const DEFAULT_GRAPHQL_URL = "https://api.github.com/graphql";
 const DEFAULT_REST_URL = "https://api.github.com";
@@ -62,10 +63,9 @@ const REPOSITORY_PAGE_LIMIT = 10;
 const INBOX_BATCH_SIZE = 10;
 const OPEN_PULL_REQUESTS_PER_REPOSITORY = 30;
 const MERGED_PULL_REQUESTS_PER_REPOSITORY = 10;
-/** Related scans are heavier (open+merged+closed); keep GraphQL documents small. */
-const RELATED_BATCH_SIZE = 4;
-/** Cap parallel related batches so expand-all does not stampede GitHub / the proxy. */
-const RELATED_BATCH_CONCURRENCY = 2;
+/** Related scans batch a few repos per search query (query length + rate limit). */
+const RELATED_SEARCH_REPO_BATCH_SIZE = 10;
+const RELATED_SEARCH_RESULT_CAP = 25;
 /** GraphQL caps `pullRequest.files` at 100 per page. */
 const FILES_PAGE_SIZE = 100;
 const FILES_PAGE_LIMIT = 20;
@@ -318,61 +318,144 @@ export function createGithubHttpClient(
             );
         },
 
+        async searchPullRequests(token, input) {
+            const first = Math.min(Math.max(input.limit ?? 25, 1), 50);
+            const linkQuery = parseGitHubPullRequestUrl(input.query);
+
+            // Pasted GitHub PR URL → look up that exact owner/repo#number.
+            if (linkQuery) {
+                const data = await graphql<LookupPullRequestsByNumberQuery>(
+                    token,
+                    buildLookupPullRequestsByNumberQuery([linkQuery.repository], linkQuery.number),
+                    undefined,
+                    { keepPartial: true },
+                );
+                const node = Object.values(data)[0]?.pullRequest;
+                return node ? [toSearchPullRequestSummary(node)] : [];
+            }
+
+            if (input.repositories.length === 0) {
+                return [];
+            }
+
+            const numberQuery = parsePullRequestNumberQuery(input.query);
+
+            // Bare `#196` / `196`: look up that number in each selected repo (lean query).
+            // Title search cannot find PRs by number, and full getPullRequest is too heavy here.
+            if (numberQuery != null) {
+                const batches: Array<Array<string>> = [];
+                for (let index = 0; index < input.repositories.length; index += INBOX_BATCH_SIZE) {
+                    batches.push(input.repositories.slice(index, index + INBOX_BATCH_SIZE));
+                }
+
+                const pages = await Promise.all(
+                    batches.map((batch) =>
+                        graphql<LookupPullRequestsByNumberQuery>(
+                            token,
+                            buildLookupPullRequestsByNumberQuery(batch, numberQuery),
+                            undefined,
+                            { keepPartial: true },
+                        ),
+                    ),
+                );
+
+                const matched: Array<PullRequestSummary> = [];
+                for (const page of pages) {
+                    for (const repository of Object.values(page)) {
+                        const node = repository?.pullRequest;
+                        if (!node) {
+                            continue;
+                        }
+                        matched.push(toSearchPullRequestSummary(node));
+                    }
+                }
+
+                return matched.sort(comparePullRequestsByUpdatedAtDesc).slice(0, first);
+            }
+
+            const batches = buildPullRequestSearchQueryBatches(input.query, input.repositories);
+            if (batches.length === 0) {
+                return [];
+            }
+
+            const pages = await Promise.all(
+                batches.map((query) =>
+                    graphql<SearchPullRequestsQuery>(token, SEARCH_PULL_REQUESTS_QUERY, { query, first }),
+                ),
+            );
+
+            const wanted = new Set(input.repositories);
+            const byKey = new Map<string, PullRequestSummary>();
+
+            for (const page of pages) {
+                for (const node of page.search.nodes) {
+                    if (node == null || typeof node !== "object" || !("number" in node) || !("repository" in node)) {
+                        continue;
+                    }
+                    const summary = toSearchPullRequestSummary(node as SearchPullRequestNode);
+                    if (
+                        !wanted.has(summary.repository) ||
+                        byKey.has(summary.key) ||
+                        !matchesPullRequestSearchQuery(summary, input.query)
+                    ) {
+                        continue;
+                    }
+                    byKey.set(summary.key, summary);
+                }
+            }
+
+            return [...byKey.values()].sort(comparePullRequestsByUpdatedAtDesc).slice(0, first);
+        },
+
         async listRelatedPullRequests(token, input) {
             if (input.repositories.length === 0) {
                 return [];
             }
 
-            const batches: Array<Array<string>> = [];
-            for (let index = 0; index < input.repositories.length; index += RELATED_BATCH_SIZE) {
-                batches.push(input.repositories.slice(index, index + RELATED_BATCH_SIZE));
+            const batches = buildRelatedSearchQueryBatches(input);
+            if (batches.length === 0) {
+                return [];
             }
 
-            const nowMs = Date.now();
-            const matched: Array<PullRequestSummary> = [];
+            const pages = await Promise.all(
+                batches.map(async (query) => {
+                    try {
+                        return await graphql<SearchPullRequestsQuery>(token, SEARCH_PULL_REQUESTS_QUERY, {
+                            query,
+                            first: RELATED_SEARCH_RESULT_CAP,
+                        });
+                    } catch (error) {
+                        return { error };
+                    }
+                }),
+            );
+
+            const wanted = new Set(input.repositories);
+            const byKey = new Map<string, PullRequestSummary>();
             let lastError: unknown = null;
             let succeeded = 0;
 
-            for (let index = 0; index < batches.length; index += RELATED_BATCH_CONCURRENCY) {
-                const slice = batches.slice(index, index + RELATED_BATCH_CONCURRENCY);
-                const pages = await Promise.all(
-                    slice.map(async (batch) => {
-                        try {
-                            return await graphql<RelatedPullRequestsQuery>(token, buildRelatedQuery(batch), undefined, {
-                                keepPartial: true,
-                            });
-                        } catch (error) {
-                            lastError = error;
-                            return null;
-                        }
-                    }),
-                );
+            for (const page of pages) {
+                if ("error" in page) {
+                    lastError = page.error;
+                    continue;
+                }
 
-                for (const page of pages) {
-                    if (page === null) {
+                succeeded += 1;
+                for (const node of page.search.nodes) {
+                    if (node == null || typeof node !== "object" || !("number" in node) || !("repository" in node)) {
                         continue;
                     }
-
-                    succeeded += 1;
-                    for (const repository of Object.values(page)) {
-                        if (repository === null) {
-                            continue;
-                        }
-
-                        for (const node of [
-                            ...repository.open.nodes,
-                            ...repository.merged.nodes,
-                            ...repository.closed.nodes,
-                        ]) {
-                            const pullRequest = toRelatedPullRequestSummary(node);
-                            if (
-                                matchesRelatedRefs(pullRequest, input.headRefName, input.baseRefName) &&
-                                isRelatedAgeEligible(pullRequest, nowMs)
-                            ) {
-                                matched.push(pullRequest);
-                            }
-                        }
+                    const summary = toSearchPullRequestSummary(node as SearchPullRequestNode);
+                    if (
+                        summary.state === "closed" ||
+                        !wanted.has(summary.repository) ||
+                        byKey.has(summary.key) ||
+                        !matchesRelatedRefs(summary, input.headRefName, input.baseRefName)
+                    ) {
+                        continue;
                     }
+                    byKey.set(summary.key, summary);
                 }
             }
 
@@ -380,7 +463,7 @@ export function createGithubHttpClient(
                 throw lastError;
             }
 
-            return matched;
+            return [...byKey.values()].sort(comparePullRequestsByUpdatedAtDesc);
         },
 
         async getPullRequest(token, repository, number) {
@@ -1242,33 +1325,12 @@ type PullRequestNode = {
     assignees: { nodes: Array<{ login: string }> };
 };
 
-type RelatedPullRequestNode = {
-    number: number;
-    title: string;
-    url: string;
-    state: "OPEN" | "MERGED" | "CLOSED";
-    isDraft: boolean;
-    updatedAt: string;
-    mergedAt: string | null;
-    headRefName: string;
-    baseRefName: string;
-    author: { login: string; avatarUrl: string | null } | null;
-    repository: { nameWithOwner: string };
-};
-
 type RepositoryPullRequests = {
     open: { nodes: Array<PullRequestNode> };
     merged: { nodes: Array<PullRequestNode> };
 } | null;
 
-type RelatedRepositoryPullRequests = {
-    open: { nodes: Array<RelatedPullRequestNode> };
-    merged: { nodes: Array<RelatedPullRequestNode> };
-    closed: { nodes: Array<RelatedPullRequestNode> };
-} | null;
-
 type PullRequestsQuery = Record<string, RepositoryPullRequests>;
-type RelatedPullRequestsQuery = Record<string, RelatedRepositoryPullRequests>;
 
 function toCheckState(rollup: string | undefined): CheckState {
     switch (rollup) {
@@ -1359,8 +1421,151 @@ function toPullRequestSummary(node: PullRequestNode): PullRequestSummary {
     };
 }
 
-/** Related cards only need identity + state; omit reviews/checks to keep scans cheap. */
-function toRelatedPullRequestSummary(node: RelatedPullRequestNode): PullRequestSummary {
+type SearchPullRequestNode = {
+    number: number;
+    title: string;
+    url: string;
+    state: string;
+    isDraft: boolean;
+    createdAt: string;
+    updatedAt: string;
+    mergedAt: string | null;
+    headRefName: string;
+    baseRefName: string;
+    additions: number;
+    deletions: number;
+    changedFiles: number;
+    author: { login: string; avatarUrl: string } | null;
+    repository: { nameWithOwner: string };
+};
+
+type SearchPullRequestsQuery = {
+    search: { nodes: Array<SearchPullRequestNode | Record<string, never> | null> };
+};
+
+type LookupPullRequestsByNumberQuery = Record<string, { pullRequest: SearchPullRequestNode | null } | null>;
+
+/** One aliased `repository { pullRequest(number) }` per repo — cheap number search for the palette. */
+function buildLookupPullRequestsByNumberQuery(repositories: ReadonlyArray<string>, number: number): string {
+    const selections = repositories.map((nameWithOwner, index) => {
+        const [owner = "", name = ""] = nameWithOwner.split("/");
+        return `
+            repo${index}: repository(owner: ${JSON.stringify(owner)}, name: ${JSON.stringify(name)}) {
+                pullRequest(number: ${number}) {
+                    number
+                    title
+                    url
+                    state
+                    isDraft
+                    createdAt
+                    updatedAt
+                    mergedAt
+                    headRefName
+                    baseRefName
+                    additions
+                    deletions
+                    changedFiles
+                    author {
+                        login
+                        avatarUrl
+                    }
+                    repository {
+                        nameWithOwner
+                    }
+                }
+            }
+        `;
+    });
+
+    return `
+        query EasyReviewLookupPullRequestsByNumber {
+            ${selections.join("\n")}
+        }
+    `;
+}
+
+/** GitHub rejects search queries longer than this. */
+const SEARCH_QUERY_MAX_LENGTH = 256;
+
+/**
+ * Build GitHub search strings for related PRs: same head + base, not closed, scoped to repos.
+ * Packs repositories into batches under the query length limit.
+ */
+function buildRelatedSearchQueryBatches(input: {
+    headRefName: string;
+    baseRefName: string;
+    repositories: ReadonlyArray<string>;
+}): Array<string> {
+    if (input.repositories.length === 0 || !input.headRefName || !input.baseRefName) {
+        return [];
+    }
+
+    const head = quoteGitHubSearchToken(input.headRefName);
+    const base = quoteGitHubSearchToken(input.baseRefName);
+    const prefix = `is:pr -is:closed head:${head} base:${base}`;
+    const batches: Array<string> = [];
+
+    for (let index = 0; index < input.repositories.length; index += RELATED_SEARCH_REPO_BATCH_SIZE) {
+        const slice = input.repositories.slice(index, index + RELATED_SEARCH_REPO_BATCH_SIZE);
+        let current = prefix;
+        for (const repository of slice) {
+            const qualifier = ` repo:${repository}`;
+            if (current.length + qualifier.length > SEARCH_QUERY_MAX_LENGTH) {
+                break;
+            }
+            current += qualifier;
+        }
+        if (current !== prefix) {
+            batches.push(current);
+        }
+    }
+
+    return batches;
+}
+
+function quoteGitHubSearchToken(value: string): string {
+    if (/^[A-Za-z0-9._/-]+$/.test(value)) {
+        return value;
+    }
+    return `"${value.replaceAll('"', "")}"`;
+}
+
+/** Build a GitHub search string scoped to titles in selected repos. */
+function buildPullRequestSearchQueryBatches(raw: string, repositories: ReadonlyArray<string>): Array<string> {
+    const cleaned = raw.trim().replaceAll('"', "").replace(/\s+/g, " ");
+    if (!cleaned || repositories.length === 0) {
+        return [];
+    }
+
+    const prefix = `${cleaned} in:title is:pr sort:updated-desc`;
+    const batches: Array<string> = [];
+    let current = prefix;
+
+    for (const repository of repositories) {
+        const qualifier = ` repo:${repository}`;
+        if (current.length + qualifier.length > SEARCH_QUERY_MAX_LENGTH) {
+            if (current !== prefix) {
+                batches.push(current);
+            }
+            current = `${prefix}${qualifier}`;
+            if (current.length > SEARCH_QUERY_MAX_LENGTH) {
+                // Single repo still too long with the prefix — skip rather than fail the whole search.
+                current = prefix;
+                continue;
+            }
+            continue;
+        }
+        current += qualifier;
+    }
+
+    if (current !== prefix) {
+        batches.push(current);
+    }
+
+    return batches;
+}
+
+function toSearchPullRequestSummary(node: SearchPullRequestNode): PullRequestSummary {
     const repository = node.repository.nameWithOwner;
 
     return {
@@ -1373,7 +1578,7 @@ function toRelatedPullRequestSummary(node: RelatedPullRequestNode): PullRequestS
         authorAvatarUrl: node.author?.avatarUrl ?? null,
         state: node.state === "MERGED" ? "merged" : node.state === "CLOSED" ? "closed" : "open",
         isDraft: node.isDraft,
-        createdAt: node.updatedAt,
+        createdAt: node.createdAt,
         updatedAt: node.updatedAt,
         mergedAt: node.mergedAt,
         headRefName: node.headRefName,
@@ -1382,15 +1587,46 @@ function toRelatedPullRequestSummary(node: RelatedPullRequestNode): PullRequestS
         reviewRequests: [],
         reviewers: [],
         checks: "none",
-        additions: 0,
-        deletions: 0,
-        changedFiles: 0,
+        additions: node.additions,
+        deletions: node.deletions,
+        changedFiles: node.changedFiles,
         commentCount: 0,
         mergeable: "unknown",
         assignees: [],
         labels: [],
     };
 }
+
+const SEARCH_PULL_REQUESTS_QUERY = `
+    query EasyReviewSearchPullRequests($query: String!, $first: Int!) {
+        search(query: $query, type: ISSUE, first: $first) {
+            nodes {
+                ... on PullRequest {
+                    number
+                    title
+                    url
+                    state
+                    isDraft
+                    createdAt
+                    updatedAt
+                    mergedAt
+                    headRefName
+                    baseRefName
+                    additions
+                    deletions
+                    changedFiles
+                    author {
+                        login
+                        avatarUrl
+                    }
+                    repository {
+                        nameWithOwner
+                    }
+                }
+            }
+        }
+    }
+`;
 
 /** One document, one alias pair per repository: the whole batch costs a single round trip. */
 function buildInboxQuery(repositories: ReadonlyArray<string>): string {
@@ -1423,63 +1659,6 @@ function buildInboxQuery(repositories: ReadonlyArray<string>): string {
         }
     `;
 }
-
-/** Related-PR scan: open window + small merged/closed windows, filtered client-side by refs. */
-function buildRelatedQuery(repositories: ReadonlyArray<string>): string {
-    const selections = repositories.map((nameWithOwner, index) => {
-        const [owner = "", name = ""] = nameWithOwner.split("/");
-
-        return `
-            repo${index}: repository(owner: ${JSON.stringify(owner)}, name: ${JSON.stringify(name)}) {
-                open: pullRequests(
-                    states: [OPEN]
-                    first: ${RELATED_OPEN_FETCH_CAP}
-                    orderBy: { field: UPDATED_AT, direction: DESC }
-                ) { nodes { ...RelatedPullRequest } }
-                merged: pullRequests(
-                    states: [MERGED]
-                    first: ${RELATED_CLOSED_OR_MERGED_FETCH_CAP}
-                    orderBy: { field: UPDATED_AT, direction: DESC }
-                ) { nodes { ...RelatedPullRequest } }
-                closed: pullRequests(
-                    states: [CLOSED]
-                    first: ${RELATED_CLOSED_OR_MERGED_FETCH_CAP}
-                    orderBy: { field: UPDATED_AT, direction: DESC }
-                ) { nodes { ...RelatedPullRequest } }
-            }
-        `;
-    });
-
-    return `
-        query EasyReviewRelatedPullRequests {
-            ${selections.join("\n")}
-        }
-
-        fragment RelatedPullRequest on PullRequest {
-            ${RELATED_PULL_REQUEST_FIELDS}
-        }
-    `;
-}
-
-/** Lean fields for cross-repo related scans — avoids review/check complexity bombs. */
-const RELATED_PULL_REQUEST_FIELDS = `
-    number
-    title
-    url
-    state
-    isDraft
-    updatedAt
-    mergedAt
-    headRefName
-    baseRefName
-    author {
-        login
-        avatarUrl
-    }
-    repository {
-        nameWithOwner
-    }
-`;
 
 /** The fields behind `PullRequestSummary`, shared by the Inbox batch and the overview query. */
 const PULL_REQUEST_FIELDS = `

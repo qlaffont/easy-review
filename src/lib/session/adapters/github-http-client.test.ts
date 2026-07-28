@@ -264,8 +264,135 @@ describe("listPullRequests", () => {
     });
 });
 
+describe("searchPullRequests", () => {
+    it("maps GraphQL search hits and skips non-PR nodes", async () => {
+        const hit = pullRequestNode("latomate/medical-web", 158);
+        hit.title = "feat(vsm): revert VSM IPS 2024 till DMP is ready";
+
+        const github = createGithubHttpClient(
+            respondWith({
+                data: {
+                    search: {
+                        nodes: [hit, {}],
+                    },
+                },
+            }),
+        );
+
+        const pullRequests = await github.searchPullRequests("token", {
+            query: "vsm",
+            repositories: ["latomate/medical-web"],
+        });
+
+        expect(pullRequests.map((pullRequest) => pullRequest.key)).toEqual(["latomate/medical-web#158"]);
+        expect(pullRequests[0]?.title).toContain("vsm");
+    });
+
+    it("returns an empty list when no repositories are selected", async () => {
+        let calls = 0;
+        const github = createGithubHttpClient(async () => {
+            calls += 1;
+            return new Response("{}", { status: 200, headers: { "content-type": "application/json" } });
+        });
+
+        await expect(github.searchPullRequests("token", { query: "vsm", repositories: [] })).resolves.toEqual([]);
+        expect(calls).toBe(0);
+    });
+
+    it("returns an empty list for a blank query without calling GitHub", async () => {
+        let calls = 0;
+        const github = createGithubHttpClient(async () => {
+            calls += 1;
+            return new Response("{}", { status: 200, headers: { "content-type": "application/json" } });
+        });
+
+        await expect(github.searchPullRequests("token", { query: "   ", repositories: ["acme/api"] })).resolves.toEqual(
+            [],
+        );
+        expect(calls).toBe(0);
+    });
+
+    it("looks up a pasted GitHub pull request URL", async () => {
+        const hit = pullRequestNode("latomate/medical-web", 196);
+        hit.title = "feat(medication): ajouter une mention libre";
+        hit.state = "MERGED";
+
+        const github = createGithubHttpClient(
+            respondWith({
+                data: {
+                    repo0: { pullRequest: hit },
+                },
+            }),
+        );
+
+        const pullRequests = await github.searchPullRequests("token", {
+            query: "https://github.com/latomate/medical-web/pull/196",
+            repositories: [],
+        });
+
+        expect(pullRequests.map((pullRequest) => pullRequest.key)).toEqual(["latomate/medical-web#196"]);
+    });
+
+    it("looks up bare PR numbers across selected repositories", async () => {
+        const hit = pullRequestNode("latomate/medical-web", 196);
+        hit.title = "feat(medication): ajouter une mention libre";
+        hit.state = "MERGED";
+
+        const github = createGithubHttpClient(
+            respondWith({
+                data: {
+                    repo0: { pullRequest: hit },
+                    repo1: { pullRequest: null },
+                },
+            }),
+        );
+
+        const pullRequests = await github.searchPullRequests("token", {
+            query: "#196",
+            repositories: ["latomate/medical-web", "latomate/medical-service"],
+        });
+
+        expect(pullRequests.map((pullRequest) => pullRequest.key)).toEqual(["latomate/medical-web#196"]);
+        expect(pullRequests[0]?.state).toBe("merged");
+    });
+
+    it("keeps only title or head-branch substring matches, newest first", async () => {
+        const titleHit = pullRequestNode("acme/api", 1);
+        titleHit.title = "feat(vsm): add import";
+        titleHit.headRefName = "feature/other";
+        titleHit.updatedAt = "2026-07-01T00:00:00.000Z";
+
+        const branchHit = pullRequestNode("acme/api", 2);
+        branchHit.title = "unrelated title";
+        branchHit.headRefName = "feature/vsm-import";
+        branchHit.updatedAt = "2026-07-20T00:00:00.000Z";
+
+        const miss = pullRequestNode("acme/api", 3);
+        miss.title = "docs: readme";
+        miss.headRefName = "docs/readme";
+        miss.updatedAt = "2026-07-25T00:00:00.000Z";
+
+        const github = createGithubHttpClient(
+            respondWith({
+                data: {
+                    search: {
+                        nodes: [titleHit, branchHit, miss],
+                    },
+                },
+            }),
+        );
+
+        const pullRequests = await github.searchPullRequests("token", {
+            query: "vsm",
+            repositories: ["acme/api"],
+        });
+
+        expect(pullRequests.map((pullRequest) => pullRequest.key)).toEqual(["acme/api#2", "acme/api#1"]);
+    });
+});
+
 describe("listRelatedPullRequests", () => {
-    it("returns only open and recent siblings that match head and base refs", async () => {
+    it("returns open and merged siblings that match head and base refs via search", async () => {
         const matching = pullRequestNode("acme/web", 2);
         matching.headRefName = "feature/foo";
         matching.baseRefName = "main";
@@ -275,25 +402,29 @@ describe("listRelatedPullRequests", () => {
         wrongBranch.headRefName = "other";
         wrongBranch.baseRefName = "main";
 
+        const staleMerged = pullRequestNode("acme/docs", 115);
+        staleMerged.headRefName = "feature/foo";
+        staleMerged.baseRefName = "main";
+        staleMerged.state = "MERGED";
+        staleMerged.updatedAt = "2024-06-19T00:00:00.000Z";
+
         const github = createGithubHttpClient(
             respondWith({
                 data: {
-                    repo0: {
-                        open: { nodes: [matching, wrongBranch] },
-                        merged: { nodes: [] },
-                        closed: { nodes: [] },
+                    search: {
+                        nodes: [matching, wrongBranch, staleMerged],
                     },
                 },
             }),
         );
 
         const pullRequests = await github.listRelatedPullRequests("token", {
-            repositories: ["acme/web"],
+            repositories: ["acme/web", "acme/docs"],
             headRefName: "feature/foo",
             baseRefName: "main",
         });
 
-        expect(pullRequests.map((pullRequest) => pullRequest.key)).toEqual(["acme/web#2"]);
+        expect(pullRequests.map((pullRequest) => pullRequest.key)).toEqual(["acme/web#2", "acme/docs#115"]);
     });
 
     it("keeps successful batches when a later batch gets a gateway error", async () => {
@@ -309,10 +440,8 @@ describe("listRelatedPullRequests", () => {
                 return new Response(
                     JSON.stringify({
                         data: {
-                            repo0: {
-                                open: { nodes: [matching] },
-                                merged: { nodes: [] },
-                                closed: { nodes: [] },
+                            search: {
+                                nodes: [matching],
                             },
                         },
                     }),
@@ -324,7 +453,19 @@ describe("listRelatedPullRequests", () => {
         });
 
         const pullRequests = await github.listRelatedPullRequests("token", {
-            repositories: ["acme/web", "acme/a", "acme/b", "acme/c", "acme/d"],
+            repositories: [
+                "acme/web",
+                "acme/a",
+                "acme/b",
+                "acme/c",
+                "acme/d",
+                "acme/e",
+                "acme/f",
+                "acme/g",
+                "acme/h",
+                "acme/i",
+                "acme/j",
+            ],
             headRefName: "feature/foo",
             baseRefName: "main",
         });

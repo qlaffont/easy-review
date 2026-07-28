@@ -23,7 +23,11 @@ import { applySuggestionsToFile } from "#/lib/session/apply-suggestion.ts";
 import { buildFileDiff } from "#/lib/session/build-file-diff.ts";
 import { stubForPath } from "#/lib/session/diff-policy.ts";
 import { EasyReviewError, unauthorized } from "#/lib/session/errors.ts";
-import { isRelatedAgeEligible, matchesRelatedRefs } from "#/lib/session/related-pull-requests.ts";
+import {
+    comparePullRequestsByUpdatedAtDesc,
+    matchesPullRequestSearchQuery,
+} from "#/lib/session/pull-request-search.ts";
+import { matchesRelatedRefs } from "#/lib/session/related-pull-requests.ts";
 
 export type FakeGithub = GithubClient & {
     /** Register a token GitHub will accept, together with the account behind it. */
@@ -518,6 +522,25 @@ export function createFakeGithub(): FakeGithub {
                     .map(toSummary);
             });
         },
+        searchPullRequests(token, input) {
+            return respond("searchPullRequests", () => {
+                authenticate(token);
+                const needle = input.query.trim();
+                if (!needle || input.repositories.length === 0) {
+                    return [];
+                }
+                const wanted = new Set(input.repositories);
+                const limit = Math.min(Math.max(input.limit ?? 25, 1), 50);
+                return (pullRequestsByToken.get(token) ?? [])
+                    .filter(
+                        (pullRequest) =>
+                            wanted.has(pullRequest.repository) && matchesPullRequestSearchQuery(pullRequest, needle),
+                    )
+                    .sort(comparePullRequestsByUpdatedAtDesc)
+                    .slice(0, limit)
+                    .map(toSummary);
+            });
+        },
         listRelatedPullRequests(token, input) {
             relatedPullRequestQueries.push({
                 repositories: input.repositories,
@@ -528,13 +551,12 @@ export function createFakeGithub(): FakeGithub {
             return respond("listRelatedPullRequests", () => {
                 authenticate(token);
                 const wanted = new Set(input.repositories);
-                const nowMs = Date.now();
                 return (pullRequestsByToken.get(token) ?? [])
                     .filter(
                         (pullRequest) =>
+                            pullRequest.state !== "closed" &&
                             wanted.has(pullRequest.repository) &&
-                            matchesRelatedRefs(pullRequest, input.headRefName, input.baseRefName) &&
-                            isRelatedAgeEligible(pullRequest, nowMs),
+                            matchesRelatedRefs(pullRequest, input.headRefName, input.baseRefName),
                     )
                     .map(toSummary);
             });

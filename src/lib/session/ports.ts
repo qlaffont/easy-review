@@ -43,8 +43,23 @@ export type GithubClient = {
     /** Open and recently merged pull requests across the given repositories, in one batch. */
     listPullRequests(token: string, repositories: ReadonlyArray<string>): Promise<Array<PullRequestSummary>>;
     /**
+     * Search pull requests in the given repositories (GitHub `search` + `repo:` qualifiers).
+     * Used by the command palette when no session action matches the query.
+     */
+    searchPullRequests(
+        token: string,
+        input: {
+            query: string;
+            /** Restrict to these `owner/name` repositories. Empty → no results. */
+            repositories: ReadonlyArray<string>;
+            /** Cap results (GitHub max 100 per page). */
+            limit?: number;
+        },
+    ): Promise<Array<PullRequestSummary>>;
+    /**
      * Pull requests in other repositories that share exact head + base ref names.
-     * Open (incl. draft) from a larger per-repo window; merged/closed from a small recent window.
+     * Uses GitHub search (`head:` / `base:`) so open and merged siblings are found
+     * regardless of age. Closed pull requests never match.
      */
     listRelatedPullRequests(
         token: string,

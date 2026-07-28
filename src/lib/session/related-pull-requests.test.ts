@@ -3,8 +3,8 @@ import { describe, expect, it } from "vitest";
 import type { PullRequestSummary } from "#/lib/session/types.ts";
 
 import {
-    RELATED_CLOSED_MERGED_MAX_AGE_MS,
     isRelatedAgeEligible,
+    isRelatedMatchEligible,
     mergeRelatedPullRequests,
     selectRelatedPullRequests,
     sortRelatedPullRequests,
@@ -64,18 +64,25 @@ describe("selectRelatedPullRequests", () => {
         expect(items.map((entry) => entry.key)).toEqual(["acme/web#2"]);
     });
 
-    it("drops closed and merged siblings older than 90 days", () => {
-        const stale = new Date(NOW - RELATED_CLOSED_MERGED_MAX_AGE_MS - 24 * 60 * 60 * 1000).toISOString();
+    it("keeps open and merged of any age; drops closed", () => {
+        const stale = "2024-06-19T00:00:00.000Z";
         const fresh = new Date(NOW - 7 * 24 * 60 * 60 * 1000).toISOString();
 
         const items = selectRelatedPullRequests({
             pullRequests: [
                 summary({
-                    key: "acme/web#1",
-                    repository: "acme/web",
-                    number: 1,
+                    key: "latomate/medical-web#196",
+                    repository: "latomate/medical-web",
+                    number: 196,
                     state: "merged",
-                    updatedAt: stale,
+                    updatedAt: "2024-06-26T00:00:00.000Z",
+                }),
+                summary({
+                    key: "latomate/medical-service#115",
+                    repository: "latomate/medical-service",
+                    number: 115,
+                    state: "merged",
+                    updatedAt: "2024-06-19T00:00:00.000Z",
                 }),
                 summary({
                     key: "acme/web#2",
@@ -98,7 +105,11 @@ describe("selectRelatedPullRequests", () => {
             nowMs: NOW,
         });
 
-        expect(items.map((entry) => entry.key)).toEqual(["acme/web#3", "acme/web#2"]);
+        expect(items.map((entry) => entry.key)).toEqual([
+            "acme/web#3",
+            "latomate/medical-web#196",
+            "latomate/medical-service#115",
+        ]);
     });
 });
 
@@ -177,8 +188,11 @@ describe("mergeRelatedPullRequests", () => {
     });
 });
 
-describe("isRelatedAgeEligible", () => {
-    it("always keeps open pull requests", () => {
-        expect(isRelatedAgeEligible({ state: "open", updatedAt: "2010-01-01T00:00:00.000Z" }, NOW)).toBe(true);
+describe("isRelatedMatchEligible", () => {
+    it("keeps open and merged, drops closed", () => {
+        expect(isRelatedMatchEligible({ state: "open" })).toBe(true);
+        expect(isRelatedMatchEligible({ state: "merged" })).toBe(true);
+        expect(isRelatedMatchEligible({ state: "closed" })).toBe(false);
+        expect(isRelatedAgeEligible({ state: "merged", updatedAt: "2010-01-01T00:00:00.000Z" }, NOW)).toBe(true);
     });
 });
