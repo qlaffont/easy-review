@@ -1,7 +1,7 @@
-import { useNavigate } from "@tanstack/react-router";
+import { useNavigate, useRouterState } from "@tanstack/react-router";
 import { createContext, use, useEffect, useState } from "react";
 
-import type { ActionContext, ActionTarget } from "#/lib/actions/catalog.ts";
+import type { ActionContext, ActionSurface, ActionTarget } from "#/lib/actions/catalog.ts";
 
 import { useOpenRepoPicker } from "#/components/repos/repo-picker.tsx";
 import { useSession } from "#/lib/session/provider.tsx";
@@ -36,11 +36,18 @@ export function useSetActionTarget(target: ActionTarget | null) {
     }, [setTarget, serialized]);
 }
 
+function surfaceFromPathname(pathname: string): ActionSurface {
+    return pathname.startsWith("/pr/") ? "pull-request" : "inbox";
+}
+
 export function ActionsProvider({ children }: { children: React.ReactNode }) {
     const session = useSession();
     const navigate = useNavigate();
     const openRepoPicker = useOpenRepoPicker();
     const [target, setTarget] = useState<ActionTarget | null>(null);
+    const surface = useRouterState({
+        select: (state) => surfaceFromPathname(state.location.pathname),
+    });
 
     function openPullRequest(repository: string, number: number) {
         const [owner = "", repo = ""] = repository.split("/");
@@ -64,6 +71,7 @@ export function ActionsProvider({ children }: { children: React.ReactNode }) {
         setTarget,
         buildContext: (): ActionContext => ({
             session,
+            surface,
             target,
             openRepoPicker,
             goToInbox: () => {

@@ -146,6 +146,8 @@ function PullRequestStateIcon({ pullRequest }: { pullRequest: PullRequestSummary
     return <GitPullRequest className="size-3.5 shrink-0 text-emerald-600 dark:text-emerald-400" aria-label="Open" />;
 }
 
+export { PullRequestStateIcon };
+
 export const PullRequestRow = memo(function PullRequestRow({
     pullRequest,
     selected = false,

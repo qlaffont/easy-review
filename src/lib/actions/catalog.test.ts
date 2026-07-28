@@ -29,6 +29,7 @@ function context(overrides: Partial<ActionContext> = {}): ActionContext {
             setReviewEvent: vi.fn(),
             submitReview: vi.fn(),
         } as unknown as EasyReviewSession,
+        surface: "pull-request",
         target: target(),
         openRepoPicker: vi.fn(),
         goToInbox: vi.fn(),
@@ -47,9 +48,29 @@ describe("action catalog", () => {
         expect(ids.every((id) => id.includes("."))).toBe(true);
     });
 
-    it("hides pull-request actions when nothing is focused", () => {
-        const actions = availableActions(context({ target: null }));
-        expect(actions.map((action) => action.id)).toEqual(["nav.inbox", "inbox.refresh", "inbox.choose-repos"]);
+    it("on inbox with nothing selected, only shows inbox commands", () => {
+        const actions = availableActions(context({ surface: "inbox", target: null }));
+        expect(actions.map((action) => action.id)).toEqual(["inbox.refresh", "inbox.choose-repos"]);
+    });
+
+    it("on inbox with a selection, offers open/copy but not PR lifecycle", () => {
+        const ids = availableActions(context({ surface: "inbox", target: target() })).map((action) => action.id);
+        expect(ids).toContain("nav.open-selected");
+        expect(ids).toContain("copy.pr-url");
+        expect(ids).toContain("inbox.refresh");
+        expect(ids).not.toContain("nav.inbox");
+        expect(ids).not.toContain("pr.close");
+        expect(ids).not.toContain("pr.refresh");
+    });
+
+    it("on a pull request page, offers inbox nav and PR actions, not inbox triage", () => {
+        const ids = availableActions(context({ surface: "pull-request", target: target() })).map((action) => action.id);
+        expect(ids).toContain("nav.inbox");
+        expect(ids).toContain("pr.refresh");
+        expect(ids).toContain("pr.close");
+        expect(ids).not.toContain("nav.open-selected");
+        expect(ids).not.toContain("inbox.refresh");
+        expect(ids).not.toContain("inbox.choose-repos");
     });
 
     it("offers ready-for-review only while the focused PR is a draft", () => {

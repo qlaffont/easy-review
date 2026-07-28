@@ -3,6 +3,7 @@ import { useState } from "react";
 
 import { useRegisterCopyMenu } from "#/components/actions/clipboard-hotkeys.tsx";
 import { Button } from "#/components/ui/button.tsx";
+import { ChordKeys } from "#/components/ui/chord-keys.tsx";
 import {
     DropdownMenu,
     DropdownMenuContent,
@@ -16,15 +17,8 @@ import { cn } from "#/lib/utils.ts";
 
 function ChordHint({ keys }: { keys: Array<string> }) {
     return (
-        <DropdownMenuShortcut className="flex items-center gap-1 tracking-normal">
-            {keys.map((key, index) => (
-                <span key={`${key}-${index}`} className="inline-flex items-center gap-1">
-                    {index > 0 ? <span className="text-[10px] font-normal text-muted-foreground/80">then</span> : null}
-                    <kbd className="rounded border bg-muted px-1 py-0.5 font-sans text-[10px] font-medium text-muted-foreground">
-                        {key}
-                    </kbd>
-                </span>
-            ))}
+        <DropdownMenuShortcut className="tracking-normal">
+            <ChordKeys keys={keys} />
         </DropdownMenuShortcut>
     );
 }

@@ -17,8 +17,12 @@ export type ActionTarget = {
     state: PullRequestState;
 };
 
+export type ActionSurface = "inbox" | "pull-request";
+
 export type ActionContext = {
     session: EasyReviewSession;
+    /** Which app surface the user is on — gates palette commands to what is relevant there. */
+    surface: ActionSurface;
     target: ActionTarget | null;
     openRepoPicker: () => void;
     goToInbox: () => void;
@@ -37,6 +41,8 @@ export type AppAction = {
     label: string;
     group: "Navigation" | "Clipboard" | "Inbox" | "Pull request";
     keywords?: Array<string>;
+    /** Displayed in the command palette (e.g. keyboard chord). */
+    shortcut?: string;
     when: (context: ActionContext) => boolean;
     run: (context: ActionContext) => void | Promise<void>;
 };
@@ -49,6 +55,14 @@ function hasTarget(context: ActionContext): context is ActionContext & { target:
     return context.target !== null;
 }
 
+function onInbox(context: ActionContext): boolean {
+    return context.surface === "inbox";
+}
+
+function onPullRequest(context: ActionContext): boolean {
+    return context.surface === "pull-request";
+}
+
 /** Every command the palette (and later chords) can discover. */
 export const APP_ACTIONS: ReadonlyArray<AppAction> = [
     {
@@ -56,7 +70,8 @@ export const APP_ACTIONS: ReadonlyArray<AppAction> = [
         label: "Go to Inbox",
         group: "Navigation",
         keywords: ["home", "triage"],
-        when: () => true,
+        shortcut: "Esc",
+        when: onPullRequest,
         run: (context) => {
             context.goToInbox();
         },
@@ -66,7 +81,8 @@ export const APP_ACTIONS: ReadonlyArray<AppAction> = [
         label: "Open selected pull request",
         group: "Navigation",
         keywords: ["enter", "open"],
-        when: hasTarget,
+        shortcut: "Enter",
+        when: (context) => onInbox(context) && hasTarget(context),
         run: (context) => {
             if (!context.target) return;
             context.openPullRequest(context.target.repository, context.target.number);
@@ -87,7 +103,7 @@ export const APP_ACTIONS: ReadonlyArray<AppAction> = [
         id: "inbox.refresh",
         label: "Refresh Inbox",
         group: "Inbox",
-        when: () => true,
+        when: onInbox,
         run: async (context) => {
             await notifyAction(() => context.session.refreshInbox(), {
                 loading: "Refreshing inbox…",
@@ -101,7 +117,7 @@ export const APP_ACTIONS: ReadonlyArray<AppAction> = [
         label: "Choose repositories…",
         group: "Inbox",
         keywords: ["allowlist", "repos"],
-        when: () => true,
+        when: onInbox,
         run: (context) => {
             context.openRepoPicker();
         },
@@ -111,6 +127,7 @@ export const APP_ACTIONS: ReadonlyArray<AppAction> = [
         label: "Copy link to PR",
         group: "Clipboard",
         keywords: ["link", "app"],
+        shortcut: "C L",
         when: hasTarget,
         run: async (context) => {
             if (!context.target) return;
@@ -125,6 +142,7 @@ export const APP_ACTIONS: ReadonlyArray<AppAction> = [
         label: "Copy link to GitHub",
         group: "Clipboard",
         keywords: ["link", "github"],
+        shortcut: "C G",
         when: hasTarget,
         run: async (context) => {
             if (!context.target) return;
@@ -135,6 +153,7 @@ export const APP_ACTIONS: ReadonlyArray<AppAction> = [
         id: "copy.pr-title",
         label: "Copy title",
         group: "Clipboard",
+        shortcut: "C T",
         when: hasTarget,
         run: async (context) => {
             if (!context.target) return;
@@ -146,6 +165,7 @@ export const APP_ACTIONS: ReadonlyArray<AppAction> = [
         label: "Copy PR branch name",
         group: "Clipboard",
         keywords: ["ref"],
+        shortcut: "C B",
         when: hasTarget,
         run: async (context) => {
             if (!context.target) return;
@@ -157,6 +177,7 @@ export const APP_ACTIONS: ReadonlyArray<AppAction> = [
         label: "Copy CLI checkout command",
         group: "Clipboard",
         keywords: ["clone", "checkout", "gh"],
+        shortcut: "C C",
         when: hasTarget,
         run: async (context) => {
             if (!context.target) return;
@@ -168,7 +189,7 @@ export const APP_ACTIONS: ReadonlyArray<AppAction> = [
         id: "pr.refresh",
         label: "Refresh pull request",
         group: "Pull request",
-        when: hasTarget,
+        when: (context) => onPullRequest(context) && hasTarget(context),
         run: async (context) => {
             if (!context.target) return;
             await notifyAction(
@@ -185,7 +206,7 @@ export const APP_ACTIONS: ReadonlyArray<AppAction> = [
         id: "pr.ready-for-review",
         label: "Mark ready for review",
         group: "Pull request",
-        when: (context) => hasOpenTarget(context) && context.target.isDraft,
+        when: (context) => onPullRequest(context) && hasOpenTarget(context) && context.target.isDraft,
         run: async (context) => {
             if (!context.target) return;
             await notifyAction(
@@ -202,7 +223,7 @@ export const APP_ACTIONS: ReadonlyArray<AppAction> = [
         id: "pr.convert-to-draft",
         label: "Convert to draft",
         group: "Pull request",
-        when: (context) => hasOpenTarget(context) && !context.target.isDraft,
+        when: (context) => onPullRequest(context) && hasOpenTarget(context) && !context.target.isDraft,
         run: async (context) => {
             if (!context.target) return;
             await notifyAction(
@@ -219,7 +240,7 @@ export const APP_ACTIONS: ReadonlyArray<AppAction> = [
         id: "pr.close",
         label: "Close pull request",
         group: "Pull request",
-        when: hasOpenTarget,
+        when: (context) => onPullRequest(context) && hasOpenTarget(context),
         run: async (context) => {
             if (!context.target) return;
             if (!context.confirm(`Close ${context.target.repository}#${context.target.number}?`)) {
@@ -240,7 +261,7 @@ export const APP_ACTIONS: ReadonlyArray<AppAction> = [
         label: "Merge pull request (squash)",
         group: "Pull request",
         keywords: ["ship"],
-        when: hasOpenTarget,
+        when: (context) => onPullRequest(context) && hasOpenTarget(context),
         run: async (context) => {
             if (!context.target) return;
             if (!context.confirm(`Squash-merge ${context.target.repository}#${context.target.number}?`)) {
@@ -260,7 +281,7 @@ export const APP_ACTIONS: ReadonlyArray<AppAction> = [
         id: "pr.submit-comment",
         label: "Submit staged review as Comment",
         group: "Pull request",
-        when: hasOpenTarget,
+        when: (context) => onPullRequest(context) && hasOpenTarget(context),
         run: async (context) => {
             if (!context.target) return;
             await notifyAction(
