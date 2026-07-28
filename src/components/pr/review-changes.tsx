@@ -15,8 +15,10 @@ import {
     PanelLeftClose,
     PanelLeftOpen,
     RefreshCw,
+    Search,
+    X,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState, lazy, Suspense, type CSSProperties } from "react";
+import { useDeferredValue, useEffect, useMemo, useRef, useState, lazy, Suspense, type CSSProperties } from "react";
 
 import type { PullRequestFile } from "#/lib/session/types.ts";
 
@@ -24,6 +26,7 @@ import { DiffSettingsMenu } from "#/components/pr/diff-settings-menu.tsx";
 import { ReviewChangesMenu } from "#/components/pr/review-changes-menu.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import { HelpTooltip } from "#/components/ui/help-tooltip.tsx";
+import { Input } from "#/components/ui/input.tsx";
 import { DiffLoadingSkeleton, FileListLoadingSkeleton } from "#/components/ui/loading.tsx";
 import { mentionCandidatesFromPullRequest } from "#/lib/composer-commands.ts";
 import {
@@ -514,7 +517,18 @@ function FileList({
     onLayoutChange: (layout: "flat" | "tree") => void;
     onSelect: (path: string) => void;
 }) {
-    const tree = useMemo(() => buildFileTree(files), [files]);
+    const [query, setQuery] = useState("");
+    const deferredQuery = useDeferredValue(query);
+    const filter = deferredQuery.trim().toLowerCase();
+
+    const visibleFiles = useMemo(() => {
+        if (!filter) {
+            return files;
+        }
+        return files.filter((file) => fileMatchesFilter(file.path, filter));
+    }, [files, filter]);
+
+    const tree = useMemo(() => buildFileTree(visibleFiles), [visibleFiles]);
     const [expandedDirs, setExpandedDirs] = useState<Set<string>>(() => defaultExpandedDirPaths(tree));
 
     useEffect(() => {
@@ -543,36 +557,69 @@ function FileList({
 
     return (
         <div className="flex h-full min-h-0 flex-col">
-            <div className="flex shrink-0 items-center justify-end gap-0.5 border-b px-1.5 py-1">
-                <HelpTooltip label="Flat file list">
-                    <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon-sm"
-                        className={cn("size-7", layout === "flat" && "bg-accent")}
-                        aria-pressed={layout === "flat"}
-                        aria-label="Flat file list"
-                        onClick={() => onLayoutChange("flat")}
-                    >
-                        <List className="size-3.5" aria-hidden="true" />
-                    </Button>
-                </HelpTooltip>
-                <HelpTooltip label="Directory tree">
-                    <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon-sm"
-                        className={cn("size-7", layout === "tree" && "bg-accent")}
-                        aria-pressed={layout === "tree"}
-                        aria-label="Directory tree"
-                        onClick={() => onLayoutChange("tree")}
-                    >
-                        <ListTree className="size-3.5" aria-hidden="true" />
-                    </Button>
-                </HelpTooltip>
+            <div className="flex shrink-0 flex-col gap-1 border-b px-1.5 py-1.5">
+                <div className="relative">
+                    <Search
+                        className="pointer-events-none absolute top-1/2 left-2 size-3.5 -translate-y-1/2 text-muted-foreground"
+                        aria-hidden="true"
+                    />
+                    <Input
+                        value={query}
+                        onChange={(event) => setQuery(event.target.value)}
+                        onKeyDown={(event) => {
+                            if (event.key === "Escape" && query) {
+                                event.preventDefault();
+                                setQuery("");
+                            }
+                        }}
+                        placeholder="Filter by path or name"
+                        aria-label="Filter files by path or name"
+                        className="h-8 pr-8 pl-7 text-xs md:text-xs"
+                    />
+                    {query ? (
+                        <button
+                            type="button"
+                            className="absolute top-1/2 right-1.5 inline-flex size-5 -translate-y-1/2 cursor-pointer items-center justify-center rounded-sm text-muted-foreground hover:bg-accent hover:text-foreground"
+                            aria-label="Clear file filter"
+                            onClick={() => setQuery("")}
+                        >
+                            <X className="size-3.5" aria-hidden="true" />
+                        </button>
+                    ) : null}
+                </div>
+                <div className="flex items-center justify-end gap-0.5">
+                    <HelpTooltip label="Flat file list">
+                        <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon-sm"
+                            className={cn("size-7", layout === "flat" && "bg-accent")}
+                            aria-pressed={layout === "flat"}
+                            aria-label="Flat file list"
+                            onClick={() => onLayoutChange("flat")}
+                        >
+                            <List className="size-3.5" aria-hidden="true" />
+                        </Button>
+                    </HelpTooltip>
+                    <HelpTooltip label="Directory tree">
+                        <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon-sm"
+                            className={cn("size-7", layout === "tree" && "bg-accent")}
+                            aria-pressed={layout === "tree"}
+                            aria-label="Directory tree"
+                            onClick={() => onLayoutChange("tree")}
+                        >
+                            <ListTree className="size-3.5" aria-hidden="true" />
+                        </Button>
+                    </HelpTooltip>
+                </div>
             </div>
             <nav aria-label="Changed files" className="min-h-0 flex-1 overflow-auto">
-                {layout === "tree" ? (
+                {visibleFiles.length === 0 ? (
+                    <p className="p-3 text-sm text-muted-foreground">No files match “{deferredQuery.trim()}”.</p>
+                ) : layout === "tree" ? (
                     <ul className="flex w-max min-w-full flex-col py-1">
                         {tree.map((node) => (
                             <FileTreeRows
@@ -591,7 +638,7 @@ function FileList({
                     </ul>
                 ) : (
                     <ul className="flex w-max min-w-full flex-col py-1">
-                        {files.map((file) => (
+                        {visibleFiles.map((file) => (
                             <li key={file.path}>
                                 <FileRow
                                     file={file}
@@ -609,6 +656,10 @@ function FileList({
             </nav>
         </div>
     );
+}
+
+function fileMatchesFilter(path: string, filter: string): boolean {
+    return path.toLowerCase().includes(filter);
 }
 
 function FileTreeRows({

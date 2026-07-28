@@ -24,6 +24,7 @@ import type {
     ReviewThread,
 } from "#/lib/session/types.ts";
 
+import { DiffCodeText } from "#/components/pr/diff-code-text.tsx";
 import { InlineDiffComments } from "#/components/pr/inline-diff-comments.tsx";
 import { MarkdownComposer } from "#/components/pr/markdown-composer.tsx";
 import { Button } from "#/components/ui/button.tsx";
@@ -36,6 +37,7 @@ import {
 } from "#/components/ui/dropdown-menu.tsx";
 import { HelpTooltip } from "#/components/ui/help-tooltip.tsx";
 import { DiffLoadingSkeleton } from "#/components/ui/loading.tsx";
+import { tokensForDiffLine, useFileSyntaxHighlight, type FileSyntaxMaps } from "#/hooks/use-file-syntax-highlight.ts";
 import { DIFF_EXPAND_CHUNK, expandDiffGap, materializeFileDiff } from "#/lib/session/build-file-diff.ts";
 import { buildSuggestionComment, hasSuggestionFence, stripSuggestionFence } from "#/lib/session/suggestion.ts";
 import { notifyCopied, notifyError, notifySuccess } from "#/lib/toast.ts";
@@ -155,6 +157,7 @@ export function FileDiffViewer({
     }, [diff, path, hideWhitespace, effectiveShowFullFile, expansions]);
 
     const lineHeight = compactLineHeight ? COMPACT_LINE_HEIGHT : LINE_HEIGHT;
+    const syntax = useFileSyntaxHighlight(path, diff?.beforeText, diff?.afterText);
 
     function resetComposer() {
         setCompose(null);
@@ -234,6 +237,7 @@ export function FileDiffViewer({
                         path={path}
                         layout={layout}
                         lineHeight={lineHeight}
+                        syntax={syntax}
                         pendingComments={pendingComments}
                         threads={threads}
                         viewerLogin={viewerLogin}
@@ -819,6 +823,7 @@ function VirtualDiffLines({
     path,
     layout,
     lineHeight,
+    syntax,
     pendingComments,
     threads,
     viewerLogin,
@@ -848,6 +853,7 @@ function VirtualDiffLines({
     path: string;
     layout: DiffLayout;
     lineHeight: number;
+    syntax: FileSyntaxMaps;
     pendingComments: Array<PendingLineComment>;
     threads: Array<ReviewThread>;
     viewerLogin: string | null;
@@ -1020,6 +1026,7 @@ function VirtualDiffLines({
                                         row={row.row}
                                         path={path}
                                         lineHeight={lineHeight}
+                                        syntax={syntax}
                                         pendingByLine={pendingByLine}
                                         disabled={disabled}
                                         selected={selected}
@@ -1042,6 +1049,7 @@ function VirtualDiffLines({
                                                 line={row.line}
                                                 path={path}
                                                 lineHeight={lineHeight}
+                                                syntax={syntax}
                                                 pendingByLine={pendingByLine}
                                                 disabled={disabled}
                                                 selected={selected}
@@ -1230,6 +1238,7 @@ function UnifiedRow({
     line,
     path,
     lineHeight,
+    syntax,
     pendingByLine,
     disabled,
     selected,
@@ -1239,6 +1248,7 @@ function UnifiedRow({
     line: DiffLine;
     path: string;
     lineHeight: number;
+    syntax: FileSyntaxMaps;
     pendingByLine: Set<string>;
     disabled?: boolean;
     selected: LineTarget | null;
@@ -1265,6 +1275,8 @@ function UnifiedRow({
         selected.side === target.side &&
         selected.path === target.path;
     const hasPending = target ? pendingByLine.has(`${target.side}:${target.line}`) : false;
+    const tokens = tokensForDiffLine(syntax, line.kind, line.oldNumber, line.newNumber);
+    const wordSide = line.kind === "del" ? "del" : line.kind === "add" ? "add" : undefined;
 
     return (
         <div
@@ -1292,9 +1304,9 @@ function UnifiedRow({
             <span className="select-none px-2 text-right text-muted-foreground/70 tabular-nums">
                 {line.newNumber ?? ""}
             </span>
-            <span className="overflow-hidden whitespace-pre px-2">
+            <span className="overflow-hidden whitespace-pre px-2 text-foreground">
                 {prefix(line)}
-                {line.text}
+                <DiffCodeText text={line.text} tokens={tokens} side={wordSide} />
             </span>
         </div>
     );
@@ -1304,6 +1316,7 @@ function SplitRowView({
     row,
     path,
     lineHeight,
+    syntax,
     pendingByLine,
     disabled,
     selected,
@@ -1317,6 +1330,7 @@ function SplitRowView({
     row: SplitRow;
     path: string;
     lineHeight: number;
+    syntax: FileSyntaxMaps;
     pendingByLine: Set<string>;
     disabled?: boolean;
     selected: LineTarget | null;
@@ -1367,6 +1381,7 @@ function SplitRowView({
                         line={left}
                         path={path}
                         side="LEFT"
+                        syntax={syntax}
                         wordDiff={wordDiff}
                         pendingByLine={pendingByLine}
                         disabled={disabled}
@@ -1381,6 +1396,7 @@ function SplitRowView({
                         line={right}
                         path={path}
                         side="RIGHT"
+                        syntax={syntax}
                         wordDiff={wordDiff}
                         pendingByLine={pendingByLine}
                         disabled={disabled}
@@ -1397,6 +1413,7 @@ function SplitCell({
     line,
     path,
     side,
+    syntax,
     wordDiff,
     pendingByLine,
     disabled,
@@ -1406,6 +1423,7 @@ function SplitCell({
     line: DiffLine | null;
     path: string;
     side: DiffSide;
+    syntax: FileSyntaxMaps;
     wordDiff: ReturnType<typeof diffWords> | null;
     pendingByLine: Set<string>;
     disabled?: boolean;
@@ -1445,6 +1463,8 @@ function SplitCell({
         selected.path === usableTarget.path;
     const hasPending = usableTarget ? pendingByLine.has(`${usableTarget.side}:${usableTarget.line}`) : false;
     const number = side === "LEFT" ? line.oldNumber : line.newNumber;
+    const tokens = tokensForDiffLine(syntax, line.kind, line.oldNumber, line.newNumber);
+    const wordSide = side === "LEFT" ? "del" : "add";
 
     return (
         <div
@@ -1466,42 +1486,15 @@ function SplitCell({
             }}
         >
             <span className="select-none px-2 text-right text-muted-foreground/70 tabular-nums">{number ?? ""}</span>
-            <span className="overflow-hidden whitespace-pre px-2">
-                {wordDiff ? <WordHighlights parts={wordDiff} side={side === "LEFT" ? "del" : "add"} /> : line.text}
+            <span className="overflow-hidden whitespace-pre px-2 text-foreground">
+                <DiffCodeText
+                    text={line.text}
+                    tokens={tokens}
+                    wordParts={wordDiff}
+                    side={wordDiff ? wordSide : line.kind === "del" ? "del" : line.kind === "add" ? "add" : undefined}
+                />
             </span>
         </div>
-    );
-}
-
-function WordHighlights({ parts, side }: { parts: ReturnType<typeof diffWords>; side: "del" | "add" }) {
-    return (
-        <>
-            {parts.map((part, index) => {
-                if (side === "del" && part.added) {
-                    return null;
-                }
-                if (side === "add" && part.removed) {
-                    return null;
-                }
-
-                const highlight = (side === "del" && part.removed) || (side === "add" && part.added);
-
-                return (
-                    <span
-                        key={index}
-                        className={
-                            highlight
-                                ? side === "del"
-                                    ? "rounded-sm bg-red-500/35"
-                                    : "rounded-sm bg-emerald-500/35"
-                                : undefined
-                        }
-                    >
-                        {part.value}
-                    </span>
-                );
-            })}
-        </>
     );
 }
 
@@ -1522,13 +1515,13 @@ function prefix(line: DiffLine): string {
 function lineClass(line: DiffLine): string {
     switch (line.kind) {
         case "add":
-            return "bg-emerald-500/10 text-emerald-900 dark:text-emerald-100";
+            return "bg-emerald-500/10";
         case "del":
-            return "bg-red-500/10 text-red-900 dark:text-red-100";
+            return "bg-red-500/10";
         case "hunk":
         case "gap":
             return "bg-sky-500/10 font-sans text-[11px] text-sky-800 dark:text-sky-200";
         default:
-            return "text-foreground";
+            return "";
     }
 }
