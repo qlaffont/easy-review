@@ -299,7 +299,7 @@ export function createGithubHttpClient(
                 }),
             );
 
-            return [...byName.values()].toSorted((a, b) => {
+            return [...byName.values()].sort((a, b) => {
                 const aTime = a.pushedAt ? Date.parse(a.pushedAt) : 0;
                 const bTime = b.pushedAt ? Date.parse(b.pushedAt) : 0;
                 return bTime - aTime;
