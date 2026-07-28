@@ -706,7 +706,9 @@ export function createEasyReviewSession({ github, store, oauth }: EasyReviewSess
             return;
         }
 
-        setInbox({ refreshing: true, status: cached.length ? "ready" : "loading", error: null });
+        // Keep painted UI while refreshing — only the first load may show a loading skeleton.
+        const keepPainted = state.state.inbox.status === "ready" || cached.length > 0;
+        setInbox({ refreshing: true, status: keepPainted ? "ready" : "loading", error: null });
 
         try {
             const pullRequests = await github.listPullRequests(requireToken(), selected);
@@ -749,8 +751,8 @@ export function createEasyReviewSession({ github, store, oauth }: EasyReviewSess
     }
 
     /**
-     * Called on tab focus and when a section is opened. Never runs on a timer: a tab left open
-     * should not spend the user's rate limit.
+     * Called on tab focus, when a section is opened, and on the quiet 3-minute interval.
+     * Never runs while a refresh is already in flight.
      */
     async function revalidateInbox(): Promise<void> {
         if (state.state.inbox.refreshing) {
@@ -1004,7 +1006,8 @@ export function createEasyReviewSession({ github, store, oauth }: EasyReviewSess
         latestPullRequestLoads.set(key, attempt);
 
         const cached = state.state.pullRequests[key]?.detail ?? null;
-        setPullRequest(key, { refreshing: true, status: cached ? "ready" : "loading", error: null });
+        const keepPainted = cached != null || state.state.pullRequests[key]?.status === "ready";
+        setPullRequest(key, { refreshing: true, status: keepPainted ? "ready" : "loading", error: null });
 
         try {
             const detail = await github.getPullRequest(requireToken(), repository, number);
@@ -1040,7 +1043,7 @@ export function createEasyReviewSession({ github, store, oauth }: EasyReviewSess
         await refreshPullRequest(repository, number);
     }
 
-    /** Called when the tab regains focus while a pull request is open, and by manual refresh. */
+    /** Called on tab focus while a pull request is open, manual refresh, and the quiet 3-minute interval. */
     async function revalidatePullRequest(repository: string, number: number): Promise<void> {
         if (state.state.pullRequests[pullRequestKey(repository, number)]?.refreshing) {
             return;

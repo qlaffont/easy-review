@@ -60,6 +60,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "#/components/ui/popover
 import { RelativeTime } from "#/components/ui/relative-time.tsx";
 import { pullRequestSeo, usePageSeo } from "#/lib/seo.ts";
 import { useSession } from "#/lib/session/provider.tsx";
+import { useQuietRevalidate } from "#/lib/session/quiet-revalidate.ts";
 import { notifyAction, notifyCopied, notifyError } from "#/lib/toast.ts";
 import { cn } from "#/lib/utils.ts";
 
@@ -138,6 +139,10 @@ export function PullRequestOverview({
         void session.loadPullRequest(repository, number);
         void session.loadPullRequestFiles(repository, number);
     }, [session, repository, number]);
+
+    useQuietRevalidate(() => {
+        void session.revalidatePullRequest(repository, number);
+    });
 
     useEffect(() => {
         function revalidateWhenVisible() {
@@ -743,6 +748,12 @@ function PullRequestHeader({ page, headline }: { page: PullRequestPage; headline
             <div className="flex flex-wrap items-center justify-between gap-3">
                 <BackToInbox />
                 <div className="flex flex-wrap items-center justify-end gap-1">
+                    {page.refreshing ? (
+                        <span className="mr-1 inline-flex items-center gap-1.5 text-xs text-sky-700 dark:text-sky-300">
+                            <RefreshCw className="size-3 animate-spin" aria-hidden="true" />
+                            Syncing…
+                        </span>
+                    ) : null}
                     <HelpTooltip label="Reload this pull request from GitHub">
                         <Button
                             variant="ghost"

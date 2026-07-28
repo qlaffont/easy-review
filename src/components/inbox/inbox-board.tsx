@@ -20,6 +20,7 @@ import {
 import { InboxLoadingSkeleton, LazyChunkFallback } from "#/components/ui/loading.tsx";
 import { RelativeTime } from "#/components/ui/relative-time.tsx";
 import { useSession, useSessionState } from "#/lib/session/provider.tsx";
+import { useQuietRevalidate } from "#/lib/session/quiet-revalidate.ts";
 import { notifyAction } from "#/lib/toast.ts";
 import { cn } from "#/lib/utils.ts";
 
@@ -97,6 +98,10 @@ export function InboxBoard() {
     useEffect(() => {
         void session.loadInbox();
     }, [session, selectedCount, inbox.stale]);
+
+    useQuietRevalidate(() => {
+        void session.revalidateInbox();
+    });
 
     useEffect(() => {
         function revalidateWhenVisible() {
