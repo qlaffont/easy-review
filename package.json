@@ -16,7 +16,8 @@
     "format:check": "oxfmt --check src",
     "prepare": "husky",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "check:size": "node scripts/check-bundle-size.mjs"
   },
   "lint-staged": {
     "*.{ts,tsx}": [
