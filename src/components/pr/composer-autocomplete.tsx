@@ -4,6 +4,7 @@ import {
     ChevronsDownUp,
     Code2,
     Command as CommandIcon,
+    ImagePlus,
     Info,
     Lightbulb,
     ListTodo,
@@ -28,6 +29,7 @@ export type MentionCandidate = {
 };
 
 const SLASH_ICONS: Record<string, LucideIcon> = {
+    upload: ImagePlus,
     code: Code2,
     suggestion: PencilLine,
     details: ChevronsDownUp,

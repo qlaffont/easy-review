@@ -29,7 +29,19 @@ describe("composer-commands", () => {
 
     it("filters slash commands by query", () => {
         expect(filterSlashCommands("sug").map((command) => command.id)).toContain("suggestion");
+        expect(filterSlashCommands("up").map((command) => command.id)).toContain("upload");
         expect(filterSlashCommands("").length).toBe(SLASH_COMMANDS.length);
+    });
+
+    it("keeps caret when applying the upload slash command", () => {
+        const value = "before /upload";
+        const trigger = getComposerTrigger(value, value.length);
+        expect(trigger?.type).toBe("slash");
+        if (trigger?.type !== "slash") {
+            return;
+        }
+        const command = SLASH_COMMANDS.find((entry) => entry.id === "upload")!;
+        expect(applySlashCommand(value, trigger, command).value).toBe("before ");
     });
 
     it("applies a slash command by replacing the trigger token", () => {

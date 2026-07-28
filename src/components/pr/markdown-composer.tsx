@@ -20,6 +20,7 @@ import {
     useMemo,
     useRef,
     useState,
+    type ChangeEvent,
     type ClipboardEvent,
     type DragEvent,
     type KeyboardEvent,
@@ -44,7 +45,9 @@ import {
     type SlashCommand,
 } from "#/lib/composer-commands.ts";
 import {
+    collectUploadableMedia,
     collectUploadableMediaFromDataTransfer,
+    dataTransferLooksLikeFiles,
     insertMediaPlaceholders,
     removeMediaPlaceholder,
     replaceMediaPlaceholder,
@@ -179,6 +182,7 @@ export function MarkdownComposer({
     const session = useSession();
     const [tab, setTab] = useState<"write" | "preview">("write");
     const textareaRef = useRef<HTMLTextAreaElement>(null);
+    const fileInputRef = useRef<HTMLInputElement>(null);
     const pendingSelection = useRef<{ start: number; end: number } | null>(null);
     const valueRef = useRef(value);
     const [caret, setCaret] = useState(0);
@@ -267,6 +271,33 @@ export function MarkdownComposer({
 
     function pickSlash(command: SlashCommand, currentTrigger: Extract<ComposerTrigger, { type: "slash" }>) {
         applyEdit(applySlashCommand(value, currentTrigger, command));
+        if (command.id === "upload") {
+            openMediaPicker();
+        }
+    }
+
+    function openMediaPicker() {
+        if (!repository || pullRequestNumber == null) {
+            notifyError("Open a pull request to upload media.");
+            return;
+        }
+        if (disabled || uploadingCount > 0) {
+            return;
+        }
+        fileInputRef.current?.click();
+    }
+
+    function onFileInputChange(event: ChangeEvent<HTMLInputElement>) {
+        const files = Array.from(event.target.files ?? []);
+        event.target.value = "";
+        const media = collectUploadableMedia(files);
+        if (media.length === 0) {
+            if (files.length > 0) {
+                notifyError("Only images and videos under GitHub size limits can be uploaded.");
+            }
+            return;
+        }
+        void uploadMediaFiles(media.map((entry) => entry.file));
     }
 
     function pickMention(user: MentionCandidate, currentTrigger: Extract<ComposerTrigger, { type: "mention" }>) {
@@ -387,7 +418,8 @@ export function MarkdownComposer({
     }
 
     function onDragOver(event: DragEvent<HTMLTextAreaElement>) {
-        if (!collectUploadableMediaFromDataTransfer(event.dataTransfer).length) {
+        // `files` is empty during dragover — only `types` tells us a file drop is coming.
+        if (!dataTransferLooksLikeFiles(event.dataTransfer)) {
             return;
         }
         event.preventDefault();
@@ -494,6 +526,16 @@ export function MarkdownComposer({
                 </div>
 
                 <TabsContent value="write" className="relative mt-0">
+                    <input
+                        ref={fileInputRef}
+                        type="file"
+                        accept="image/png,image/jpeg,image/gif,image/webp,image/svg+xml,video/mp4,video/quicktime,video/webm"
+                        multiple
+                        className="sr-only"
+                        tabIndex={-1}
+                        aria-hidden="true"
+                        onChange={onFileInputChange}
+                    />
                     <Textarea
                         ref={textareaRef}
                         value={value}

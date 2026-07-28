@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 
 import {
     collectUploadableMedia,
+    collectUploadableMediaFromDataTransfer,
+    dataTransferLooksLikeFiles,
     insertMediaPlaceholders,
     isUploadableMediaFile,
     mediaKindForFile,
@@ -24,6 +26,24 @@ describe("composer media helpers", () => {
         expect(isUploadableMediaFile(file("shot.png", "image/png"))).toBe(true);
         expect(isUploadableMediaFile(file("huge.png", "image/png", 11 * 1024 * 1024))).toBe(false);
         expect(collectUploadableMedia([file("a.png", "image/png"), file("notes.txt", "text/plain")])).toHaveLength(1);
+    });
+
+    it("treats dragover types as a file drop even when files is still empty", () => {
+        expect(dataTransferLooksLikeFiles({ types: ["Files"], files: [] } as unknown as DataTransfer)).toBe(true);
+        expect(dataTransferLooksLikeFiles({ types: ["text/plain"], files: [] } as unknown as DataTransfer)).toBe(false);
+    });
+
+    it("collects clipboard paste files from items when files is empty", () => {
+        const pasted = file("", "image/png");
+        const media = collectUploadableMediaFromDataTransfer({
+            files: [] as unknown as FileList,
+            items: [{ kind: "file", getAsFile: () => pasted }],
+            types: ["Files"],
+        } as unknown as DataTransfer);
+
+        expect(media).toHaveLength(1);
+        expect(media[0]?.file.name).toBe("image.png");
+        expect(media[0]?.kind).toBe("image");
     });
 
     it("builds GitHub-style markdown for images and bare urls for videos", () => {

@@ -12,6 +12,17 @@ const VIDEO_TYPES = new Set(["video/mp4", "video/quicktime", "video/webm"]);
 const IMAGE_EXTENSIONS = new Set(["png", "jpg", "jpeg", "gif", "webp", "svg"]);
 const VIDEO_EXTENSIONS = new Set(["mp4", "mov", "webm"]);
 
+const PASTE_NAME_BY_TYPE: Record<string, string> = {
+    "image/png": "image.png",
+    "image/jpeg": "image.jpg",
+    "image/gif": "image.gif",
+    "image/webp": "image.webp",
+    "image/svg+xml": "image.svg",
+    "video/mp4": "video.mp4",
+    "video/quicktime": "video.mov",
+    "video/webm": "video.webm",
+};
+
 export type MediaKind = "image" | "video";
 
 export type UploadableMedia = {
@@ -47,24 +58,62 @@ export function isUploadableMediaFile(file: File): boolean {
     return file.size > 0 && file.size <= max;
 }
 
+/** Browsers leave `files` empty during `dragover` — only `types` is reliable then. */
+export function dataTransferLooksLikeFiles(data: DataTransfer | null): boolean {
+    if (!data) {
+        return false;
+    }
+    return Array.from(data.types).some((type) => type === "Files" || type === "application/x-moz-file");
+}
+
+/** Give clipboard screenshots a usable name when the browser supplies none. */
+export function ensureMediaFileName(file: File): File {
+    if (file.name.trim()) {
+        return file;
+    }
+    const fallback = PASTE_NAME_BY_TYPE[file.type] ?? (file.type.startsWith("image/") ? "image.png" : "upload.bin");
+    return new File([file], fallback, { type: file.type, lastModified: file.lastModified });
+}
+
+function filesFromDataTransfer(data: DataTransfer): Array<File> {
+    const fromList = Array.from(data.files ?? []);
+    if (fromList.length > 0) {
+        return fromList.map(ensureMediaFileName);
+    }
+
+    // Paste (and some drag sources) only expose binaries on `items`.
+    const fromItems: Array<File> = [];
+    for (const item of Array.from(data.items ?? [])) {
+        if (item.kind !== "file") {
+            continue;
+        }
+        const file = item.getAsFile();
+        if (file) {
+            fromItems.push(ensureMediaFileName(file));
+        }
+    }
+    return fromItems;
+}
+
 /** Collect paste/drop files that GitHub would accept as media attachments. */
 export function collectUploadableMedia(files: Iterable<File>): Array<UploadableMedia> {
     const out: Array<UploadableMedia> = [];
     for (const file of files) {
-        const kind = mediaKindForFile(file);
-        if (!kind || !isUploadableMediaFile(file)) {
+        const named = ensureMediaFileName(file);
+        const kind = mediaKindForFile(named);
+        if (!kind || !isUploadableMediaFile(named)) {
             continue;
         }
-        out.push({ file, kind });
+        out.push({ file: named, kind });
     }
     return out;
 }
 
 export function collectUploadableMediaFromDataTransfer(data: DataTransfer | null): Array<UploadableMedia> {
-    if (!data?.files?.length) {
+    if (!data) {
         return [];
     }
-    return collectUploadableMedia(Array.from(data.files));
+    return collectUploadableMedia(filesFromDataTransfer(data));
 }
 
 /** Safe path segment for the hidden upload ref tree. */

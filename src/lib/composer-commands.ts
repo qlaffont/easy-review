@@ -31,6 +31,13 @@ function replaceTrigger(
 /** Slash commands available in comment composers (GitHub-style inserts). */
 export const SLASH_COMMANDS: Array<SlashCommand> = [
     {
+        id: "upload",
+        slash: "/upload",
+        label: "Upload",
+        description: "Attach an image or video from your computer",
+        apply: (value, start, end) => ({ value, selectionStart: start, selectionEnd: end }),
+    },
+    {
         id: "code",
         slash: "/code",
         label: "Code",
