@@ -21,24 +21,21 @@ import {
     X,
     XCircle,
 } from "lucide-react";
-import { useRef, useState, useEffect, type ReactNode } from "react";
+import { useRef, useState, useEffect, lazy, Suspense, type ReactNode } from "react";
 
 import type { PullRequestPage } from "#/lib/session/session.ts";
 import type { PullRequestDetail, PullRequestSummary } from "#/lib/session/types.ts";
 
 import { targetFromSummary, useSetActionTarget } from "#/components/actions/actions-provider.tsx";
 import { CommentActionsMenu, quoteMarkdown } from "#/components/pr/comment-actions.tsx";
-import { PullRequestConversation } from "#/components/pr/conversation.tsx";
 import { EditedMeta } from "#/components/pr/edited-meta.tsx";
 import { MarkdownComposer } from "#/components/pr/markdown-composer.tsx";
 import { Markdown } from "#/components/pr/markdown.tsx";
-import { PullRequestCommits } from "#/components/pr/pull-request-commits.tsx";
 import { PullRequestControls } from "#/components/pr/pull-request-controls.tsx";
 import { PullRequestCopyMenu } from "#/components/pr/pull-request-copy-menu.tsx";
 import { ReactionBar } from "#/components/pr/reaction-bar.tsx";
 import { RelatedPullRequestsSidebar } from "#/components/pr/related-pull-requests.tsx";
 import { ReviewChangesMenu } from "#/components/pr/review-changes-menu.tsx";
-import { ReviewChanges } from "#/components/pr/review-changes.tsx";
 import { PullRequestSidebarMetadata } from "#/components/pr/sidebar-metadata.tsx";
 import { SuggestionBatchBar } from "#/components/pr/suggestion-apply.tsx";
 import { Button } from "#/components/ui/button.tsx";
@@ -53,7 +50,9 @@ import {
 import { HelpTooltip } from "#/components/ui/help-tooltip.tsx";
 import { Input } from "#/components/ui/input.tsx";
 import {
+    ConversationLoadingSkeleton,
     DescriptionLoadingSkeleton,
+    FileListLoadingSkeleton,
     PullRequestLoadingSkeleton,
     SidebarMetadataLoadingSkeleton,
 } from "#/components/ui/loading.tsx";
@@ -63,6 +62,18 @@ import { pullRequestSeo, usePageSeo } from "#/lib/seo.ts";
 import { useSession } from "#/lib/session/provider.tsx";
 import { notifyAction, notifyCopied, notifyError } from "#/lib/toast.ts";
 import { cn } from "#/lib/utils.ts";
+
+const PullRequestConversation = lazy(() =>
+    import("#/components/pr/conversation.tsx").then((module) => ({ default: module.PullRequestConversation })),
+);
+
+const PullRequestCommits = lazy(() =>
+    import("#/components/pr/pull-request-commits.tsx").then((module) => ({ default: module.PullRequestCommits })),
+);
+
+const ReviewChanges = lazy(() =>
+    import("#/components/pr/review-changes.tsx").then((module) => ({ default: module.ReviewChanges })),
+);
 
 /** What a row and a full detail agree on, which is all the page header needs. */
 type Headline = PullRequestSummary;
@@ -209,16 +220,18 @@ export function PullRequestOverview({
                                 baseUrl={blobBaseUrl(headline)}
                                 onQuote={(body) => setQuoteInsert(quoteMarkdown(body))}
                             />
-                            <PullRequestConversation
-                                repository={repository}
-                                number={number}
-                                baseUrl={blobBaseUrl(headline)}
-                                canComment
-                                canClose={page.detail?.state === "open"}
-                                quoteInsert={quoteInsert}
-                                onQuoteApplied={() => setQuoteInsert(null)}
-                                onQuote={(body) => setQuoteInsert(quoteMarkdown(body))}
-                            />
+                            <Suspense fallback={<ConversationLoadingSkeleton />}>
+                                <PullRequestConversation
+                                    repository={repository}
+                                    number={number}
+                                    baseUrl={blobBaseUrl(headline)}
+                                    canComment
+                                    canClose={page.detail?.state === "open"}
+                                    quoteInsert={quoteInsert}
+                                    onQuoteApplied={() => setQuoteInsert(null)}
+                                    onQuote={(body) => setQuoteInsert(quoteMarkdown(body))}
+                                />
+                            </Suspense>
                             {page.detail ? (
                                 <PullRequestControls
                                     key={`${page.detail.updatedAt}-${page.detail.isDraft}-${page.detail.state}`}
@@ -230,9 +243,15 @@ export function PullRequestOverview({
                     </div>
                 ) : null}
 
-                {activeTab === "commits" ? <PullRequestCommits repository={repository} number={number} /> : null}
+                {activeTab === "commits" ? (
+                    <Suspense fallback={<FileListLoadingSkeleton />}>
+                        <PullRequestCommits repository={repository} number={number} />
+                    </Suspense>
+                ) : null}
 
-                <ReviewChanges repository={repository} number={number} initialPath={initialPath} />
+                <Suspense fallback={<FileListLoadingSkeleton />}>
+                    <ReviewChanges repository={repository} number={number} initialPath={initialPath} />
+                </Suspense>
             </div>
             <SuggestionBatchBar repository={repository} number={number} />
         </>

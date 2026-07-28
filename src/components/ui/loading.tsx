@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 
-import { Loader2 } from "lucide-react";
+import { Inbox, Loader2 } from "lucide-react";
 
 import { Skeleton } from "#/components/ui/skeleton.tsx";
 import { cn } from "#/lib/utils.ts";
@@ -312,16 +312,45 @@ export function BootLoadingScreen() {
     return (
         <div className="grid min-h-svh place-items-center px-6">
             <div className="flex flex-col items-center gap-4 text-center">
-                <LoadingIcon label="Loading Easy Review" className="size-10" />
-                <div className="flex flex-col gap-1">
-                    <p className="text-sm font-medium">Loading Easy Review</p>
-                    <p className="text-xs text-muted-foreground">Restoring your session…</p>
+                <div className="flex flex-col items-center gap-2 text-center">
+                    <span
+                        role="status"
+                        aria-label="Loading Easy Review"
+                        className="grid size-10 place-items-center rounded-xl border border-sky-500/35 bg-sky-500/15 text-sky-700 dark:border-sky-400/40 dark:text-sky-300"
+                    >
+                        <Inbox className="size-5" aria-hidden="true" />
+                    </span>
+                    <div className="flex flex-col gap-1">
+                        <p className="text-sm font-medium">Loading Easy Review</p>
+                        <p className="text-xs text-muted-foreground">Restoring your session…</p>
+                    </div>
                 </div>
-                <SkeletonGrid
-                    count={3}
-                    className="w-56 grid-cols-3"
-                    renderItem={() => <Skeleton className="h-2 w-full rounded-full" />}
-                />
+                <div className="flex w-56 gap-2" aria-hidden="true">
+                    {[0, 1, 2].map((index) => (
+                        <span
+                            key={index}
+                            className="h-2 flex-1 rounded-full bg-sky-500/35 motion-safe:animate-[boot-bar_1.05s_ease-in-out_infinite]"
+                            style={{ animationDelay: `${index * 140}ms` }}
+                        />
+                    ))}
+                </div>
+            </div>
+        </div>
+    );
+}
+
+/** Overlay shown while a lazy dialog / panel chunk downloads. */
+export function LazyChunkFallback({ label = "Loading…" }: { label?: string }) {
+    return (
+        <div
+            role="status"
+            aria-live="polite"
+            aria-busy="true"
+            className="fixed inset-0 z-50 grid place-items-center bg-background/50 backdrop-blur-[1px]"
+        >
+            <div className="flex items-center gap-2.5 rounded-lg border bg-popover px-4 py-3 text-sm text-muted-foreground shadow-md">
+                <LoadingIcon label={label} className="size-7" />
+                <span>{label}</span>
             </div>
         </div>
     );

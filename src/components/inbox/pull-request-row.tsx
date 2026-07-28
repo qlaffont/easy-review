@@ -207,7 +207,11 @@ export const PullRequestRow = memo(function PullRequestRow({
                         <span className="text-red-600 dark:text-red-400">−{pullRequest.deletions}</span>
                     </span>
                 </HelpTooltip>
-                <RelativeTime iso={pullRequest.updatedAt} className="w-14 text-right" />
+                <RelativeTime
+                    iso={pullRequest.updatedAt}
+                    createdAt={pullRequest.createdAt}
+                    className="w-14 text-right"
+                />
             </span>
         </Link>
     );

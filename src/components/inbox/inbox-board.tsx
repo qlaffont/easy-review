@@ -1,15 +1,13 @@
 import { useNavigate } from "@tanstack/react-router";
 import { useSelector } from "@tanstack/react-store";
 import { ChevronRight, FolderGit2, Keyboard, RefreshCw, Settings } from "lucide-react";
-import { useEffect, useEffectEvent, useState } from "react";
+import { lazy, Suspense, useEffect, useEffectEvent, useState } from "react";
 
 import type { InboxSection, InboxSectionId, SectionColorId, SectionIconId } from "#/lib/session/inbox-sections.ts";
 import type { PullRequestSummary } from "#/lib/session/types.ts";
 
 import { targetFromSummary, useSetActionTarget } from "#/components/actions/actions-provider.tsx";
 import { emptySectionRow, PullRequestRow } from "#/components/inbox/pull-request-row.tsx";
-import { SectionAppearanceEditor } from "#/components/inbox/section-appearance-editor.tsx";
-import { SectionFilterEditor } from "#/components/inbox/section-filter-editor.tsx";
 import { visualForSection } from "#/components/inbox/section-visuals.ts";
 import { useOpenRepoPicker } from "#/components/repos/repo-picker.tsx";
 import { Button } from "#/components/ui/button.tsx";
@@ -19,11 +17,21 @@ import {
     DropdownMenuItem,
     DropdownMenuTrigger,
 } from "#/components/ui/dropdown-menu.tsx";
-import { InboxLoadingSkeleton } from "#/components/ui/loading.tsx";
+import { InboxLoadingSkeleton, LazyChunkFallback } from "#/components/ui/loading.tsx";
 import { RelativeTime } from "#/components/ui/relative-time.tsx";
 import { useSession, useSessionState } from "#/lib/session/provider.tsx";
 import { notifyAction } from "#/lib/toast.ts";
 import { cn } from "#/lib/utils.ts";
+
+const SectionFilterEditor = lazy(() =>
+    import("#/components/inbox/section-filter-editor.tsx").then((module) => ({ default: module.SectionFilterEditor })),
+);
+
+const SectionAppearanceEditor = lazy(() =>
+    import("#/components/inbox/section-appearance-editor.tsx").then((module) => ({
+        default: module.SectionAppearanceEditor,
+    })),
+);
 
 /** How many pull requests each expanded section shows before “Load more…”. */
 const INBOX_SECTION_PAGE_SIZE = 10;
@@ -255,20 +263,28 @@ export function InboxBoard() {
                 </div>
             )}
 
-            <SectionFilterEditor
-                sectionId={filterSectionId}
-                open={filterSectionId !== null}
-                onOpenChange={(next) => {
-                    if (!next) setFilterSectionId(null);
-                }}
-            />
-            <SectionAppearanceEditor
-                sectionId={appearanceSectionId}
-                open={appearanceSectionId !== null}
-                onOpenChange={(next) => {
-                    if (!next) setAppearanceSectionId(null);
-                }}
-            />
+            {filterSectionId !== null ? (
+                <Suspense fallback={<LazyChunkFallback label="Loading filter editor…" />}>
+                    <SectionFilterEditor
+                        sectionId={filterSectionId}
+                        open
+                        onOpenChange={(next) => {
+                            if (!next) setFilterSectionId(null);
+                        }}
+                    />
+                </Suspense>
+            ) : null}
+            {appearanceSectionId !== null ? (
+                <Suspense fallback={<LazyChunkFallback label="Loading appearance…" />}>
+                    <SectionAppearanceEditor
+                        sectionId={appearanceSectionId}
+                        open
+                        onOpenChange={(next) => {
+                            if (!next) setAppearanceSectionId(null);
+                        }}
+                    />
+                </Suspense>
+            ) : null}
         </div>
     );
 }

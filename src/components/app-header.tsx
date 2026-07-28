@@ -1,8 +1,6 @@
 import { FileDiff, Inbox, LogOut, Settings2 } from "lucide-react";
-import { useState } from "react";
+import { lazy, Suspense, useState } from "react";
 
-import { SectionLayoutEditor } from "#/components/inbox/section-layout-editor.tsx";
-import { PrSettingsEditor } from "#/components/pr/pr-settings-editor.tsx";
 import { RepoPickerTrigger } from "#/components/repos/repo-picker.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import {
@@ -11,8 +9,25 @@ import {
     DropdownMenuItem,
     DropdownMenuTrigger,
 } from "#/components/ui/dropdown-menu.tsx";
+import { LazyChunkFallback } from "#/components/ui/loading.tsx";
 import { useSession, useSessionState } from "#/lib/session/provider.tsx";
 import { notifySuccess } from "#/lib/toast.ts";
+
+const SectionLayoutEditor = lazy(() =>
+    import("#/components/inbox/section-layout-editor.tsx").then((module) => ({ default: module.SectionLayoutEditor })),
+);
+
+const PrSettingsEditor = lazy(() =>
+    import("#/components/pr/pr-settings-editor.tsx").then((module) => ({ default: module.PrSettingsEditor })),
+);
+
+function preloadInboxSettings() {
+    void import("#/components/inbox/section-layout-editor.tsx");
+}
+
+function preloadPrSettings() {
+    void import("#/components/pr/pr-settings-editor.tsx");
+}
 
 export function AppHeader() {
     const session = useSession();
@@ -46,11 +61,19 @@ export function AppHeader() {
                     </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end" className="w-56">
-                    <DropdownMenuItem onSelect={() => setInboxSettingsOpen(true)}>
+                    <DropdownMenuItem
+                        onSelect={() => setInboxSettingsOpen(true)}
+                        onPointerEnter={preloadInboxSettings}
+                        onFocus={preloadInboxSettings}
+                    >
                         <Settings2 aria-hidden="true" />
                         Inbox Settings
                     </DropdownMenuItem>
-                    <DropdownMenuItem onSelect={() => setPrSettingsOpen(true)}>
+                    <DropdownMenuItem
+                        onSelect={() => setPrSettingsOpen(true)}
+                        onPointerEnter={preloadPrSettings}
+                        onFocus={preloadPrSettings}
+                    >
                         <FileDiff aria-hidden="true" />
                         PR Settings
                     </DropdownMenuItem>
@@ -66,8 +89,16 @@ export function AppHeader() {
                 </DropdownMenuContent>
             </DropdownMenu>
 
-            <SectionLayoutEditor open={inboxSettingsOpen} onOpenChange={setInboxSettingsOpen} />
-            <PrSettingsEditor open={prSettingsOpen} onOpenChange={setPrSettingsOpen} />
+            {inboxSettingsOpen ? (
+                <Suspense fallback={<LazyChunkFallback label="Loading inbox settings…" />}>
+                    <SectionLayoutEditor open={inboxSettingsOpen} onOpenChange={setInboxSettingsOpen} />
+                </Suspense>
+            ) : null}
+            {prSettingsOpen ? (
+                <Suspense fallback={<LazyChunkFallback label="Loading PR settings…" />}>
+                    <PrSettingsEditor open={prSettingsOpen} onOpenChange={setPrSettingsOpen} />
+                </Suspense>
+            ) : null}
         </header>
     );
 }

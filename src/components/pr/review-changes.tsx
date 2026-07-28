@@ -10,21 +10,24 @@ import {
     PanelLeftOpen,
     RefreshCw,
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, lazy, Suspense } from "react";
 
 import type { PullRequestFile } from "#/lib/session/types.ts";
 
 import { DiffSettingsMenu } from "#/components/pr/diff-settings-menu.tsx";
-import { FileDiffViewer } from "#/components/pr/file-diff-viewer.tsx";
 import { ReviewChangesMenu } from "#/components/pr/review-changes-menu.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import { HelpTooltip } from "#/components/ui/help-tooltip.tsx";
-import { FileListLoadingSkeleton } from "#/components/ui/loading.tsx";
+import { DiffLoadingSkeleton, FileListLoadingSkeleton } from "#/components/ui/loading.tsx";
 import { mentionCandidatesFromPullRequest } from "#/lib/composer-commands.ts";
 import { readViewedPaths, useDiffPreferences, writeViewedPaths } from "#/lib/diff-preferences.ts";
 import { useSession } from "#/lib/session/provider.tsx";
 import { notifyAction } from "#/lib/toast.ts";
 import { cn } from "#/lib/utils.ts";
+
+const FileDiffViewer = lazy(() =>
+    import("#/components/pr/file-diff-viewer.tsx").then((module) => ({ default: module.FileDiffViewer })),
+);
 
 export function ReviewChanges({
     repository,
@@ -248,93 +251,96 @@ export function ReviewChanges({
                     </aside>
                     <div className="flex min-h-0 min-w-0 flex-1 flex-col p-2 transition-[padding] duration-300 ease-out motion-reduce:transition-none">
                         {selectedPath ? (
-                            <FileDiffViewer
-                                path={selectedPath}
-                                file={selectedFile}
-                                diff={selectedDiff?.diff ?? null}
-                                isLoading={diffPending}
-                                error={selectedDiff?.error?.message ?? null}
-                                pendingComments={pendingOnFile}
-                                threads={threadsOnFile}
-                                viewerLogin={viewer?.login ?? null}
-                                viewerAvatarUrl={viewer?.avatarUrl ?? null}
-                                showInlineComments={!preferences.minimizeComments}
-                                disabled={draft.stale}
-                                repository={repository}
-                                number={number}
-                                canApplySuggestions={page.detail?.state === "open"}
-                                mentionUsers={mentionUsers}
-                                layout={preferences.layout}
-                                hideWhitespace={preferences.hideWhitespace}
-                                compactLineHeight={preferences.compactLineHeight}
-                                viewed={viewedPaths.has(selectedPath)}
-                                collapsed={collapsedPaths.has(selectedPath)}
-                                onCollapsedChange={(collapsed) => {
-                                    setCollapsedPaths((current) => {
-                                        const next = new Set(current);
-                                        if (collapsed) {
-                                            next.add(selectedPath);
-                                        } else {
-                                            next.delete(selectedPath);
-                                        }
-                                        return next;
-                                    });
-                                }}
-                                onViewedChange={(viewed) => setPathViewed(selectedPath, viewed)}
-                                previewBaseUrl={
-                                    page.detail
-                                        ? `https://github.com/${page.detail.repository}/blob/${page.detail.headRefName}/`
-                                        : `https://github.com/${repository}/`
-                                }
-                                onLoadAnyway={() =>
-                                    void notifyAction(
-                                        () => session.loadFileDiff(repository, number, selectedPath, { force: true }),
-                                        {
-                                            loading: "Loading file…",
-                                            success: "File loaded",
-                                            error: "Could not load the file.",
-                                        },
-                                    )
-                                }
-                                onAddComment={async (target, body) => {
-                                    await notifyAction(
-                                        () =>
-                                            session.addPendingComment(repository, number, {
-                                                path: target.path,
-                                                line: target.line,
-                                                side: target.side,
-                                                body,
-                                            }),
-                                        {
-                                            loading: "Adding comment to review…",
-                                            success: "Comment staged for review",
-                                            error: "Could not stage the comment.",
-                                        },
-                                    );
-                                }}
-                                onAddSingleComment={async (target, body) => {
-                                    await notifyAction(
-                                        () =>
-                                            session.addSingleLineComment(repository, number, {
-                                                path: target.path,
-                                                line: target.line,
-                                                side: target.side,
-                                                body,
-                                            }),
-                                        {
-                                            loading: "Posting comment…",
-                                            success: "Comment posted",
-                                            error: "Could not post the comment.",
-                                        },
-                                    );
-                                }}
-                                onRemovePending={async (commentId) => {
-                                    await session.removePendingComment(repository, number, commentId);
-                                }}
-                                onReplyToThread={async (threadId, body) => {
-                                    await session.replyToReviewThread(repository, number, threadId, body);
-                                }}
-                            />
+                            <Suspense fallback={<DiffLoadingSkeleton path={selectedPath} />}>
+                                <FileDiffViewer
+                                    path={selectedPath}
+                                    file={selectedFile}
+                                    diff={selectedDiff?.diff ?? null}
+                                    isLoading={diffPending}
+                                    error={selectedDiff?.error?.message ?? null}
+                                    pendingComments={pendingOnFile}
+                                    threads={threadsOnFile}
+                                    viewerLogin={viewer?.login ?? null}
+                                    viewerAvatarUrl={viewer?.avatarUrl ?? null}
+                                    showInlineComments={!preferences.minimizeComments}
+                                    disabled={draft.stale}
+                                    repository={repository}
+                                    number={number}
+                                    canApplySuggestions={page.detail?.state === "open"}
+                                    mentionUsers={mentionUsers}
+                                    layout={preferences.layout}
+                                    hideWhitespace={preferences.hideWhitespace}
+                                    compactLineHeight={preferences.compactLineHeight}
+                                    viewed={viewedPaths.has(selectedPath)}
+                                    collapsed={collapsedPaths.has(selectedPath)}
+                                    onCollapsedChange={(collapsed) => {
+                                        setCollapsedPaths((current) => {
+                                            const next = new Set(current);
+                                            if (collapsed) {
+                                                next.add(selectedPath);
+                                            } else {
+                                                next.delete(selectedPath);
+                                            }
+                                            return next;
+                                        });
+                                    }}
+                                    onViewedChange={(viewed) => setPathViewed(selectedPath, viewed)}
+                                    previewBaseUrl={
+                                        page.detail
+                                            ? `https://github.com/${page.detail.repository}/blob/${page.detail.headRefName}/`
+                                            : `https://github.com/${repository}/`
+                                    }
+                                    onLoadAnyway={() =>
+                                        void notifyAction(
+                                            () =>
+                                                session.loadFileDiff(repository, number, selectedPath, { force: true }),
+                                            {
+                                                loading: "Loading file…",
+                                                success: "File loaded",
+                                                error: "Could not load the file.",
+                                            },
+                                        )
+                                    }
+                                    onAddComment={async (target, body) => {
+                                        await notifyAction(
+                                            () =>
+                                                session.addPendingComment(repository, number, {
+                                                    path: target.path,
+                                                    line: target.line,
+                                                    side: target.side,
+                                                    body,
+                                                }),
+                                            {
+                                                loading: "Adding comment to review…",
+                                                success: "Comment staged for review",
+                                                error: "Could not stage the comment.",
+                                            },
+                                        );
+                                    }}
+                                    onAddSingleComment={async (target, body) => {
+                                        await notifyAction(
+                                            () =>
+                                                session.addSingleLineComment(repository, number, {
+                                                    path: target.path,
+                                                    line: target.line,
+                                                    side: target.side,
+                                                    body,
+                                                }),
+                                            {
+                                                loading: "Posting comment…",
+                                                success: "Comment posted",
+                                                error: "Could not post the comment.",
+                                            },
+                                        );
+                                    }}
+                                    onRemovePending={async (commentId) => {
+                                        await session.removePendingComment(repository, number, commentId);
+                                    }}
+                                    onReplyToThread={async (threadId, body) => {
+                                        await session.replyToReviewThread(repository, number, threadId, body);
+                                    }}
+                                />
+                            </Suspense>
                         ) : (
                             <p className="p-6 text-sm text-muted-foreground">Select a file to review its diff.</p>
                         )}
