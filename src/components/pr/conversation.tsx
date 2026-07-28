@@ -212,9 +212,13 @@ export function PullRequestConversation({
             {threads.error ? <p className="text-sm text-destructive">{threads.error.message}</p> : null}
 
             {entries.length > 0 ? (
-                <ol className="relative flex flex-col gap-0 border-s border-border ms-3 ps-6">
+                <ol className="flex flex-col">
                     {entries.map((entry) => (
-                        <li key={entry.id} className="relative pb-5 last:pb-0">
+                        <li key={entry.id} className="group/timeline relative flex items-start gap-3 pb-5 last:pb-0">
+                            <span
+                                aria-hidden="true"
+                                className="absolute inset-s-3 top-6 bottom-0 w-px bg-border group-last/timeline:hidden"
+                            />
                             {entry.kind === "timeline" ? (
                                 <TimelineItemRow
                                     item={entry.item}
@@ -436,12 +440,12 @@ function TimelineReviewThread({
 
     return (
         <>
-            <TimelineDot className="bg-background">
+            <TimelineDot className="mt-2 bg-background">
                 <MessageSquare className="size-3.5" aria-hidden="true" />
             </TimelineDot>
             <article
                 className={cn(
-                    "min-w-0 overflow-hidden rounded-md border bg-background",
+                    "min-w-0 flex-1 overflow-hidden rounded-md border bg-background",
                     (thread.isResolved || thread.isOutdated) && "opacity-90",
                 )}
             >
@@ -661,11 +665,12 @@ function TimelineItemRow({
 
         return (
             <>
-                <TimelineDot className="bg-background">
-                    <AvatarTiny login={displayName} avatarUrl={item.authorAvatarUrl} />
+                <TimelineDot className="mt-2 bg-background">
+                    <MessageSquare className="size-3.5" aria-hidden="true" />
                 </TimelineDot>
-                <article className="min-w-0 overflow-hidden rounded-md border bg-background">
+                <article className="min-w-0 flex-1 overflow-hidden rounded-md border bg-background">
                     <header className="flex flex-wrap items-center gap-x-2 gap-y-1 border-b bg-muted/30 px-3 py-2 text-xs">
+                        <AvatarTiny login={displayName} avatarUrl={item.authorAvatarUrl} />
                         <a href={item.url} target="_blank" rel="noreferrer" className="font-semibold hover:underline">
                             {displayName}
                         </a>
@@ -724,11 +729,12 @@ function TimelineItemRow({
     if (item.kind === "review" && item.body.trim()) {
         return (
             <>
-                <TimelineDot className="bg-background">
-                    <AvatarTiny login={item.author.login} avatarUrl={item.author.avatarUrl} />
+                <TimelineDot className="mt-2 bg-background">
+                    <MessageSquare className="size-3.5" aria-hidden="true" />
                 </TimelineDot>
-                <article className="min-w-0 overflow-hidden rounded-md border bg-background">
+                <article className="min-w-0 flex-1 overflow-hidden rounded-md border bg-background">
                     <header className="flex flex-wrap items-center gap-x-2 gap-y-1 border-b bg-muted/30 px-3 py-2 text-xs">
+                        <AvatarTiny login={item.author.login} avatarUrl={item.author.avatarUrl} />
                         <a href={item.url} target="_blank" rel="noreferrer" className="font-semibold hover:underline">
                             {item.author.login}
                         </a>
@@ -759,7 +765,7 @@ function TimelineItemRow({
                 <TimelineDot>
                     <GitCommitHorizontal className="size-3.5" aria-hidden="true" />
                 </TimelineDot>
-                <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-sm">
+                <div className="flex min-h-6 min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-1 text-sm">
                     <AvatarTiny login={item.author.login} avatarUrl={item.author.avatarUrl} size="sm" />
                     <a
                         href={item.url}
@@ -792,8 +798,8 @@ function TimelineItemRow({
                 <TimelineDot>
                     <Pencil className="size-3.5" aria-hidden="true" />
                 </TimelineDot>
-                <div className="flex min-w-0 flex-col gap-1 text-sm">
-                    <p className="flex flex-wrap items-center gap-x-1.5 gap-y-1 text-muted-foreground">
+                <div className="flex min-w-0 flex-1 flex-col gap-1 text-sm">
+                    <p className="flex min-h-6 flex-wrap items-center gap-x-1.5 gap-y-1 text-muted-foreground">
                         <AvatarTiny login={item.actor.login} avatarUrl={item.actor.avatarUrl} size="sm" />
                         <span className="font-medium text-foreground">{item.actor.login}</span>
                         <span>changed the title</span>
@@ -814,8 +820,8 @@ function TimelineItemRow({
     return (
         <>
             <TimelineDot>{event.icon}</TimelineDot>
-            <p className="flex flex-wrap items-center gap-x-1.5 gap-y-1 text-sm text-muted-foreground">
-                <AvatarTiny login={event.actor.login} avatarUrl={event.actor.avatarUrl} size="sm" />
+            <p className="flex min-h-6 min-w-0 flex-1 flex-wrap items-center gap-x-1.5 gap-y-1 text-sm text-muted-foreground">
+                <AvatarTiny login={event.actor.login} avatarUrl={event.actor.avatarUrl} />
                 <span className="font-medium text-foreground">{event.actor.login}</span>
                 <span>{event.text}</span>
                 <RelativeTime iso={item.createdAt} />
@@ -936,7 +942,7 @@ function TimelineDot({ children, className }: { children: ReactNode; className?:
     return (
         <span
             className={cn(
-                "absolute top-0.5 -inset-s-6 flex size-6 -translate-x-1/2 items-center justify-center rounded-full border bg-muted text-muted-foreground",
+                "relative z-10 flex size-6 shrink-0 items-center justify-center rounded-full border bg-muted text-muted-foreground",
                 className,
             )}
         >
@@ -952,11 +958,15 @@ function AvatarTiny({
 }: {
     login: string;
     avatarUrl: string | null;
-    size?: "sm" | "md";
+    size?: "sm" | "md" | "lg";
 }) {
-    const className = size === "sm" ? "size-4 rounded-full" : "size-5 rounded-full";
-    if (avatarUrl) {
-        return <img src={avatarUrl} alt="" className={className} />;
+    const className =
+        size === "sm" ? "size-4 rounded-full" : size === "lg" ? "size-6 rounded-full" : "size-5 rounded-full";
+    const resolved =
+        avatarUrl ?? (/^[\w-]+$/.test(login) && login !== "ghost" ? `https://github.com/${login}.png?size=40` : null);
+
+    if (resolved) {
+        return <img src={resolved} alt="" className={className} />;
     }
 
     return (

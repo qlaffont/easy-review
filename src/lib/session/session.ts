@@ -1062,7 +1062,7 @@ export function createEasyReviewSession({ github, store, oauth }: EasyReviewSess
         await refreshPullRequest(repository, number);
     }
 
-    /** Called on tab focus while a pull request is open, manual refresh, and the quiet 3-minute interval. */
+    /** Called on tab focus while a pull request is open, manual refresh, and the 5-second check poll. */
     async function revalidatePullRequest(repository: string, number: number): Promise<void> {
         if (state.state.pullRequests[pullRequestKey(repository, number)]?.refreshing) {
             return;

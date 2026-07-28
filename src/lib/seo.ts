@@ -6,8 +6,38 @@ import { env } from "#/env.ts";
 export const DEFAULT_DESCRIPTION =
     "Easy Review is a fast GitHub pull-request inbox and review workspace for triage, diffs, and staged reviews.";
 
+/** Square brand image used for Slack/Discord unfurls and social cards. */
+export const OG_IMAGE_PATH = "/og-image.png";
+
 export function siteName(): string {
     return env.VITE_APP_TITLE?.trim() || "Easy Review";
+}
+
+/** Public site origin for absolute OG/asset URLs (Slack prefers absolute `og:image`). */
+export function siteOrigin(): string | null {
+    // Read Vite public env directly — never touch `env.SERVER_*` from this client-shared module.
+    const configured = import.meta.env.VITE_APP_URL;
+    if (typeof configured === "string" && configured.length > 0) {
+        try {
+            return new URL(configured).origin;
+        } catch {
+            return null;
+        }
+    }
+
+    if (typeof window !== "undefined" && window.location?.origin) {
+        return window.location.origin;
+    }
+
+    return null;
+}
+
+export function absoluteUrl(path: string): string | null {
+    const origin = siteOrigin();
+    if (!origin) {
+        return null;
+    }
+    return new URL(path, origin).toString();
 }
 
 /** `Inbox` → `Inbox · Easy Review`; bare site name stays un-suffixed. */
@@ -45,6 +75,8 @@ export function buildHead(input: PageSeoInput): PageHead {
     const title = formatTitle(input.title);
     const description = (input.description ?? DEFAULT_DESCRIPTION).trim() || DEFAULT_DESCRIPTION;
     const robots = input.robots ?? "noindex, nofollow";
+    const imageUrl = absoluteUrl(OG_IMAGE_PATH) ?? OG_IMAGE_PATH;
+    const pageUrl = input.path ? absoluteUrl(input.path) : null;
 
     const meta: Array<HeadMeta> = [
         { title },
@@ -56,14 +88,20 @@ export function buildHead(input: PageSeoInput): PageHead {
         { property: "og:description", content: description },
         { property: "og:type", content: "website" },
         { property: "og:site_name", content: siteName() },
+        { property: "og:image", content: imageUrl },
+        { property: "og:image:type", content: "image/png" },
+        { property: "og:image:width", content: "512" },
+        { property: "og:image:height", content: "512" },
         { name: "twitter:card", content: "summary" },
         { name: "twitter:title", content: title },
         { name: "twitter:description", content: description },
+        { name: "twitter:image", content: imageUrl },
     ];
 
-    if (input.path && typeof window !== "undefined" && window.location?.origin) {
-        const url = new URL(input.path, window.location.origin).toString();
-        meta.push({ property: "og:url", content: url });
+    if (pageUrl) {
+        meta.push({ property: "og:url", content: pageUrl });
+    } else if (input.path && typeof window !== "undefined" && window.location?.origin) {
+        meta.push({ property: "og:url", content: new URL(input.path, window.location.origin).toString() });
     }
 
     return { meta };
@@ -137,5 +175,9 @@ export function usePageSeo(input: PageSeoInput): void {
                 new URL(input.path, window.location.origin).toString(),
             );
         }
+
+        const imageUrl = absoluteUrl(OG_IMAGE_PATH) ?? OG_IMAGE_PATH;
+        upsertMeta('meta[property="og:image"]', "property", "og:image", imageUrl);
+        upsertMeta('meta[name="twitter:image"]', "name", "twitter:image", imageUrl);
     }, [title, description, input.path]);
 }

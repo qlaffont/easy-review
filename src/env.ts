@@ -14,6 +14,8 @@ export const env = createEnv({
 
     client: {
         VITE_APP_TITLE: z.string().min(1).optional(),
+        /** Public origin for absolute Open Graph / Slack unfurl image URLs. */
+        VITE_APP_URL: z.string().url().optional(),
     },
 
     /**

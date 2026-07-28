@@ -22,6 +22,8 @@ describe("seo", () => {
         });
         expect(head.meta).toContainEqual({ name: "robots", content: "noindex, nofollow" });
         expect(head.meta).toContainEqual({ property: "og:title", content: formatTitle("Inbox") });
+        expect(head.meta).toContainEqual({ property: "og:image", content: "/og-image.png" });
+        expect(head.meta).toContainEqual({ name: "twitter:image", content: "/og-image.png" });
     });
 
     it("generates pull request SEO from params and optional headline", () => {

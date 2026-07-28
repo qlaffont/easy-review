@@ -60,7 +60,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "#/components/ui/popover
 import { RelativeTime } from "#/components/ui/relative-time.tsx";
 import { pullRequestSeo, usePageSeo } from "#/lib/seo.ts";
 import { useSession } from "#/lib/session/provider.tsx";
-import { useQuietRevalidate } from "#/lib/session/quiet-revalidate.ts";
+import { useCheckStatusRevalidate } from "#/lib/session/quiet-revalidate.ts";
 import { notifyAction, notifyCopied, notifyError } from "#/lib/toast.ts";
 import { cn } from "#/lib/utils.ts";
 
@@ -141,7 +141,7 @@ export function PullRequestOverview({
         void session.loadPullRequestFiles(repository, number);
     }, [session, repository, number]);
 
-    useQuietRevalidate(() => {
+    useCheckStatusRevalidate(() => {
         void session.revalidatePullRequest(repository, number);
     });
 

@@ -74,6 +74,23 @@ function reviewerAvatarUrl(login: string): string | null {
     return `https://github.com/${login}.png?size=40`;
 }
 
+function AuthorAvatar({ login, avatarUrl }: { login: string; avatarUrl: string | null }) {
+    const src = avatarUrl ?? reviewerAvatarUrl(login);
+
+    if (src) {
+        return <img src={src} alt="" className="size-3.5 shrink-0 rounded-full" />;
+    }
+
+    return (
+        <span
+            aria-hidden="true"
+            className="inline-flex size-3.5 shrink-0 items-center justify-center rounded-full bg-muted text-[8px] font-semibold uppercase"
+        >
+            {login.slice(0, 1)}
+        </span>
+    );
+}
+
 function ReviewerAvatars({ pullRequest }: { pullRequest: PullRequestSummary }) {
     const reviewers = collectReviewers(pullRequest);
 
@@ -189,7 +206,10 @@ export const PullRequestRow = memo(function PullRequestRow({
                         {pullRequest.repository}#{pullRequest.number}
                     </span>
                     <span aria-hidden="true">·</span>
-                    <span className="truncate">{pullRequest.author}</span>
+                    <span className="inline-flex min-w-0 items-center gap-1.5">
+                        <AuthorAvatar login={pullRequest.author} avatarUrl={pullRequest.authorAvatarUrl} />
+                        <span className="truncate">{pullRequest.author}</span>
+                    </span>
                 </span>
             </span>
 

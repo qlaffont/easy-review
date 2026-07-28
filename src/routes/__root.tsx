@@ -32,8 +32,10 @@ export const Route = createRootRoute({
                 rel: "stylesheet",
                 href: appCss,
             },
+            // PNG first — Slack (and many crawlers) ignore SVG favicons for unfurls.
+            { rel: "icon", href: "/favicon-inbox.png", type: "image/png", sizes: "32x32" },
             { rel: "icon", href: "/favicon-inbox.svg", type: "image/svg+xml" },
-            { rel: "apple-touch-icon", href: "/favicon-inbox.svg" },
+            { rel: "apple-touch-icon", href: "/apple-touch-icon.png", sizes: "180x180" },
         ],
     }),
     shellComponent: RootDocument,

@@ -2572,9 +2572,12 @@ type PullRequestTimelineQuery = {
 };
 
 function toTimelineActor(actor: TimelineActorNode): { login: string; avatarUrl: string | null } {
+    const login = actor?.login ?? "ghost";
     return {
-        login: actor?.login ?? "ghost",
-        avatarUrl: actor?.avatarUrl ?? null,
+        login,
+        avatarUrl:
+            actor?.avatarUrl ??
+            (/^[\w-]+$/.test(login) && login !== "ghost" ? `https://github.com/${login}.png?size=40` : null),
     };
 }
 
