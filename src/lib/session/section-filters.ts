@@ -334,9 +334,17 @@ export function defaultFilterForPreset(id: string): SectionFilter {
                 condition("isDraft", "is", false),
                 condition("reviewDecision", "is", "changes-requested"),
             ]);
-        case "waiting-for-reviewers":
+        case "waiting-for-reviewers-me":
             return singleCaseFilter("My open PR waiting on review", [
                 condition("author", "is", VIEWER_PERSON),
+                condition("state", "is", "open"),
+                condition("isDraft", "is", false),
+                condition("reviewDecision", "is_not", "changes-requested"),
+                condition("reviewDecision", "is_not", "approved"),
+            ]);
+        case "waiting-for-reviewers":
+            return singleCaseFilter("My open PR waiting on review", [
+                condition("author", "is_not", VIEWER_PERSON),
                 condition("state", "is", "open"),
                 condition("isDraft", "is", false),
                 condition("reviewDecision", "is_not", "changes-requested"),
@@ -372,6 +380,7 @@ export function defaultFilterForPreset(id: string): SectionFilter {
 export type SectionRecipeId =
     | "needs-your-review"
     | "returned-to-you"
+    | "waiting-for-reviewers-me"
     | "waiting-for-reviewers"
     | "approved"
     | "drafts"
@@ -410,9 +419,18 @@ export const SECTION_RECIPES: ReadonlyArray<SectionRecipe> = [
         icon: "undo",
     },
     {
+        id: "waiting-for-reviewers-me",
+        label: "Waiting for reviewers (me)",
+        description: "Your open PR not yet approved or blocked.",
+        filter: defaultFilterForPreset("waiting-for-reviewers-me"),
+        suggestedLabel: "Waiting for reviewers (me)",
+        color: "sky",
+        icon: "users",
+    },
+    {
         id: "waiting-for-reviewers",
         label: "Waiting for reviewers",
-        description: "Your open PR not yet approved or blocked.",
+        description: "Others' open PRs not yet approved or blocked.",
         filter: defaultFilterForPreset("waiting-for-reviewers"),
         suggestedLabel: "Waiting for reviewers",
         color: "sky",

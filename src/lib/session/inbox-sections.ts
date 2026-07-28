@@ -14,6 +14,7 @@ export type PresetInboxSectionId =
     | "needs-your-review"
     | "returned-to-you"
     | "approved"
+    | "waiting-for-reviewers-me"
     | "waiting-for-reviewers"
     | "drafts"
     | "merging-and-recently-merged"
@@ -88,6 +89,7 @@ export type InboxSectionDefinition = {
 export const DEFAULT_INBOX_SECTIONS: ReadonlyArray<{ id: PresetInboxSectionId; label: string }> = [
     { id: "needs-your-review", label: "Needs your review" },
     { id: "returned-to-you", label: "Returned to you" },
+    { id: "waiting-for-reviewers-me", label: "Waiting for reviewers (me)" },
     { id: "waiting-for-reviewers", label: "Waiting for reviewers" },
     { id: "approved", label: "Approved" },
     { id: "drafts", label: "Drafts" },
@@ -100,6 +102,7 @@ export const DEFAULT_SECTION_APPEARANCE: Record<PresetInboxSectionId, { color: S
         "needs-your-review": { color: "amber", icon: "eye" },
         "returned-to-you": { color: "rose", icon: "undo" },
         approved: { color: "emerald", icon: "check" },
+        "waiting-for-reviewers-me": { color: "sky", icon: "users" },
         "waiting-for-reviewers": { color: "sky", icon: "users" },
         drafts: { color: "slate", icon: "draft" },
         "merging-and-recently-merged": { color: "violet", icon: "merge" },
@@ -209,7 +212,7 @@ export function isHexColor(value: unknown): value is string {
     return normalizeHexColor(value) !== null;
 }
 
-/** Visible by default: Needs review → Returned → Waiting for reviewers → Approved. */
+/** Visible by default: Needs review → Returned → Waiting (me) → Waiting → Approved. */
 const DEFAULT_HIDDEN_SECTION_IDS = new Set<PresetInboxSectionId>([
     "drafts",
     "merging-and-recently-merged",
@@ -219,7 +222,7 @@ const DEFAULT_HIDDEN_SECTION_IDS = new Set<PresetInboxSectionId>([
 const DEFAULT_EXPANDED_SECTION_IDS = new Set<PresetInboxSectionId>([
     "needs-your-review",
     "returned-to-you",
-    "waiting-for-reviewers",
+    "waiting-for-reviewers-me",
     "approved",
 ]);
 

@@ -77,9 +77,16 @@ describe("default section filters", () => {
         expect(matchSectionFilter(subject, defaultFilterForPreset("approved"), VIEWER)).toBe(true);
     });
 
-    it("puts your own pending pull request in Waiting for reviewers", () => {
+    it("puts your own pending pull request in Waiting for reviewers (me)", () => {
         const subject = pullRequest({ author: VIEWER, reviewDecision: "review-required" });
+        expect(matchSectionFilter(subject, defaultFilterForPreset("waiting-for-reviewers-me"), VIEWER)).toBe(true);
+        expect(matchSectionFilter(subject, defaultFilterForPreset("waiting-for-reviewers"), VIEWER)).toBe(false);
+    });
+
+    it("puts someone else's pending pull request in Waiting for reviewers", () => {
+        const subject = pullRequest({ author: "octocat", reviewDecision: "review-required" });
         expect(matchSectionFilter(subject, defaultFilterForPreset("waiting-for-reviewers"), VIEWER)).toBe(true);
+        expect(matchSectionFilter(subject, defaultFilterForPreset("waiting-for-reviewers-me"), VIEWER)).toBe(false);
     });
 
     it("puts your own draft in Drafts, whatever its review state", () => {
@@ -95,12 +102,12 @@ describe("default section filters", () => {
 
     it("does not put unmatched PRs into any default section", () => {
         const closed = pullRequest({ state: "closed" });
-        const stranger = pullRequest();
+        const strangerApproved = pullRequest({ reviewDecision: "approved" });
         const otherDraft = pullRequest({ isDraft: true });
 
         for (const id of DEFAULT_INBOX_SECTIONS.map((section) => section.id)) {
             expect(matchSectionFilter(closed, defaultFilterForPreset(id), VIEWER)).toBe(false);
-            expect(matchSectionFilter(stranger, defaultFilterForPreset(id), VIEWER)).toBe(false);
+            expect(matchSectionFilter(strangerApproved, defaultFilterForPreset(id), VIEWER)).toBe(false);
             expect(matchSectionFilter(otherDraft, defaultFilterForPreset(id), VIEWER)).toBe(false);
         }
     });
@@ -198,7 +205,7 @@ describe("parseInboxSettings", () => {
             "drafts",
             "needs-your-review",
             "returned-to-you",
-            "waiting-for-reviewers",
+            "waiting-for-reviewers-me",
         ]);
         expect(settings.sectionLayout.find((entry) => entry.id === "approved")).toMatchObject({
             label: "Ready",

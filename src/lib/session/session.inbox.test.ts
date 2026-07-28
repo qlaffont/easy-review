@@ -68,7 +68,7 @@ describe("loading", () => {
         await session.setSectionHidden("drafts", false);
 
         expect(sectionOf(session, "needs-your-review")?.pullRequests.map((entry) => entry.key)).toEqual(["acme/api#1"]);
-        expect(sectionOf(session, "waiting-for-reviewers")?.pullRequests.map((entry) => entry.key)).toEqual([
+        expect(sectionOf(session, "waiting-for-reviewers-me")?.pullRequests.map((entry) => entry.key)).toEqual([
             "acme/api#2",
         ]);
         expect(sectionOf(session, "drafts")?.pullRequests).toEqual([]);
@@ -184,7 +184,7 @@ describe("sections", () => {
         expect(session.state.state.inbox.expandedSections).toEqual([
             "needs-your-review",
             "returned-to-you",
-            "waiting-for-reviewers",
+            "waiting-for-reviewers-me",
             "approved",
         ]);
     });
@@ -212,7 +212,7 @@ describe("sections", () => {
         expect(reloaded.state.state.inbox.expandedSections).toEqual([
             "needs-your-review",
             "returned-to-you",
-            "waiting-for-reviewers",
+            "waiting-for-reviewers-me",
             "approved",
         ]);
     });
