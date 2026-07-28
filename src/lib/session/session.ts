@@ -1181,6 +1181,40 @@ export function createEasyReviewSession({ github, store, oauth }: EasyReviewSess
         }
     }
 
+    /**
+     * Files changed between two commits on the repository (not the full PR file list).
+     * Used by the Files changed commit-range picker.
+     */
+    async function listComparedFiles(
+        repository: string,
+        baseOid: string,
+        headOid: string,
+    ): Promise<Array<PullRequestFile>> {
+        return github.listComparedFiles(requireToken(), repository, baseOid, headOid);
+    }
+
+    /**
+     * One file’s diff for an explicit commit range. Does not touch the full-PR diff cache.
+     */
+    async function getFileDiffBetween(
+        repository: string,
+        number: number,
+        path: string,
+        options: {
+            baseOid: string;
+            headOid: string;
+            previousPath?: string | null;
+            force?: boolean;
+        },
+    ): Promise<FileDiff> {
+        return github.getPullRequestFileDiff(requireToken(), repository, number, path, {
+            force: options.force,
+            previousPath: options.previousPath,
+            baseOid: options.baseOid,
+            headOid: options.headOid,
+        });
+    }
+
     function getFileDiff(repository: string, number: number, path: string): FileDiffState {
         return state.state.pullRequests[pullRequestKey(repository, number)]?.diffs[path] ?? initialFileDiffState;
     }
@@ -2420,6 +2454,8 @@ export function createEasyReviewSession({ github, store, oauth }: EasyReviewSess
         refreshPullRequestFiles,
         loadFileDiff,
         getFileDiff,
+        listComparedFiles,
+        getFileDiffBetween,
         getReviewDraft,
         setReviewEvent,
         setReviewBody,

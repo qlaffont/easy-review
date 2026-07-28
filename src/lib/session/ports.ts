@@ -29,6 +29,12 @@ export type GetFileDiffOptions = {
     force?: boolean;
     /** Path on the base side when the file was renamed; defaults to `path`. */
     previousPath?: string | null;
+    /**
+     * When both are set, diff these commits instead of the pull request’s base…head.
+     * Used by the Files changed “Changes from” range picker.
+     */
+    baseOid?: string;
+    headOid?: string;
 };
 
 /**
@@ -77,6 +83,16 @@ export type GithubClient = {
     listRepositoryLabels(token: string, repository: string): Promise<Array<RepositoryLabel>>;
     /** Changed paths only — never the patch text. */
     listPullRequestFiles(token: string, repository: string, number: number): Promise<Array<PullRequestFile>>;
+    /**
+     * Files changed between two commits (`base...head`), same shape as the PR file list.
+     * Used to isolate a commit range on the Files changed tab.
+     */
+    listComparedFiles(
+        token: string,
+        repository: string,
+        baseOid: string,
+        headOid: string,
+    ): Promise<Array<PullRequestFile>>;
     /** One file's diff. Callers open a file; this must not pull the rest of the change set. */
     getPullRequestFileDiff(
         token: string,

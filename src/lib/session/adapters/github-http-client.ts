@@ -615,6 +615,56 @@ export function createGithubHttpClient(
             return files;
         },
 
+        async listComparedFiles(token, repository, baseOid, headOid) {
+            const [owner = "", name = ""] = repository.split("/");
+            const base = baseOid.trim();
+            const head = headOid.trim();
+            if (!base || !head) {
+                throw new EasyReviewError("unknown", "Pick both a base and a head commit to compare.");
+            }
+            if (base === head) {
+                return [];
+            }
+
+            const path = `/repos/${owner}/${name}/compare/${encodeURIComponent(base)}...${encodeURIComponent(head)}`;
+            const payload = (await restJson(token, "GET", path)) as {
+                files?: Array<{
+                    filename?: string;
+                    previous_filename?: string | null;
+                    status?: string;
+                    additions?: number;
+                    deletions?: number;
+                }> | null;
+                truncated?: boolean;
+            };
+
+            const files = (payload.files ?? []).flatMap((file) => {
+                const filePath = file.filename?.trim();
+                if (!filePath) {
+                    return [];
+                }
+                return [
+                    {
+                        path: filePath,
+                        previousPath: file.previous_filename?.trim() || null,
+                        status: toComparedFileStatus(file.status),
+                        additions: file.additions ?? 0,
+                        deletions: file.deletions ?? 0,
+                        stub: stubForPath(filePath),
+                    } satisfies PullRequestFile,
+                ];
+            });
+
+            if (payload.truncated) {
+                throw new EasyReviewError(
+                    "unknown",
+                    `This commit range changes more files than GitHub returns in one compare. Narrow the base…to range.`,
+                );
+            }
+
+            return files;
+        },
+
         async getPullRequestFileDiff(token, repository, number, path, options) {
             const force = options?.force === true;
             const pathStub = stubForPath(path);
@@ -640,12 +690,15 @@ export function createGithubHttpClient(
             }
 
             const beforePath = options?.previousPath || path;
-            // Prefer the virtual pull-request ref for the head side. Raw head OIDs 404 on the
-            // Contents API for cross-fork PRs; `refs/pull/N/head` always resolves on the base repo.
-            const headRef = `refs/pull/${number}/head`;
+            const rangeBase = options?.baseOid?.trim() || null;
+            const rangeHead = options?.headOid?.trim() || null;
+            // Prefer the virtual pull-request ref for the full-PR head side. Raw head OIDs 404 on
+            // the Contents API for cross-fork PRs; `refs/pull/N/head` always resolves on the base repo.
+            const beforeRef = rangeBase ?? pullRequest.baseRefOid;
+            const afterRef = rangeHead && rangeHead !== pullRequest.headRefOid ? rangeHead : `refs/pull/${number}/head`;
             const [before, after] = await Promise.all([
-                readBlob(token, owner, name, beforePath, pullRequest.baseRefOid, force),
-                readBlob(token, owner, name, path, headRef, force),
+                readBlob(token, owner, name, beforePath, beforeRef, force),
+                readBlob(token, owner, name, path, afterRef, force),
             ]);
 
             if (before?.stub || after?.stub) {
@@ -2831,6 +2884,20 @@ function toFileChangeStatus(changeType: PullRequestFileNode["changeType"]): File
         case "DELETED":
             return "removed";
         case "RENAMED":
+            return "renamed";
+        default:
+            return "modified";
+    }
+}
+
+function toComparedFileStatus(status: string | undefined): FileChangeStatus {
+    switch (status) {
+        case "added":
+            return "added";
+        case "removed":
+            return "removed";
+        case "renamed":
+        case "copied":
             return "renamed";
         default:
             return "modified";

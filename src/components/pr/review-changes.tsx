@@ -20,8 +20,9 @@ import {
 } from "lucide-react";
 import { useDeferredValue, useEffect, useMemo, useRef, useState, lazy, Suspense, type CSSProperties } from "react";
 
-import type { PullRequestFile } from "#/lib/session/types.ts";
+import type { FileDiff as FileDiffPayload, PullRequestFile } from "#/lib/session/types.ts";
 
+import { CommitRangePicker, type CommitRangeValue } from "#/components/pr/commit-range-picker.tsx";
 import { DiffSettingsMenu } from "#/components/pr/diff-settings-menu.tsx";
 import { ReviewChangesMenu } from "#/components/pr/review-changes-menu.tsx";
 import { Button } from "#/components/ui/button.tsx";
@@ -62,6 +63,7 @@ export function ReviewChanges({
     const page = useSelector(session.state, () => session.getPullRequestPage(repository, number));
     const draft = useSelector(session.state, () => session.getReviewDraft(repository, number));
     const threads = useSelector(session.state, () => session.getReviewThreads(repository, number));
+    const commits = useSelector(session.state, () => session.getPullRequestCommits(repository, number));
     const viewer = useSelector(session.state, (state) => state.auth.viewer);
     const [selectedPath, setSelectedPath] = useState<string | null>(initialPath ?? null);
     const selectedDiff = useSelector(session.state, () =>
@@ -69,14 +71,37 @@ export function ReviewChanges({
     );
     const [preferences, setPreferences] = useDiffPreferences();
     const headSha = page.detail?.headSha ?? "";
+    const baseSha = page.detail?.baseSha ?? "";
     const mentionUsers = useMemo(() => mentionCandidatesFromPullRequest(page.detail), [page.detail]);
     const [viewedMarks, setViewedMarks] = useState<ViewedFileMarks>(() => ({}));
     const [resizingFileList, setResizingFileList] = useState(false);
     const fileListWidth = preferences.fileListWidth;
+    const [commitRange, setCommitRange] = useState<CommitRangeValue>({ mode: "all" });
+    const [rangeFiles, setRangeFiles] = useState<Array<PullRequestFile> | null>(null);
+    const [rangeFilesStatus, setRangeFilesStatus] = useState<"idle" | "loading" | "ready" | "error">("idle");
+    const [rangeFilesError, setRangeFilesError] = useState<string | null>(null);
+    const [rangeDiff, setRangeDiff] = useState<FileDiffPayload | null>(null);
+    const [rangeDiffStatus, setRangeDiffStatus] = useState<"idle" | "loading" | "ready" | "error">("idle");
+    const [rangeDiffError, setRangeDiffError] = useState<string | null>(null);
+    const rangeLoadAttempt = useRef(0);
+    const rangeDiffAttempt = useRef(0);
+
+    const isolatingRange = commitRange.mode === "range";
+    const filesItems = isolatingRange ? (rangeFiles ?? []) : page.files.items;
+    const filesStatus = isolatingRange
+        ? rangeFilesStatus === "idle"
+            ? "loading"
+            : rangeFilesStatus
+        : page.files.status;
+    const filesError = isolatingRange ? rangeFilesError : (page.files.error?.message ?? null);
+    const filesEpoch = isolatingRange
+        ? `${commitRange.baseOid}:${commitRange.headOid}:${rangeFilesStatus}`
+        : page.files.lastLoadedAt;
 
     useEffect(() => {
         void session.loadPullRequestFiles(repository, number);
         void session.loadReviewThreads(repository, number);
+        void session.loadPullRequestCommits(repository, number);
     }, [session, repository, number]);
 
     useEffect(() => {
@@ -84,38 +109,105 @@ export function ReviewChanges({
     }, [repository, number, headSha]);
 
     useEffect(() => {
+        if (commitRange.mode !== "range") {
+            setRangeFiles(null);
+            setRangeFilesStatus("idle");
+            setRangeFilesError(null);
+            return;
+        }
+
+        const attempt = ++rangeLoadAttempt.current;
+        setRangeFilesStatus("loading");
+        setRangeFilesError(null);
+
+        void session
+            .listComparedFiles(repository, commitRange.baseOid, commitRange.headOid)
+            .then((items) => {
+                if (attempt !== rangeLoadAttempt.current) {
+                    return;
+                }
+                setRangeFiles(items);
+                setRangeFilesStatus("ready");
+                setSelectedPath((current) => {
+                    if (current && items.some((file) => file.path === current)) {
+                        return current;
+                    }
+                    return items[0]?.path ?? null;
+                });
+            })
+            .catch((cause) => {
+                if (attempt !== rangeLoadAttempt.current) {
+                    return;
+                }
+                setRangeFiles([]);
+                setRangeFilesStatus("error");
+                setRangeFilesError(cause instanceof Error ? cause.message : "Could not load that commit range.");
+            });
+    }, [session, repository, commitRange]);
+
+    useEffect(() => {
         if (initialPath) {
             setSelectedPath(initialPath);
             return;
         }
 
-        if (!selectedPath && page.files.items[0]) {
-            setSelectedPath(page.files.items[0].path);
+        if (!selectedPath && filesItems[0]) {
+            setSelectedPath(filesItems[0].path);
         }
-    }, [page.files.items, selectedPath, initialPath]);
-
-    // Re-run when the file list refreshes — that wipe clears `diffs`, and selectedPath alone
-    // would not change, so without `filesEpoch` the pane would stay empty.
-    const filesEpoch = page.files.lastLoadedAt;
+    }, [filesItems, selectedPath, initialPath]);
 
     useEffect(() => {
-        if (selectedPath) {
-            void session.loadFileDiff(repository, number, selectedPath);
+        if (!selectedPath) {
+            return;
         }
-    }, [session, repository, number, selectedPath, filesEpoch]);
+
+        if (commitRange.mode !== "range") {
+            void session.loadFileDiff(repository, number, selectedPath);
+            return;
+        }
+
+        const file = filesItems.find((entry) => entry.path === selectedPath) ?? null;
+        const attempt = ++rangeDiffAttempt.current;
+        setRangeDiff(null);
+        setRangeDiffStatus("loading");
+        setRangeDiffError(null);
+
+        void session
+            .getFileDiffBetween(repository, number, selectedPath, {
+                baseOid: commitRange.baseOid,
+                headOid: commitRange.headOid,
+                previousPath: file?.previousPath ?? null,
+            })
+            .then((diff) => {
+                if (attempt !== rangeDiffAttempt.current) {
+                    return;
+                }
+                setRangeDiff(diff);
+                setRangeDiffStatus("ready");
+            })
+            .catch((cause) => {
+                if (attempt !== rangeDiffAttempt.current) {
+                    return;
+                }
+                setRangeDiff(null);
+                setRangeDiffStatus("error");
+                setRangeDiffError(cause instanceof Error ? cause.message : "Could not load the file.");
+            });
+    }, [session, repository, number, selectedPath, filesEpoch, commitRange, filesItems]);
 
     const pendingOnFile = draft.comments.filter((comment) => comment.path === selectedPath);
     const threadsOnFile = selectedPath ? threads.items.filter((thread) => thread.path === selectedPath) : [];
-    const fileCount = page.files.status === "ready" ? page.files.items.length : null;
-    const viewedCount = page.files.items.filter(
-        (file) => fileViewState(viewedMarks, file.path, headSha) === "viewed",
-    ).length;
-    const selectedFile = page.files.items.find((file) => file.path === selectedPath) ?? null;
-    const diffPending =
-        selectedDiff === null ||
-        selectedDiff.status === "idle" ||
-        selectedDiff.status === "loading" ||
-        selectedDiff.refreshing === true;
+    const fileCount = filesStatus === "ready" ? filesItems.length : null;
+    const viewedCount = filesItems.filter((file) => fileViewState(viewedMarks, file.path, headSha) === "viewed").length;
+    const selectedFile = filesItems.find((file) => file.path === selectedPath) ?? null;
+    const activeDiff = isolatingRange ? rangeDiff : (selectedDiff?.diff ?? null);
+    const diffPending = isolatingRange
+        ? rangeDiffStatus === "idle" || rangeDiffStatus === "loading"
+        : selectedDiff === null ||
+          selectedDiff.status === "idle" ||
+          selectedDiff.status === "loading" ||
+          selectedDiff.refreshing === true;
+    const activeDiffError = isolatingRange ? rangeDiffError : (selectedDiff?.error?.message ?? null);
     const selectedViewState = selectedPath ? fileViewState(viewedMarks, selectedPath, headSha) : "unseen";
 
     function setPathViewed(path: string, viewed: boolean) {
@@ -131,7 +223,7 @@ export function ReviewChanges({
         });
 
         if (viewed) {
-            const files = page.files.items;
+            const files = filesItems;
             const index = files.findIndex((file) => file.path === path);
             const isDone = (candidate: string) =>
                 candidate === path || fileViewState(viewedMarks, candidate, headSha) === "viewed";
@@ -144,109 +236,159 @@ export function ReviewChanges({
         }
     }
 
+    async function loadSelectedFileForce() {
+        if (!selectedPath) {
+            return;
+        }
+        if (commitRange.mode === "range") {
+            const file = filesItems.find((entry) => entry.path === selectedPath) ?? null;
+            setRangeDiffStatus("loading");
+            setRangeDiffError(null);
+            try {
+                const diff = await session.getFileDiffBetween(repository, number, selectedPath, {
+                    baseOid: commitRange.baseOid,
+                    headOid: commitRange.headOid,
+                    previousPath: file?.previousPath ?? null,
+                    force: true,
+                });
+                setRangeDiff(diff);
+                setRangeDiffStatus("ready");
+            } catch (cause) {
+                setRangeDiffStatus("error");
+                setRangeDiffError(cause instanceof Error ? cause.message : "Could not load the file.");
+                throw cause;
+            }
+            return;
+        }
+        await session.loadFileDiff(repository, number, selectedPath, { force: true });
+    }
+
     return (
         <div className={cn(preferences.fullWidth && "relative left-1/2 w-screen max-w-[100vw] -translate-x-1/2 px-4")}>
             <section id="review" className="flex min-h-0 scroll-mt-20 flex-col overflow-hidden rounded-lg border">
-                <header className="flex shrink-0 items-center justify-between gap-3 border-b bg-muted/40 px-3 py-2">
-                    <div className="flex min-w-0 items-center gap-3">
-                        <h2 className="text-sm font-medium">
-                            Files changed
-                            {fileCount !== null ? (
-                                <span className="ml-2 text-xs font-normal text-muted-foreground tabular-nums">
-                                    {fileCount}
-                                </span>
+                <header className="flex shrink-0 flex-col gap-2 border-b bg-muted/40 px-3 py-2">
+                    <div className="flex items-center justify-between gap-3">
+                        <div className="flex min-w-0 items-center gap-3">
+                            <h2 className="text-sm font-medium">
+                                Files changed
+                                {fileCount !== null ? (
+                                    <span className="ml-2 text-xs font-normal text-muted-foreground tabular-nums">
+                                        {fileCount}
+                                    </span>
+                                ) : null}
+                            </h2>
+                            {fileCount !== null && fileCount > 0 ? (
+                                <ViewedProgress viewed={viewedCount} total={fileCount} />
                             ) : null}
-                        </h2>
-                        {fileCount !== null && fileCount > 0 ? (
-                            <ViewedProgress viewed={viewedCount} total={fileCount} />
-                        ) : null}
-                    </div>
-                    <div className="flex shrink-0 items-center gap-2">
-                        <HelpTooltip
-                            label={
-                                preferences.fullWidth
-                                    ? "Constrain Files changed to the page width"
-                                    : "Expand Files changed to full viewport width"
-                            }
-                        >
-                            <Button
-                                type="button"
-                                variant="ghost"
-                                size="sm"
-                                className="h-7 gap-1.5 px-2 text-xs"
-                                aria-pressed={preferences.fullWidth}
-                                aria-label={preferences.fullWidth ? "Exit full width" : "Full width"}
-                                onClick={() => setPreferences({ fullWidth: !preferences.fullWidth })}
-                            >
-                                {preferences.fullWidth ? (
-                                    <Minimize2 className="size-3.5" aria-hidden="true" />
-                                ) : (
-                                    <Maximize2 className="size-3.5" aria-hidden="true" />
-                                )}
-                                <span className="hidden sm:inline">
-                                    {preferences.fullWidth ? "Exit full width" : "Full width"}
-                                </span>
-                            </Button>
-                        </HelpTooltip>
-                        <HelpTooltip
-                            label={preferences.showFileList ? "Hide file list for more review space" : "Show file list"}
-                        >
-                            <Button
-                                type="button"
-                                variant="ghost"
-                                size="sm"
-                                className="h-7 gap-1.5 px-2 text-xs"
-                                aria-pressed={preferences.showFileList}
-                                aria-label={preferences.showFileList ? "Hide file list" : "Show file list"}
-                                onClick={() => setPreferences({ showFileList: !preferences.showFileList })}
-                            >
-                                <span className="relative size-3.5">
-                                    <PanelLeftClose
-                                        className={cn(
-                                            "absolute inset-0 size-3.5 transition-[opacity,transform] duration-200 ease-out motion-reduce:transition-none",
-                                            preferences.showFileList ? "scale-100 opacity-100" : "scale-75 opacity-0",
-                                        )}
-                                        aria-hidden="true"
-                                    />
-                                    <PanelLeftOpen
-                                        className={cn(
-                                            "absolute inset-0 size-3.5 transition-[opacity,transform] duration-200 ease-out motion-reduce:transition-none",
-                                            preferences.showFileList ? "scale-75 opacity-0" : "scale-100 opacity-100",
-                                        )}
-                                        aria-hidden="true"
-                                    />
-                                </span>
-                                <span className="hidden sm:inline">
-                                    {preferences.showFileList ? "Hide files" : "Files"}
-                                </span>
-                            </Button>
-                        </HelpTooltip>
-                        <HelpTooltip label="Reload the changed-files list from GitHub">
-                            <Button
-                                variant="ghost"
-                                size="sm"
-                                className="h-7 px-2 text-xs"
-                                disabled={page.files.refreshing}
-                                onClick={() =>
-                                    void notifyAction(() => session.refreshPullRequestFiles(repository, number), {
-                                        loading: "Refreshing files…",
-                                        success: "File list refreshed",
-                                        error: "Could not refresh files.",
-                                    })
+                        </div>
+                        <div className="flex shrink-0 items-center gap-2">
+                            <HelpTooltip
+                                label={
+                                    preferences.fullWidth
+                                        ? "Constrain Files changed to the page width"
+                                        : "Expand Files changed to full viewport width"
                                 }
                             >
-                                <RefreshCw className={cn("size-3.5", page.files.refreshing && "animate-spin")} />
-                                Refresh
-                            </Button>
-                        </HelpTooltip>
-                        <ReviewChangesMenu repository={repository} number={number} />
-                        <DiffSettingsMenu preferences={preferences} onChange={setPreferences} />
+                                <Button
+                                    type="button"
+                                    variant="ghost"
+                                    size="sm"
+                                    className="h-7 gap-1.5 px-2 text-xs"
+                                    aria-pressed={preferences.fullWidth}
+                                    aria-label={preferences.fullWidth ? "Exit full width" : "Full width"}
+                                    onClick={() => setPreferences({ fullWidth: !preferences.fullWidth })}
+                                >
+                                    {preferences.fullWidth ? (
+                                        <Minimize2 className="size-3.5" aria-hidden="true" />
+                                    ) : (
+                                        <Maximize2 className="size-3.5" aria-hidden="true" />
+                                    )}
+                                    <span className="hidden sm:inline">
+                                        {preferences.fullWidth ? "Exit full width" : "Full width"}
+                                    </span>
+                                </Button>
+                            </HelpTooltip>
+                            <HelpTooltip
+                                label={
+                                    preferences.showFileList ? "Hide file list for more review space" : "Show file list"
+                                }
+                            >
+                                <Button
+                                    type="button"
+                                    variant="ghost"
+                                    size="sm"
+                                    className="h-7 gap-1.5 px-2 text-xs"
+                                    aria-pressed={preferences.showFileList}
+                                    aria-label={preferences.showFileList ? "Hide file list" : "Show file list"}
+                                    onClick={() => setPreferences({ showFileList: !preferences.showFileList })}
+                                >
+                                    <span className="relative size-3.5">
+                                        <PanelLeftClose
+                                            className={cn(
+                                                "absolute inset-0 size-3.5 transition-[opacity,transform] duration-200 ease-out motion-reduce:transition-none",
+                                                preferences.showFileList
+                                                    ? "scale-100 opacity-100"
+                                                    : "scale-75 opacity-0",
+                                            )}
+                                            aria-hidden="true"
+                                        />
+                                        <PanelLeftOpen
+                                            className={cn(
+                                                "absolute inset-0 size-3.5 transition-[opacity,transform] duration-200 ease-out motion-reduce:transition-none",
+                                                preferences.showFileList
+                                                    ? "scale-75 opacity-0"
+                                                    : "scale-100 opacity-100",
+                                            )}
+                                            aria-hidden="true"
+                                        />
+                                    </span>
+                                    <span className="hidden sm:inline">
+                                        {preferences.showFileList ? "Hide files" : "Files"}
+                                    </span>
+                                </Button>
+                            </HelpTooltip>
+                            <HelpTooltip label="Reload the changed-files list from GitHub">
+                                <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    className="h-7 px-2 text-xs"
+                                    disabled={isolatingRange ? rangeFilesStatus === "loading" : page.files.refreshing}
+                                    onClick={() => {
+                                        if (commitRange.mode === "range") {
+                                            setCommitRange({ ...commitRange });
+                                            return;
+                                        }
+                                        void notifyAction(() => session.refreshPullRequestFiles(repository, number), {
+                                            loading: "Refreshing files…",
+                                            success: "File list refreshed",
+                                            error: "Could not refresh files.",
+                                        });
+                                    }}
+                                >
+                                    <RefreshCw
+                                        className={cn(
+                                            "size-3.5",
+                                            (isolatingRange ? rangeFilesStatus === "loading" : page.files.refreshing) &&
+                                                "animate-spin",
+                                        )}
+                                    />
+                                    Refresh
+                                </Button>
+                            </HelpTooltip>
+                            <ReviewChangesMenu repository={repository} number={number} />
+                            <DiffSettingsMenu preferences={preferences} onChange={setPreferences} />
+                        </div>
                     </div>
+                    <CommitRangePicker
+                        commits={commits.items}
+                        baseSha={baseSha}
+                        range={commitRange}
+                        disabled={commits.status !== "ready"}
+                        onChange={setCommitRange}
+                    />
                 </header>
 
-                {page.files.error ? (
-                    <p className="border-b px-3 py-2 text-sm text-destructive">{page.files.error.message}</p>
-                ) : null}
+                {filesError ? <p className="border-b px-3 py-2 text-sm text-destructive">{filesError}</p> : null}
 
                 <div className="flex min-h-0 h-[min(70svh,52rem)] flex-col md:flex-row">
                     <aside
@@ -270,8 +412,8 @@ export function ReviewChanges({
                     >
                         <div className="h-full max-md:max-h-48 md:w-full">
                             <FileList
-                                files={page.files.items}
-                                status={page.files.status}
+                                files={filesItems}
+                                status={filesStatus}
                                 selectedPath={selectedPath}
                                 viewedMarks={viewedMarks}
                                 headSha={headSha}
@@ -295,9 +437,9 @@ export function ReviewChanges({
                                 <FileDiffViewer
                                     path={selectedPath}
                                     file={selectedFile}
-                                    diff={selectedDiff?.diff ?? null}
+                                    diff={activeDiff}
                                     isLoading={diffPending}
-                                    error={selectedDiff?.error?.message ?? null}
+                                    error={activeDiffError}
                                     pendingComments={pendingOnFile}
                                     threads={threadsOnFile}
                                     viewerLogin={viewer?.login ?? null}
@@ -306,7 +448,7 @@ export function ReviewChanges({
                                     disabled={draft.stale}
                                     repository={repository}
                                     number={number}
-                                    canApplySuggestions={page.detail?.state === "open"}
+                                    canApplySuggestions={page.detail?.state === "open" && !isolatingRange}
                                     mentionUsers={mentionUsers}
                                     layout={preferences.layout}
                                     hideWhitespace={preferences.hideWhitespace}
@@ -319,15 +461,11 @@ export function ReviewChanges({
                                             : `https://github.com/${repository}/`
                                     }
                                     onLoadAnyway={() =>
-                                        void notifyAction(
-                                            () =>
-                                                session.loadFileDiff(repository, number, selectedPath, { force: true }),
-                                            {
-                                                loading: "Loading file…",
-                                                success: "File loaded",
-                                                error: "Could not load the file.",
-                                            },
-                                        )
+                                        void notifyAction(() => loadSelectedFileForce(), {
+                                            loading: "Loading file…",
+                                            success: "File loaded",
+                                            error: "Could not load the file.",
+                                        })
                                     }
                                     onAddComment={async (target, body) => {
                                         await notifyAction(

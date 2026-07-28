@@ -40,6 +40,8 @@ describe("isAllowedGithubProxyRequest", () => {
             true,
         );
         expect(isAllowedGithubProxyRequest("GET", "/repos/acme/api/contents/src/a.ts", undefined)).toBe(true);
+        expect(isAllowedGithubProxyRequest("GET", "/repos/acme/api/compare/abc...def", undefined)).toBe(true);
+        expect(isAllowedGithubProxyRequest("GET", "/repos/../user", undefined)).toBe(false);
     });
 
     it("rejects destructive or unrelated GitHub endpoints", () => {

@@ -587,6 +587,22 @@ export function createFakeGithub(): FakeGithub {
                 return stored.map(({ before: _before, after: _after, ...file }) => file);
             });
         },
+        listComparedFiles(token, _repository, baseOid, headOid) {
+            return respond("listComparedFiles", () => {
+                authenticate(token);
+                if (!baseOid || !headOid || baseOid === headOid) {
+                    return [];
+                }
+                // Tests reuse the PR file list as a stand-in for any compare range.
+                for (const [key, stored] of filesByPullRequest) {
+                    if (!key.startsWith(`${token}:`)) {
+                        continue;
+                    }
+                    return stored.map(({ before: _before, after: _after, ...file }) => file);
+                }
+                return [];
+            });
+        },
         getPullRequestFileDiff(token, repository, number, path, options?: GetFileDiffOptions) {
             fileDiffQueries.push(path);
 

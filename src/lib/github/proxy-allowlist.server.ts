@@ -25,6 +25,8 @@ const REST_RULES: Array<Rule> = [
     { methods: GET, pattern: /^\/repos\/[^/]+\/[^/]+\/branches$/ },
     { methods: GET, pattern: /^\/repos\/[^/]+\/[^/]+\/rules\/branches\/[^/]+$/ },
     { methods: GET, pattern: /^\/repos\/[^/]+\/[^/]+\/contents\/.+$/ },
+    /** Commit-range file list for the Files changed “Changes from” picker. */
+    { methods: GET, pattern: /^\/repos\/[^/]+\/[^/]+\/compare\/[^/]+$/ },
     { methods: GET, pattern: /^\/repos\/[^/]+\/[^/]+\/issues\/\d+\/comments$/ },
     { methods: new Set(["POST"]), pattern: /^\/repos\/[^/]+\/[^/]+\/issues\/\d+\/comments$/ },
     { methods: new Set(["PUT"]), pattern: /^\/repos\/[^/]+\/[^/]+\/issues\/\d+\/labels$/ },
@@ -75,7 +77,12 @@ function normalizeProxyPath(githubPath: string): string | null {
     const withSlash = githubPath.startsWith("/") ? githubPath : `/${githubPath}`;
     const pathOnly = withSlash.split("?")[0] ?? withSlash;
 
-    if (pathOnly.includes("..") || pathOnly.includes("//") || pathOnly.includes("\\")) {
+    // Reject traversal / odd separators. Do not treat `...` inside a compare ref
+    // (`/compare/abc...def`) as `..` — that is a single path segment.
+    if (pathOnly.includes("//") || pathOnly.includes("\\")) {
+        return null;
+    }
+    if (pathOnly.split("/").some((segment) => segment === ".." || segment === ".")) {
         return null;
     }
 
