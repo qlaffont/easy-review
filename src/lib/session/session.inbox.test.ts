@@ -200,13 +200,18 @@ describe("sections", () => {
         expect(inboxCalls()).toBe(2);
     });
 
-    it("remembers which sections are open across a reload", async () => {
+    it("keeps section expand state in memory for the session, not across reload", async () => {
         const session = await connectedSession();
         await session.toggleSection("drafts");
 
         const reloaded = newSession();
         await reloaded.restore();
 
-        expect(reloaded.state.state.inbox.expandedSections).toContain("drafts");
+        expect(reloaded.state.state.inbox.expandedSections).not.toContain("drafts");
+        expect(reloaded.state.state.inbox.expandedSections).toEqual([
+            "needs-your-review",
+            "returned-to-you",
+            "approved",
+        ]);
     });
 });

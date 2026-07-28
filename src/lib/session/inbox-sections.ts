@@ -170,9 +170,13 @@ export type InboxSectionLayoutEntry = {
 
 export const INBOX_SETTINGS_VERSION = 1 as const;
 
-/** Portable Inbox preferences: collapse state + section layout (visibility, labels, colors, icons). */
+/** Portable Inbox preferences: section layout (visibility, labels, colors, icons, default expand). */
 export type InboxSettings = {
     version: typeof INBOX_SETTINGS_VERSION;
+    /**
+     * Configured defaults derived from each section's `defaultExpanded` flag.
+     * Live open/closed state is tab-session memory only and is not persisted.
+     */
     expandedSections: Array<InboxSectionId>;
     sectionLayout: Array<InboxSectionLayoutEntry>;
 };
@@ -334,9 +338,10 @@ export function visibleSectionDefinitions(
 
 /**
  * Parse a portable Inbox settings payload. Throws when the document is not an object
- * with a supported version.
+ * with a supported version. Live expand lists in older exports are ignored in favor of
+ * each section's `defaultExpanded` flag.
  */
-export function parseInboxSettings(raw: unknown, fallbackExpanded: ReadonlyArray<InboxSectionId>): InboxSettings {
+export function parseInboxSettings(raw: unknown): InboxSettings {
     if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
         throw new Error("Inbox settings must be a JSON object.");
     }
@@ -346,13 +351,12 @@ export function parseInboxSettings(raw: unknown, fallbackExpanded: ReadonlyArray
         throw new Error(`Unsupported Inbox settings version (expected ${INBOX_SETTINGS_VERSION}).`);
     }
 
+    const sectionLayout = normalizeSectionLayout(Array.isArray(document.sectionLayout) ? document.sectionLayout : null);
+
     return {
         version: INBOX_SETTINGS_VERSION,
-        expandedSections: normalizeExpandedSections(
-            Array.isArray(document.expandedSections) ? document.expandedSections : null,
-            fallbackExpanded,
-        ),
-        sectionLayout: normalizeSectionLayout(Array.isArray(document.sectionLayout) ? document.sectionLayout : null),
+        expandedSections: defaultExpandedSections(sectionLayout),
+        sectionLayout,
     };
 }
 

@@ -39,7 +39,6 @@ import {
     defaultSectionLayout,
     groupIntoSections,
     INBOX_SETTINGS_VERSION,
-    normalizeExpandedSections,
     normalizeHexColor,
     normalizeSectionLayout,
     parseInboxSettings,
@@ -466,13 +465,17 @@ export function createEasyReviewSession({ github, store, oauth }: EasyReviewSess
             return;
         }
 
-        const [selected, repositories, inbox, expanded, sections] = await Promise.all([
+        const [selected, repositories, inbox, sections] = await Promise.all([
             readJson<Array<string>>(SELECTED_REPOS_KEY),
             readJson<RepositoriesCache>(REPOS_CACHE_KEY),
             readJson<InboxCache>(INBOX_CACHE_KEY),
-            readJson<Array<InboxSectionId>>(INBOX_EXPANDED_KEY),
             readJson<Array<InboxSectionLayoutEntry>>(INBOX_SECTIONS_KEY),
         ]);
+
+        // Live expand/collapse is tab-session memory only; drop any legacy persisted copy.
+        void store.remove(INBOX_EXPANDED_KEY);
+
+        const sectionLayout = normalizeSectionLayout(sections);
 
         setRepos({
             selected: selected ?? [],
@@ -485,11 +488,8 @@ export function createEasyReviewSession({ github, store, oauth }: EasyReviewSess
             pullRequests: inbox?.pullRequests ?? [],
             lastLoadedAt: inbox?.lastLoadedAt ?? null,
             status: inbox?.pullRequests.length ? "ready" : "idle",
-            expandedSections: normalizeExpandedSections(
-                expanded,
-                defaultExpandedSections(normalizeSectionLayout(sections)),
-            ),
-            sectionLayout: normalizeSectionLayout(sections),
+            expandedSections: defaultExpandedSections(sectionLayout),
+            sectionLayout,
         });
     }
 
@@ -752,8 +752,8 @@ export function createEasyReviewSession({ github, store, oauth }: EasyReviewSess
         const isExpanded = expandedSections.includes(id);
         const next = isExpanded ? expandedSections.filter((section) => section !== id) : [...expandedSections, id];
 
+        // In-memory for this tab only — reload uses "Expanded by default" from section settings.
         setInbox({ expandedSections: next });
-        await store.set(INBOX_EXPANDED_KEY, JSON.stringify(next));
 
         if (!isExpanded) {
             await revalidateInbox();
@@ -837,27 +837,25 @@ export function createEasyReviewSession({ github, store, oauth }: EasyReviewSess
     async function resetSectionLayout(): Promise<void> {
         const layout = defaultSectionLayout();
         await persistSectionLayout(layout);
-        const expanded = defaultExpandedSections(layout);
-        setInbox({ expandedSections: expanded });
-        await store.set(INBOX_EXPANDED_KEY, JSON.stringify(expanded));
+        setInbox({ expandedSections: defaultExpandedSections(layout) });
     }
 
     function getInboxSettings(): InboxSettings {
         return {
             version: INBOX_SETTINGS_VERSION,
-            expandedSections: state.state.inbox.expandedSections,
+            expandedSections: defaultExpandedSections(state.state.inbox.sectionLayout),
             sectionLayout: state.state.inbox.sectionLayout,
         };
     }
 
     async function importInboxSettings(raw: unknown): Promise<void> {
-        const settings = parseInboxSettings(raw, defaultExpandedSections(state.state.inbox.sectionLayout));
+        const settings = parseInboxSettings(raw);
         setInbox({
-            expandedSections: settings.expandedSections,
+            expandedSections: defaultExpandedSections(settings.sectionLayout),
             sectionLayout: settings.sectionLayout,
         });
         await Promise.all([
-            store.set(INBOX_EXPANDED_KEY, JSON.stringify(settings.expandedSections)),
+            store.remove(INBOX_EXPANDED_KEY),
             store.set(INBOX_SECTIONS_KEY, JSON.stringify(settings.sectionLayout)),
         ]);
     }

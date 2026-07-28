@@ -170,30 +170,29 @@ describe("section layout", () => {
 });
 
 describe("parseInboxSettings", () => {
-    it("accepts a versioned document and normalizes layout + expanded sections", () => {
-        const settings = parseInboxSettings(
-            {
-                version: 1,
-                expandedSections: ["approved", "bogus", "approved"],
-                sectionLayout: [{ id: "approved", label: "Ready", hidden: true, color: "rose", icon: "flame" }],
-            },
-            ["needs-your-review"],
-        );
+    it("accepts a versioned document and normalizes layout + expanded defaults", () => {
+        const settings = parseInboxSettings({
+            version: 1,
+            expandedSections: ["drafts", "bogus"],
+            sectionLayout: [
+                { id: "approved", label: "Ready", hidden: true, color: "rose", icon: "flame", defaultExpanded: false },
+                { id: "drafts", label: "Drafts", hidden: false, defaultExpanded: true },
+            ],
+        });
 
-        expect(settings.expandedSections).toEqual(["approved"]);
+        expect(settings.expandedSections).toEqual(["drafts", "needs-your-review", "returned-to-you"]);
         expect(settings.sectionLayout.find((entry) => entry.id === "approved")).toMatchObject({
             label: "Ready",
             hidden: true,
             color: "rose",
             icon: "flame",
+            defaultExpanded: false,
         });
         expect(settings.sectionLayout).toHaveLength(DEFAULT_INBOX_SECTIONS.length);
     });
 
     it("rejects unsupported versions", () => {
-        expect(() => parseInboxSettings({ version: 99 }, ["needs-your-review"])).toThrow(
-            /Unsupported Inbox settings version/,
-        );
+        expect(() => parseInboxSettings({ version: 99 })).toThrow(/Unsupported Inbox settings version/);
     });
 });
 

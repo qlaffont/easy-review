@@ -134,25 +134,32 @@ describe("inbox section customization", () => {
         expect(session.getSectionLayout().find((entry) => entry.id === "approved")?.customColor).toBeNull();
     });
 
-    it("exports and imports collapse + layout preferences", async () => {
+    it("exports and imports layout preferences; expand defaults come from settings", async () => {
         const session = await connectedWithInbox();
         await session.setSectionHidden("drafts", true);
         await session.setSectionLabel("approved", "Ship it");
         await session.setSectionColor("approved", "rose");
         await session.setSectionIcon("approved", "star");
+        await session.setSectionDefaultExpanded("other", true);
         await session.toggleSection("drafts");
 
         const exported = session.getInboxSettings();
         expect(exported.version).toBe(1);
-        expect(exported.expandedSections).toContain("drafts");
         expect(exported.expandedSections).toContain("approved");
+        expect(exported.expandedSections).toContain("other");
+        expect(exported.expandedSections).not.toContain("drafts");
+        expect(session.state.state.inbox.expandedSections).toContain("drafts");
 
         await session.importInboxSettings({
             version: 1,
             expandedSections: ["drafts"],
             sectionLayout: [],
         });
-        expect(session.state.state.inbox.expandedSections).toEqual(["drafts"]);
+        expect(session.state.state.inbox.expandedSections).toEqual([
+            "needs-your-review",
+            "returned-to-you",
+            "approved",
+        ]);
         expect(session.getSectionLayout().find((entry) => entry.id === "waiting-for-reviewers")?.hidden).toBe(true);
         expect(
             session
