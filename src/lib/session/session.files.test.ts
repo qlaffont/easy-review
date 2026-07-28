@@ -7,7 +7,7 @@ import { createEasyReviewSession } from "#/lib/session/session.ts";
 import { createFakeGithub } from "#/lib/session/testing/fake-github.ts";
 import { createMemoryStore } from "#/lib/session/testing/memory-store.ts";
 
-const TOKEN = "github_pat_valid";
+const TOKEN = "test_cred_valid";
 
 let github: FakeGithub;
 let store: MemoryStore;

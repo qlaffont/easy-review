@@ -46,7 +46,8 @@ import {
 } from "#/lib/session/inbox-sections.ts";
 import { mergeRelatedPullRequests, selectRelatedPullRequests } from "#/lib/session/related-pull-requests.ts";
 
-const TOKEN_KEY = "auth:token";
+/** Pre-OAuth localStorage key — removed on restore/disconnect so leftovers cannot leak. */
+const LEGACY_BROWSER_TOKEN_KEY = "auth:token";
 const SELECTED_REPOS_KEY = "repos:selected";
 const REPOS_CACHE_KEY = "repos:cache";
 /** Login the persisted repository preferences belong to. */
@@ -68,7 +69,7 @@ export type AuthStatus = "restoring" | "unauthenticated" | "verifying" | "authen
 export type AuthState = {
     status: AuthStatus;
     viewer: GithubViewer | null;
-    /** True when a token is held in browser storage, even if GitHub currently rejects it. */
+    /** True when a GitHub credential is established (OAuth cookie or in-memory test/fixture). */
     tokenStored: boolean;
     error: SessionError | null;
 };
@@ -307,12 +308,12 @@ export function createEasyReviewSession({ github, store, oauth }: EasyReviewSess
         repositoryMetadata: {},
     });
 
-    /** The verified token, kept out of the reactive state so the UI can never render it. */
+    /** The verified credential, kept out of the reactive state so the UI can never render it. */
     let token: string | null = null;
 
     /**
      * Only the most recent credential check may write to state. Anything slower — a superseded
-     * paste, a cancelled replacement, a request that lands after disconnect — is discarded.
+     * connect, a cancelled replacement, a request that lands after disconnect — is discarded.
      */
     let latestAuthAttempt = 0;
     let latestRepositoryLoad = 0;
@@ -453,8 +454,8 @@ export function createEasyReviewSession({ github, store, oauth }: EasyReviewSess
     }
 
     /**
-     * Preferences belong to one GitHub account. Connecting a token for someone else starts from a
-     * clean allowlist rather than showing them the previous account's repos and pull requests.
+     * Preferences belong to one GitHub account. Signing in as someone else starts from a clean
+     * allowlist rather than showing them the previous account's repos and pull requests.
      */
     async function loadAccountPreferences(login: string): Promise<void> {
         const account = await store.get(REPOS_ACCOUNT_KEY);
@@ -494,24 +495,24 @@ export function createEasyReviewSession({ github, store, oauth }: EasyReviewSess
     }
 
     /**
-     * Load any previously stored token (tests / legacy) or probe the OAuth session cookie via the
-     * proxy. Stays in `restoring` throughout so the UI shows one boot state.
+     * Probe the OAuth session cookie via the proxy (production), or settle unauthenticated
+     * (tests call `connect` instead). Always drops any pre-OAuth browser-stored secret.
      */
     async function restore(): Promise<void> {
         const attempt = ++latestAuthAttempt;
-        const stored = await store.get(TOKEN_KEY);
-        const candidate = stored ?? (oauth ? oauth.sessionCredential : null);
+        await store.remove(LEGACY_BROWSER_TOKEN_KEY);
 
         if (attempt !== latestAuthAttempt) {
             return;
         }
 
-        if (!candidate) {
+        if (!oauth) {
             setAuth({ status: "unauthenticated", viewer: null, tokenStored: false, error: null });
             return;
         }
 
-        setAuth({ tokenStored: Boolean(stored) || Boolean(oauth) });
+        const candidate = oauth.sessionCredential;
+        setAuth({ tokenStored: true });
 
         try {
             const viewer = await github.getViewer(candidate);
@@ -521,23 +522,21 @@ export function createEasyReviewSession({ github, store, oauth }: EasyReviewSess
             setAuth({ status: "authenticated", viewer, error: null });
         } catch (error) {
             if (attempt !== latestAuthAttempt) return;
-            if (!stored && oauth) {
-                const sessionError = toSessionError(error);
-                // Missing/expired cookie → quiet connect screen. Other failures stay visible.
-                if (sessionError.kind === "unauthorized") {
-                    setAuth({ status: "unauthenticated", viewer: null, tokenStored: false, error: null });
-                    return;
-                }
-
-                setAuth({ status: "unauthenticated", viewer: null, tokenStored: false, error: sessionError });
+            const sessionError = toSessionError(error);
+            // Missing/expired cookie → quiet connect screen. Other failures stay visible.
+            if (sessionError.kind === "unauthorized") {
+                setAuth({ status: "unauthenticated", viewer: null, tokenStored: false, error: null });
                 return;
             }
 
-            setAuth({ status: "unauthenticated", viewer: null, error: toSessionError(error) });
+            setAuth({ status: "unauthenticated", viewer: null, tokenStored: false, error: sessionError });
         }
     }
 
-    /** Validate a pasted token and, only if GitHub accepts it, persist it in the browser. */
+    /**
+     * Validate a credential and keep it in memory only (tests / `VITE_FAKE_GITHUB` fixtures).
+     * Production auth goes through OAuth — never store secrets in the browser.
+     */
     async function connect(candidate: string): Promise<void> {
         const trimmed = candidate.trim();
 
@@ -559,7 +558,7 @@ export function createEasyReviewSession({ github, store, oauth }: EasyReviewSess
             const viewer = await github.getViewer(trimmed);
             if (attempt !== latestAuthAttempt) return;
             token = trimmed;
-            await store.set(TOKEN_KEY, trimmed);
+            await store.remove(LEGACY_BROWSER_TOKEN_KEY);
             await loadAccountPreferences(viewer.login);
             setAuth({ status: "authenticated", viewer, tokenStored: true, error: null });
         } catch (error) {
@@ -603,8 +602,8 @@ export function createEasyReviewSession({ github, store, oauth }: EasyReviewSess
     }
 
     /**
-     * Forget the token and everything derived from it. Repository names are cleared too: on a
-     * shared machine they would otherwise say which private repos this person reviews.
+     * Sign out and forget everything derived from the session. Repository names are cleared too:
+     * on a shared machine they would otherwise say which private repos this person reviews.
      */
     async function disconnect(): Promise<void> {
         latestAuthAttempt++;
@@ -618,7 +617,7 @@ export function createEasyReviewSession({ github, store, oauth }: EasyReviewSess
                 // Local wipe still proceeds if the logout endpoint is unreachable.
             }
         }
-        await Promise.all([store.remove(TOKEN_KEY), forgetAccountData()]);
+        await Promise.all([store.remove(LEGACY_BROWSER_TOKEN_KEY), forgetAccountData()]);
         setAuth({ status: "unauthenticated", viewer: null, tokenStored: false, error: null });
     }
 

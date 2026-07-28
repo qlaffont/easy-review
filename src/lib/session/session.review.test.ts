@@ -7,7 +7,7 @@ import { createEasyReviewSession } from "#/lib/session/session.ts";
 import { createFakeGithub } from "#/lib/session/testing/fake-github.ts";
 import { createMemoryStore } from "#/lib/session/testing/memory-store.ts";
 
-const TOKEN = "github_pat_valid";
+const TOKEN = "test_cred_valid";
 
 let github: FakeGithub;
 let store: MemoryStore;
@@ -79,7 +79,7 @@ describe("staged review drafts", () => {
         await session.setReviewEvent("acme/api", 1, "approve");
 
         const reloaded = createEasyReviewSession({ github, store });
-        await reloaded.restore();
+        await reloaded.connect(TOKEN);
         await reloaded.loadPullRequest("acme/api", 1);
 
         const draft = reloaded.getReviewDraft("acme/api", 1);
@@ -208,15 +208,15 @@ describe("staged review drafts", () => {
             body: "quentin's note",
         });
 
-        github.addAccount("github_pat_other", { login: "hubot" });
-        github.addPullRequest("github_pat_other", {
+        github.addAccount("test_cred_other", { login: "hubot" });
+        github.addPullRequest("test_cred_other", {
             repository: "acme/api",
             number: 1,
             headSha: "sha-aaa",
             title: "Ship reviews",
         });
 
-        await session.connect("github_pat_other");
+        await session.connect("test_cred_other");
         await session.loadPullRequest("acme/api", 1);
 
         expect(session.getReviewDraft("acme/api", 1).comments).toEqual([]);

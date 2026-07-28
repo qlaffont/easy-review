@@ -24,25 +24,73 @@ import { notifyCopied, notifyError } from "#/lib/toast.ts";
 import { cn } from "#/lib/utils.ts";
 
 /**
+ * Alert / icon classes from `remark-github-blockquote-alert` only. Unrestricted `className`
+ * would let hostile PR bodies use Tailwind utilities (`fixed inset-0 z-50 …`) to spoof UI.
+ */
+const ALERT_CLASS = /^markdown-alert(?:-[\w-]+)?$/;
+const SECTION_CLASS = /^(?:markdown-alert(?:-[\w-]+)?|footnotes)$/;
+const OCTICON_CLASS = /^octicon$/;
+
+/**
  * Allow the same structural HTML GitHub keeps in issue/PR bodies, plus alert markup
- * produced by `remark-github-blockquote-alert` (div/svg/path + classes).
+ * produced by `remark-github-blockquote-alert` (div/svg/path + allowlisted classes).
  */
 const sanitizeSchema = {
     ...defaultSchema,
     tagNames: [...(defaultSchema.tagNames ?? []), "svg", "path", "section"],
     attributes: {
         ...defaultSchema.attributes,
-        div: [...(defaultSchema.attributes?.div ?? []), ["className"], "class", "dir"],
-        p: [...(defaultSchema.attributes?.p ?? []), ["className"], "class", "dir"],
-        span: [...(defaultSchema.attributes?.span ?? []), ["className"], "class"],
-        section: [["className"], "class", "dir"],
-        details: [...(defaultSchema.attributes?.details ?? []), "open", ["className"], "class"],
-        summary: [...(defaultSchema.attributes?.summary ?? []), ["className"], "class"],
-        svg: ["className", "class", "viewBox", "width", "height", "ariaHidden", "aria-hidden", "fill", "role", "xmlns"],
+        div: [...(defaultSchema.attributes?.div ?? []), ["className", ALERT_CLASS], ["class", ALERT_CLASS], "dir"],
+        p: [...(defaultSchema.attributes?.p ?? []), ["className", ALERT_CLASS], ["class", ALERT_CLASS], "dir"],
+        section: [
+            ...(defaultSchema.attributes?.section ?? []).filter(
+                (entry) => !(Array.isArray(entry) && entry[0] === "className"),
+            ),
+            ["className", SECTION_CLASS],
+            ["class", SECTION_CLASS],
+            "dir",
+        ],
+        details: [...(defaultSchema.attributes?.details ?? []), "open"],
+        summary: [...(defaultSchema.attributes?.summary ?? [])],
+        svg: [
+            ["className", OCTICON_CLASS],
+            ["class", OCTICON_CLASS],
+            "viewBox",
+            "width",
+            "height",
+            "ariaHidden",
+            "aria-hidden",
+            "fill",
+            "role",
+            "xmlns",
+        ],
         path: ["d", "fill", "fillRule", "fill-rule", "clipRule", "clip-rule"],
         input: [...(defaultSchema.attributes?.input ?? []), "disabled", "checked", "type"],
     },
 };
+
+/** GitHub-hosted images only — blocks arbitrary tracking pixels in PR/comment markdown. */
+function isAllowedMarkdownImageSrc(src: string | undefined): boolean {
+    if (!src) {
+        return false;
+    }
+
+    try {
+        const url = new URL(src, "https://github.com");
+        if (url.protocol !== "https:" && url.protocol !== "http:") {
+            return false;
+        }
+        const host = url.hostname.toLowerCase();
+        return (
+            host === "github.com" ||
+            host === "www.github.com" ||
+            host.endsWith(".github.com") ||
+            host.endsWith(".githubusercontent.com")
+        );
+    } catch {
+        return false;
+    }
+}
 
 const remarkPlugins = [remarkGfm, remarkAlert, remarkBoldMentions];
 const rehypePlugins: Array<typeof rehypeRaw | [typeof rehypeSanitize, typeof sanitizeSchema]> = [
@@ -355,6 +403,12 @@ const components = {
             return null;
         }
         return <p {...props}>{children}</p>;
+    },
+    img: ({ src, alt, ...props }: ComponentPropsWithoutRef<"img">) => {
+        if (!isAllowedMarkdownImageSrc(src)) {
+            return null;
+        }
+        return <img src={src} alt={alt ?? ""} loading="lazy" referrerPolicy="no-referrer" {...props} />;
     },
     input: ({ type, ...props }: ComponentPropsWithoutRef<"input">) => {
         if (type === "checkbox") {

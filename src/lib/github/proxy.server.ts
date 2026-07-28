@@ -1,4 +1,5 @@
 import { readGithubAccessToken } from "#/lib/github/auth-cookies.server.ts";
+import { isAllowedGithubProxyRequest } from "#/lib/github/proxy-allowlist.server.ts";
 
 const GITHUB_API = "https://api.github.com";
 
@@ -64,6 +65,7 @@ function forwardResponseHeaders(upstream: Headers): Headers {
 /**
  * Forwards a browser request to the GitHub API, attaching the OAuth access token from the
  * HTTP-only cookie. The client never sees client_secret or the access token.
+ * Only allowlisted REST paths / EasyReview GraphQL operations are forwarded.
  */
 export async function proxyGithubRequest(request: Request, githubPath: string): Promise<Response> {
     const accessToken = readGithubAccessToken();
@@ -74,18 +76,22 @@ export async function proxyGithubRequest(request: Request, githubPath: string): 
 
     const incoming = new URL(request.url);
     const path = githubPath.startsWith("/") ? githubPath : `/${githubPath}`;
+    const method = request.method.toUpperCase();
+    const body = method === "GET" || method === "HEAD" ? undefined : await request.arrayBuffer();
+
+    if (!isAllowedGithubProxyRequest(method, path, body)) {
+        return Response.json({ message: "This GitHub API request is not allowed." }, { status: 403 });
+    }
+
     const target = new URL(`${GITHUB_API}${path}`);
     target.search = incoming.search;
 
     const headers = forwardRequestHeaders(request);
     headers.set("authorization", `Bearer ${accessToken}`);
 
-    const method = request.method.toUpperCase();
-    const body = method === "GET" || method === "HEAD" ? undefined : await request.arrayBuffer();
-
     let upstream: Response;
     try {
-        upstream = await fetch(target, { method, headers, body });
+        upstream = await fetch(target, { method, headers, body, redirect: "manual" });
     } catch {
         return Response.json({ message: "Could not reach GitHub." }, { status: 502 });
     }

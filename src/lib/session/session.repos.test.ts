@@ -8,7 +8,7 @@ import { createEasyReviewSession } from "#/lib/session/session.ts";
 import { createFakeGithub } from "#/lib/session/testing/fake-github.ts";
 import { createMemoryStore } from "#/lib/session/testing/memory-store.ts";
 
-const TOKEN = "github_pat_valid";
+const TOKEN = "test_cred_valid";
 
 let github: FakeGithub;
 let store: MemoryStore;
@@ -33,7 +33,7 @@ beforeEach(() => {
 });
 
 describe("discovery", () => {
-    it("lists every repository the token can see", async () => {
+    it("lists every repository the credential can see", async () => {
         const session = await connectedSession();
 
         await session.refreshRepositories();
@@ -46,7 +46,7 @@ describe("discovery", () => {
         expect(session.state.state.repos).toMatchObject({ status: "ready", refreshing: false, error: null });
     });
 
-    it("refuses to call GitHub without a token", async () => {
+    it("refuses to call GitHub without a credential", async () => {
         const session = newSession();
         await session.restore();
 
@@ -75,11 +75,11 @@ describe("discovery", () => {
         const callsAfterFirstLoad = github.calls.length;
 
         const reloaded = newSession();
-        await reloaded.restore();
+        await reloaded.connect(TOKEN);
         await reloaded.loadRepositories();
 
         expect(reloaded.state.state.repos.available).toHaveLength(3);
-        expect(github.calls).toHaveLength(callsAfterFirstLoad + 1); // only the getViewer of restore
+        expect(github.calls).toHaveLength(callsAfterFirstLoad + 1); // only the getViewer of connect
     });
 });
 
@@ -119,7 +119,7 @@ describe("allowlist", () => {
         await session.setSelectedRepositories(["acme/api"]);
 
         const reloaded = newSession();
-        await reloaded.restore();
+        await reloaded.connect(TOKEN);
 
         expect(reloaded.state.state.repos.selected).toEqual(["acme/api"]);
         expect(reloaded.getSelectedRepositories()[0]).toMatchObject({ nameWithOwner: "acme/api", isPrivate: true });
@@ -130,7 +130,7 @@ describe("allowlist", () => {
         await session.setSelectedRepositories(["acme/api"]);
 
         const reloaded = newSession();
-        await reloaded.restore();
+        await reloaded.connect(TOKEN);
 
         expect(reloaded.getSelectedRepositories()).toEqual([
             {
@@ -146,25 +146,25 @@ describe("allowlist", () => {
 });
 
 describe("switching account", () => {
-    it("does not show the previous account's repositories after replacing the token", async () => {
+    it("does not show the previous account's repositories after switching account", async () => {
         const session = await connectedSession();
         await session.refreshRepositories();
         await session.setSelectedRepositories(["acme/api"]);
 
-        github.addAccount("github_pat_other", { login: "octocat" });
-        github.addRepository("github_pat_other", "octocat/hello");
-        await session.connect("github_pat_other");
+        github.addAccount("test_cred_other", { login: "octocat" });
+        github.addRepository("test_cred_other", "octocat/hello");
+        await session.connect("test_cred_other");
 
         expect(session.state.state.repos).toMatchObject({ status: "idle", available: [], selected: [] });
     });
 
-    it("keeps the selection when the same account replaces its token", async () => {
+    it("keeps the selection when the same account reconnects", async () => {
         const session = await connectedSession();
         await session.refreshRepositories();
         await session.setSelectedRepositories(["acme/api"]);
 
-        github.addAccount("github_pat_rotated", { login: "quentin" });
-        await session.connect("github_pat_rotated");
+        github.addAccount("test_cred_rotated", { login: "quentin" });
+        await session.connect("test_cred_rotated");
 
         expect(session.state.state.repos.selected).toEqual(["acme/api"]);
     });

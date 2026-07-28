@@ -8,7 +8,7 @@ import { createEasyReviewSession } from "#/lib/session/session.ts";
 import { createFakeGithub } from "#/lib/session/testing/fake-github.ts";
 import { createMemoryStore } from "#/lib/session/testing/memory-store.ts";
 
-const TOKEN = "github_pat_valid";
+const TOKEN = "test_cred_valid";
 const VIEWER = "quentin";
 
 let github: FakeGithub;
@@ -88,7 +88,7 @@ describe("loading a pull request", () => {
         await pending;
     });
 
-    it("refuses to fetch without a token", async () => {
+    it("refuses to fetch without a credential", async () => {
         const session = newSession();
         await session.restore();
 

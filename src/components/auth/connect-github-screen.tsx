@@ -18,7 +18,7 @@ const ERROR_TITLES: Record<string, string> = {
 };
 
 /** `onClose` is only provided when reconnecting while already signed in. */
-export function ConnectTokenScreen({ onClose }: { onClose?: () => void }) {
+export function ConnectGithubScreen({ onClose }: { onClose?: () => void }) {
     const session = useSession();
     const auth = useSessionState((state) => state.auth);
     const isReplacing = onClose !== undefined;

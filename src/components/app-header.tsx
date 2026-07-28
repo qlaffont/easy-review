@@ -13,7 +13,7 @@ import {
 import { useSession, useSessionState } from "#/lib/session/provider.tsx";
 import { notifySuccess } from "#/lib/toast.ts";
 
-export function AppHeader({ onReplaceToken }: { onReplaceToken: () => void }) {
+export function AppHeader({ onReconnect }: { onReconnect: () => void }) {
     const session = useSession();
     const viewer = useSessionState((state) => state.auth.viewer);
 
@@ -47,7 +47,7 @@ export function AppHeader({ onReplaceToken }: { onReplaceToken: () => void }) {
                         Signed in with GitHub OAuth
                     </DropdownMenuLabel>
                     <DropdownMenuSeparator />
-                    <DropdownMenuItem onSelect={onReplaceToken}>
+                    <DropdownMenuItem onSelect={onReconnect}>
                         <KeyRound aria-hidden="true" />
                         Reconnect GitHub…
                     </DropdownMenuItem>

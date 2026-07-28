@@ -7,7 +7,7 @@ import { createEasyReviewSession } from "#/lib/session/session.ts";
 import { createFakeGithub } from "#/lib/session/testing/fake-github.ts";
 import { createMemoryStore } from "#/lib/session/testing/memory-store.ts";
 
-const TOKEN = "github_pat_valid";
+const TOKEN = "test_cred_valid";
 
 let github: FakeGithub;
 let store: MemoryStore;
@@ -47,7 +47,7 @@ describe("inbox section customization", () => {
         await session.setSectionLabel("needs-your-review", "My turn");
 
         const reloaded = createEasyReviewSession({ github, store });
-        await reloaded.restore();
+        await reloaded.connect(TOKEN);
 
         expect(reloaded.getSectionLayout().find((entry) => entry.id === "needs-your-review")?.label).toBe("My turn");
         await reloaded.setSelectedRepositories(["acme/api"]);
@@ -101,7 +101,7 @@ describe("inbox section customization", () => {
         await session.setSectionDefaultExpanded("approved", false);
 
         const reloaded = createEasyReviewSession({ github, store });
-        await reloaded.restore();
+        await reloaded.connect(TOKEN);
 
         expect(reloaded.getSectionLayout().find((entry) => entry.id === "drafts")?.defaultExpanded).toBe(true);
         expect(reloaded.getSectionLayout().find((entry) => entry.id === "approved")?.defaultExpanded).toBe(false);
@@ -113,7 +113,7 @@ describe("inbox section customization", () => {
         await session.setSectionIcon("needs-your-review", "flame");
 
         const reloaded = createEasyReviewSession({ github, store });
-        await reloaded.restore();
+        await reloaded.connect(TOKEN);
 
         expect(reloaded.getSectionLayout().find((entry) => entry.id === "needs-your-review")).toMatchObject({
             color: "violet",
@@ -127,7 +127,7 @@ describe("inbox section customization", () => {
         await session.setSectionCustomColor("approved", "#AbC");
 
         const reloaded = createEasyReviewSession({ github, store });
-        await reloaded.restore();
+        await reloaded.connect(TOKEN);
 
         expect(reloaded.getSectionLayout().find((entry) => entry.id === "approved")?.customColor).toBe("#aabbcc");
         await session.setSectionColor("approved", "rose");

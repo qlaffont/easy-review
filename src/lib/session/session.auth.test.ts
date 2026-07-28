@@ -8,7 +8,7 @@ import { createEasyReviewSession } from "#/lib/session/session.ts";
 import { createFakeGithub } from "#/lib/session/testing/fake-github.ts";
 import { createMemoryStore } from "#/lib/session/testing/memory-store.ts";
 
-const VALID_TOKEN = "github_pat_valid";
+const VALID_CREDENTIAL = "test_cred_valid";
 
 let github: FakeGithub;
 let store: MemoryStore;
@@ -17,8 +17,16 @@ function newSession() {
     return createEasyReviewSession({ github, store });
 }
 
-function storedToken() {
-    return store.entries()["auth:token"] ?? null;
+function oauthSession(sessionCredential = "session") {
+    return createEasyReviewSession({
+        github,
+        store,
+        oauth: {
+            sessionCredential,
+            logout: async () => undefined,
+            beginLogin: () => undefined,
+        },
+    });
 }
 
 beforeEach(() => {
@@ -27,13 +35,13 @@ beforeEach(() => {
 });
 
 describe("auth state", () => {
-    it("starts as restoring so the UI can wait for browser storage", () => {
+    it("starts as restoring so the UI can wait for the OAuth cookie probe", () => {
         const session = newSession();
 
         expect(session.state.state.auth.status).toBe("restoring");
     });
 
-    it("settles as unauthenticated without calling GitHub when no token is stored", async () => {
+    it("settles as unauthenticated without calling GitHub when OAuth is not configured", async () => {
         const session = newSession();
 
         await session.restore();
@@ -49,11 +57,11 @@ describe("auth state", () => {
 });
 
 describe("connect", () => {
-    it("authenticates and persists a token GitHub accepts", async () => {
-        github.addAccount(VALID_TOKEN, { login: "quentin" });
+    it("authenticates an in-memory credential GitHub accepts (tests / fixtures)", async () => {
+        github.addAccount(VALID_CREDENTIAL, { login: "quentin" });
         const session = newSession();
 
-        await session.connect(VALID_TOKEN);
+        await session.connect(VALID_CREDENTIAL);
 
         expect(session.state.state.auth).toMatchObject({
             status: "authenticated",
@@ -61,19 +69,19 @@ describe("connect", () => {
             error: null,
         });
         expect(session.state.state.auth.viewer?.login).toBe("quentin");
-        expect(storedToken()).toBe(VALID_TOKEN);
+        expect(store.entries()["auth:token"]).toBeUndefined();
     });
 
-    it("trims pasted whitespace", async () => {
-        github.addAccount(VALID_TOKEN);
+    it("trims whitespace around the credential", async () => {
+        github.addAccount(VALID_CREDENTIAL);
         const session = newSession();
 
-        await session.connect(`  ${VALID_TOKEN}\n`);
+        await session.connect(`  ${VALID_CREDENTIAL}\n`);
 
         expect(session.state.state.auth.status).toBe("authenticated");
     });
 
-    it("rejects an empty paste without calling GitHub", async () => {
+    it("rejects an empty credential without calling GitHub", async () => {
         const session = newSession();
 
         await session.connect("   ");
@@ -82,14 +90,13 @@ describe("connect", () => {
         expect(github.calls).toEqual([]);
     });
 
-    it("explains an unauthorized token and stores nothing", async () => {
+    it("explains an unauthorized credential", async () => {
         const session = newSession();
 
-        await session.connect("github_pat_revoked");
+        await session.connect("test_cred_revoked");
 
         expect(session.state.state.auth).toMatchObject({ status: "unauthenticated", tokenStored: false });
         expect(session.state.state.auth.error?.kind).toBe("unauthorized");
-        expect(store.entries()).toEqual({});
     });
 
     it("explains a rate-limited response and keeps the retry time", async () => {
@@ -97,61 +104,58 @@ describe("connect", () => {
         github.failNextWith(new EasyReviewError("rate-limited", "GitHub rate limit reached.", { retryAt }));
         const session = newSession();
 
-        await session.connect(VALID_TOKEN);
+        await session.connect(VALID_CREDENTIAL);
 
         expect(session.state.state.auth.error).toMatchObject({ kind: "rate-limited", retryAt });
         expect(session.state.state.auth.status).toBe("unauthenticated");
     });
 
-    it("replaces a working token with another one", async () => {
-        github.addAccount(VALID_TOKEN, { login: "quentin" });
-        github.addAccount("github_pat_other", { login: "octocat" });
+    it("replaces a working credential with another one", async () => {
+        github.addAccount(VALID_CREDENTIAL, { login: "quentin" });
+        github.addAccount("test_cred_other", { login: "octocat" });
         const session = newSession();
-        await session.connect(VALID_TOKEN);
+        await session.connect(VALID_CREDENTIAL);
 
-        await session.connect("github_pat_other");
+        await session.connect("test_cred_other");
 
         expect(session.state.state.auth.viewer?.login).toBe("octocat");
-        expect(storedToken()).toBe("github_pat_other");
     });
 
-    it("keeps the working session when a replacement token is rejected", async () => {
-        github.addAccount(VALID_TOKEN, { login: "quentin" });
+    it("keeps the working session when a replacement credential is rejected", async () => {
+        github.addAccount(VALID_CREDENTIAL, { login: "quentin" });
         const session = newSession();
-        await session.connect(VALID_TOKEN);
+        await session.connect(VALID_CREDENTIAL);
 
-        await session.connect("github_pat_typo");
+        await session.connect("test_cred_typo");
 
         expect(session.state.state.auth.status).toBe("authenticated");
         expect(session.state.state.auth.viewer?.login).toBe("quentin");
         expect(session.state.state.auth.error?.kind).toBe("unauthorized");
-        expect(storedToken()).toBe(VALID_TOKEN);
     });
 });
 
 describe("overlapping credential checks", () => {
-    it("keeps the result of the most recent paste, whatever order GitHub replies in", async () => {
-        github.addAccount("github_pat_a", { login: "first" });
-        github.addAccount("github_pat_b", { login: "second" });
+    it("keeps the result of the most recent connect, whatever order GitHub replies in", async () => {
+        github.addAccount("test_cred_a", { login: "first" });
+        github.addAccount("test_cred_b", { login: "second" });
         const session = newSession();
 
         const release = github.deferNext();
-        const slow = session.connect("github_pat_a");
-        await session.connect("github_pat_b");
+        const slow = session.connect("test_cred_a");
+        await session.connect("test_cred_b");
         release();
         await slow;
 
         expect(session.state.state.auth.viewer?.login).toBe("second");
-        expect(storedToken()).toBe("github_pat_b");
     });
 
     it("does not let a slow failure undo a newer successful connect", async () => {
-        github.addAccount("github_pat_b", { login: "second" });
+        github.addAccount("test_cred_b", { login: "second" });
         const session = newSession();
 
         const release = github.deferNext();
-        const slow = session.connect("github_pat_rejected");
-        await session.connect("github_pat_b");
+        const slow = session.connect("test_cred_rejected");
+        await session.connect("test_cred_b");
         release();
         await slow;
 
@@ -160,64 +164,68 @@ describe("overlapping credential checks", () => {
     });
 
     it("discards a verification the user cancelled", async () => {
-        github.addAccount(VALID_TOKEN);
+        github.addAccount(VALID_CREDENTIAL);
         const session = newSession();
 
         const release = github.deferNext();
-        const pending = session.connect(VALID_TOKEN);
+        const pending = session.connect(VALID_CREDENTIAL);
         session.cancelConnect();
         release();
         await pending;
 
         expect(session.state.state.auth).toMatchObject({ status: "unauthenticated", viewer: null });
-        expect(store.entries()).toEqual({});
     });
 
     it("discards a verification that lands after the user disconnected", async () => {
-        github.addAccount(VALID_TOKEN);
+        github.addAccount(VALID_CREDENTIAL);
         const session = newSession();
 
         const release = github.deferNext();
-        const pending = session.connect(VALID_TOKEN);
+        const pending = session.connect(VALID_CREDENTIAL);
         await session.disconnect();
         release();
         await pending;
 
         expect(session.state.state.auth).toMatchObject({ status: "unauthenticated", viewer: null });
-        expect(store.entries()).toEqual({});
     });
 });
 
-describe("restore", () => {
-    it("reuses a token kept from a previous visit", async () => {
-        github.addAccount(VALID_TOKEN, { login: "quentin" });
-        await newSession().connect(VALID_TOKEN);
+describe("oauth restore", () => {
+    it("probes the session credential and never keeps a browser-stored secret", async () => {
+        github.addAccount("session", { login: "quentin" });
+        await store.set("auth:token", "leftover-secret");
 
-        const reloaded = newSession();
-        await reloaded.restore();
+        const session = oauthSession();
+        await session.restore();
 
-        expect(reloaded.state.state.auth.status).toBe("authenticated");
-        expect(reloaded.state.state.auth.viewer?.login).toBe("quentin");
+        expect(session.state.state.auth).toMatchObject({
+            status: "authenticated",
+            tokenStored: true,
+            error: null,
+        });
+        expect(session.state.state.auth.viewer?.login).toBe("quentin");
+        expect(store.entries()["auth:token"]).toBeUndefined();
     });
 
-    it("reports a stored token that GitHub no longer accepts", async () => {
-        github.addAccount(VALID_TOKEN);
-        await newSession().connect(VALID_TOKEN);
-        github.revokeAccount(VALID_TOKEN);
+    it("settles quietly when the OAuth cookie is missing", async () => {
+        const session = oauthSession();
 
-        const reloaded = newSession();
-        await reloaded.restore();
+        await session.restore();
 
-        expect(reloaded.state.state.auth).toMatchObject({ status: "unauthenticated", tokenStored: true });
-        expect(reloaded.state.state.auth.error?.kind).toBe("unauthorized");
+        expect(session.state.state.auth).toMatchObject({
+            status: "unauthenticated",
+            viewer: null,
+            tokenStored: false,
+            error: null,
+        });
     });
 });
 
 describe("disconnect", () => {
-    it("clears the token from the browser and from session state", async () => {
-        github.addAccount(VALID_TOKEN);
+    it("clears session state", async () => {
+        github.addAccount(VALID_CREDENTIAL);
         const session = newSession();
-        await session.connect(VALID_TOKEN);
+        await session.connect(VALID_CREDENTIAL);
 
         await session.disconnect();
 
@@ -226,13 +234,12 @@ describe("disconnect", () => {
             viewer: null,
             tokenStored: false,
         });
-        expect(store.entries()).toEqual({});
     });
 
-    it("leaves nothing behind for the next session to restore", async () => {
-        github.addAccount(VALID_TOKEN);
+    it("leaves the next restore unauthenticated without OAuth", async () => {
+        github.addAccount(VALID_CREDENTIAL);
         const session = newSession();
-        await session.connect(VALID_TOKEN);
+        await session.connect(VALID_CREDENTIAL);
         await session.disconnect();
 
         const reloaded = newSession();

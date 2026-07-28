@@ -9,7 +9,7 @@ import { createEasyReviewSession } from "#/lib/session/session.ts";
 import { createFakeGithub } from "#/lib/session/testing/fake-github.ts";
 import { createMemoryStore } from "#/lib/session/testing/memory-store.ts";
 
-const TOKEN = "github_pat_valid";
+const TOKEN = "test_cred_valid";
 const VIEWER = "quentin";
 
 let github: FakeGithub;
@@ -114,7 +114,7 @@ describe("cache and revalidation", () => {
         await session.loadInbox();
 
         const reloaded = newSession();
-        await reloaded.restore();
+        await reloaded.connect(TOKEN);
 
         expect(reloaded.state.state.inbox.status).toBe("ready");
         expect(reloaded.state.state.inbox.pullRequests).toHaveLength(2);
@@ -205,7 +205,7 @@ describe("sections", () => {
         await session.toggleSection("drafts");
 
         const reloaded = newSession();
-        await reloaded.restore();
+        await reloaded.connect(TOKEN);
 
         expect(reloaded.state.state.inbox.expandedSections).not.toContain("drafts");
         expect(reloaded.state.state.inbox.expandedSections).toEqual([
