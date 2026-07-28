@@ -39,6 +39,7 @@ beforeEach(() => {
         line: 1,
         side: "RIGHT",
         isResolved: false,
+        isOutdated: false,
         diffHunk: "@@ -1,1 +1,1 @@\n-one\n+two",
         comments: [
             {

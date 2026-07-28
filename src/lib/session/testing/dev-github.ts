@@ -203,6 +203,7 @@ export function createSeededGithub(): GithubClient {
                 line: 2,
                 side: "RIGHT",
                 isResolved: false,
+                isOutdated: number % 7 === 0,
                 diffHunk: "@@ -1,3 +1,3 @@\n export function answer() {\n-  return 1;\n+  return 2;\n }",
                 comments: [
                     {

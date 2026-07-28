@@ -1,6 +1,8 @@
 import { useSelector } from "@tanstack/react-store";
 import { useEffect, useState } from "react";
 
+import type { ReviewThread } from "#/lib/session/types.ts";
+
 import { Button } from "#/components/ui/button.tsx";
 import { RelativeTime } from "#/components/ui/relative-time.tsx";
 import { Textarea } from "#/components/ui/textarea.tsx";
@@ -37,35 +39,17 @@ export function ReviewThreadsPanel({
         <div className="flex max-h-48 shrink-0 flex-col gap-2 overflow-y-auto border-t bg-muted/20 p-3">
             <h3 className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Threads on this file</h3>
             {visible.map((thread) => (
-                <ThreadCard
-                    key={thread.id}
-                    repository={repository}
-                    number={number}
-                    threadId={thread.id}
-                    comments={thread.comments}
-                    isResolved={thread.isResolved}
-                />
+                <ThreadCard key={thread.id} repository={repository} number={number} thread={thread} />
             ))}
         </div>
     );
 }
 
-function ThreadCard({
-    repository,
-    number,
-    threadId,
-    comments,
-    isResolved,
-}: {
-    repository: string;
-    number: number;
-    threadId: string;
-    comments: Array<{ id: string; author: string; body: string; createdAt: string }>;
-    isResolved: boolean;
-}) {
+function ThreadCard({ repository, number, thread }: { repository: string; number: number; thread: ReviewThread }) {
     const session = useSession();
     const [reply, setReply] = useState("");
     const [sending, setSending] = useState(false);
+    const { comments, isResolved } = thread;
 
     async function send() {
         if (!reply.trim()) {
@@ -74,7 +58,7 @@ function ThreadCard({
 
         setSending(true);
         try {
-            await notifyAction(() => session.replyToReviewThread(repository, number, threadId, reply), {
+            await notifyAction(() => session.replyToReviewThread(repository, number, thread.id, reply), {
                 loading: "Sending reply…",
                 success: "Reply posted",
                 error: "Could not post the reply.",
@@ -89,8 +73,16 @@ function ThreadCard({
 
     return (
         <article className="rounded-md border bg-background p-2 text-xs">
-            <p className="mb-1 text-[10px] uppercase tracking-wide text-muted-foreground">
-                {isResolved ? "Resolved" : "Open"} · {comments.length} {comments.length === 1 ? "comment" : "comments"}
+            <p className="mb-1 flex flex-wrap items-center gap-1.5 text-[10px] tracking-wide text-muted-foreground uppercase">
+                <span>
+                    {isResolved ? "Resolved" : "Open"} · {comments.length}{" "}
+                    {comments.length === 1 ? "comment" : "comments"}
+                </span>
+                {thread.isOutdated ? (
+                    <span className="rounded bg-amber-500/15 px-1 py-px font-medium text-amber-800 dark:bg-amber-400/15 dark:text-amber-200">
+                        outdated
+                    </span>
+                ) : null}
             </p>
             <ul className="flex flex-col gap-1.5">
                 {comments.map((comment) => (

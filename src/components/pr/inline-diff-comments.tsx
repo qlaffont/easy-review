@@ -8,6 +8,7 @@ import { CommentActionsMenu, quoteMarkdown } from "#/components/pr/comment-actio
 import { suggestionOriginalFromHunk } from "#/components/pr/diff-hunk-preview.tsx";
 import { MarkdownComposer } from "#/components/pr/markdown-composer.tsx";
 import { Markdown } from "#/components/pr/markdown.tsx";
+import { ReviewThreadStatusLabels } from "#/components/pr/review-thread-status.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import { RelativeTime } from "#/components/ui/relative-time.tsx";
 import { notifyAction } from "#/lib/toast.ts";
@@ -241,7 +242,12 @@ function ThreadCommentCard({
     }
 
     return (
-        <article className={cn("overflow-hidden rounded-md border bg-background", thread.isResolved && "opacity-80")}>
+        <article
+            className={cn(
+                "overflow-hidden rounded-md border bg-background",
+                (thread.isResolved || thread.isOutdated) && "opacity-80",
+            )}
+        >
             <button
                 type="button"
                 className="flex w-full cursor-pointer items-center gap-1.5 border-b px-3 py-1.5 text-left text-xs text-muted-foreground hover:bg-muted/40"
@@ -252,9 +258,9 @@ function ThreadCommentCard({
                 ) : (
                     <ChevronRight className="size-3.5 shrink-0" aria-hidden="true" />
                 )}
-                <span>
-                    {label}
-                    {thread.isResolved ? <span className="ml-1 text-muted-foreground">(resolved)</span> : null}
+                <span className="inline-flex min-w-0 flex-wrap items-center gap-1.5">
+                    <span>{label}</span>
+                    <ReviewThreadStatusLabels thread={thread} />
                 </span>
             </button>
             {open ? (

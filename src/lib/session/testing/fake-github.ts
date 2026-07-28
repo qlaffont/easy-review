@@ -726,6 +726,7 @@ export function createFakeGithub(): FakeGithub {
                         line: comment.line,
                         side: comment.side,
                         isResolved: false,
+                        isOutdated: false,
                         diffHunk: `@@ -${comment.line},1 +${comment.line},1 @@\n ${comment.body.slice(0, 40)}`,
                         comments: [
                             {

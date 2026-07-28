@@ -15,9 +15,10 @@ describe("languageFromPath", () => {
         expect(languageFromPath(".env.example")).toBe("dotenv");
     });
 
-    it("returns null for unknown paths", () => {
+    it("returns null for unknown or unsupported paths", () => {
         expect(languageFromPath("notes.weirdext")).toBeNull();
         expect(languageFromPath("LICENSE")).toBeNull();
+        expect(languageFromPath("native/foo.cpp")).toBeNull();
     });
 });
 

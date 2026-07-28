@@ -8,14 +8,14 @@ import { defineConfig } from "vite";
 const config = defineConfig({
     resolve: { tsconfigPaths: true },
     ssr: {
-        // Mermaid is client-only (dynamic import + React.lazy). Keep it out of the Nitro SSR graph.
-        external: ["mermaid"],
+        // Mermaid + Shiki are browser-only (dynamic import). Keep them out of the SSR graph.
+        external: ["mermaid", "shiki"],
     },
     plugins: [
         devtools(),
         nitro({
             rollupConfig: {
-                external: [/^@sentry\//, /^mermaid($|\/)/],
+                external: [/^@sentry\//, /^mermaid($|\/)/, /^shiki($|\/)/, /^@shikijs\//],
             },
         }),
         tailwindcss(),

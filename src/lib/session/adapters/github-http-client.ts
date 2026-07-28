@@ -3164,6 +3164,7 @@ type ReviewThreadCommentNode = {
 type ReviewThreadNode = {
     id: string;
     isResolved: boolean;
+    isOutdated: boolean;
     path: string;
     startLine: number | null;
     line: number | null;
@@ -3190,6 +3191,7 @@ const REVIEW_THREADS_QUERY = `
                     nodes {
                         id
                         isResolved
+                        isOutdated
                         path
                         startLine
                         line
@@ -3288,6 +3290,7 @@ function toReviewThread(node: ReviewThreadNode): ReviewThread {
         line: node.line,
         side: node.diffSide,
         isResolved: node.isResolved,
+        isOutdated: node.isOutdated,
         diffHunk: comments[0]?.diffHunk ?? null,
         comments: comments.map(toThreadComment),
     };

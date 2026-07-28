@@ -28,6 +28,7 @@ import { EditedMeta } from "#/components/pr/edited-meta.tsx";
 import { MarkdownComposer } from "#/components/pr/markdown-composer.tsx";
 import { Markdown } from "#/components/pr/markdown.tsx";
 import { ReactionBar } from "#/components/pr/reaction-bar.tsx";
+import { ReviewThreadStatusLabels } from "#/components/pr/review-thread-status.tsx";
 import {
     AlertDialog,
     AlertDialogAction,
@@ -441,7 +442,7 @@ function TimelineReviewThread({
             <article
                 className={cn(
                     "min-w-0 overflow-hidden rounded-md border bg-background",
-                    thread.isResolved && "opacity-90",
+                    (thread.isResolved || thread.isOutdated) && "opacity-90",
                 )}
             >
                 <header className="flex flex-wrap items-center gap-x-2 gap-y-1 border-b bg-muted/30 px-3 py-2 text-xs">
@@ -472,7 +473,7 @@ function TimelineReviewThread({
                         )}
                         <span className="min-w-0 truncate font-mono">{thread.path}</span>
                         {thread.line != null ? <span className="shrink-0 tabular-nums">:{thread.line}</span> : null}
-                        {thread.isResolved ? <span className="shrink-0 text-muted-foreground">(resolved)</span> : null}
+                        <ReviewThreadStatusLabels thread={thread} className="ms-1" />
                     </button>
                 </div>
 

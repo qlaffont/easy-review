@@ -423,6 +423,8 @@ export type ReviewThread = {
     line: number | null;
     side: DiffSide | null;
     isResolved: boolean;
+    /** True when the commented lines no longer exist on the PR head (GitHub `isOutdated`). */
+    isOutdated: boolean;
     /** Unified diff snippet from the first review comment (GitHub `diffHunk`), when available. */
     diffHunk: string | null;
     comments: Array<ReviewThreadComment>;
