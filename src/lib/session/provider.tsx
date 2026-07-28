@@ -10,7 +10,7 @@ import { createSeededGithub, DEV_TOKEN } from "#/lib/session/testing/dev-github.
 
 const SessionContext = createContext<EasyReviewSession | null>(null);
 
-/** `VITE_FAKE_GITHUB=1 bun run dev` swaps GitHub for fixtures. Folded away in a build. */
+/** `VITE_FAKE_GITHUB=1 pnpm dev` swaps GitHub for fixtures. Folded away in a build. */
 const useFixtures = import.meta.env.DEV && import.meta.env.VITE_FAKE_GITHUB === "1";
 
 async function logoutOAuthSession(): Promise<void> {

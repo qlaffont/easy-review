@@ -2,6 +2,10 @@
   "name": "easy-review",
   "private": true,
   "type": "module",
+  "packageManager": "pnpm@10.28.0",
+  "engines": {
+    "node": ">=24.18.0"
+  },
   "imports": {
     "#/*": "./src/*"
   },
@@ -71,7 +75,7 @@
     "@tanstack/router-cli": "^1.132.0",
     "@types/diff": "^8.0.0",
     "@types/mdast": "^4.0.4",
-    "@types/node": "^22.10.2",
+    "@types/node": "^24.10.2",
     "@types/react": "^19.2.0",
     "@types/react-dom": "^19.2.0",
     "@types/unist": "^3.0.3",
@@ -84,11 +88,5 @@
     "typescript": "^7.0.2",
     "vite": "^8.0.0",
     "vitest": "^4.1.10"
-  },
-  "pnpm": {
-    "onlyBuiltDependencies": [
-      "esbuild",
-      "lightningcss"
-    ]
   }
 }

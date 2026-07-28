@@ -4,6 +4,8 @@ TanStack Start app for GitHub pull-request triage and review. The browser talks 
 
 ## Getting Started
 
+Requires **Node.js 24 LTS** (see `.node-version`) and **pnpm**.
+
 ```bash
 pnpm install
 cp .env.example .env

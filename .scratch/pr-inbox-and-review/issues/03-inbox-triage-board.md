@@ -23,6 +23,6 @@ One aliased GraphQL document covers ten repositories, and a repository the token
 comes back as a `null` alias rather than failing the batch. Only `RATE_LIMITED` and
 `UNAUTHORIZED` condemn the whole response.
 
-`VITE_FAKE_GITHUB=1 bun run dev` serves the Inbox from fixtures (token `dev`) so the screens can
+`VITE_FAKE_GITHUB=1 pnpm dev` serves the Inbox from fixtures (token `dev`) so the screens can
 be looked at without handing a real token to a dev server. The seed is behind `import.meta.env.DEV`
 and is absent from the production bundle.

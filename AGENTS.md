@@ -12,7 +12,7 @@ Five canonical triage roles mapped to `Status:` lines in issue files. See `docs/
 
 Single-context: `CONTEXT.md` + `docs/adr/` at the repo root. See `docs/agents/domain.md`.
 
-Skills live under `.agents/skills/`. Install more with `bunx skills add <owner/repo@skill> -y`.
+Skills live under `.agents/skills/`. Install more with `pnpm dlx skills add <owner/repo@skill> -y`.
 
 ### Design & visual craft
 
