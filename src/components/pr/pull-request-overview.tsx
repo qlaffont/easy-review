@@ -136,6 +136,7 @@ export function PullRequestOverview({
     );
 
     useEffect(() => {
+        session.invalidateInbox();
         void session.loadPullRequest(repository, number);
         void session.loadPullRequestFiles(repository, number);
     }, [session, repository, number]);

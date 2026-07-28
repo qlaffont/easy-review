@@ -43,7 +43,6 @@ export function InboxBoard() {
     const openRepoPicker = useOpenRepoPicker();
     const inbox = useSessionState((state) => state.inbox);
     const selectedCount = useSessionState((state) => state.repos.selected.length);
-    const viewerLogin = useSessionState((state) => state.auth.viewer?.login ?? null);
     const sections = useSelector(session.state, () => session.getInboxSections());
     const sectionLayout = useSelector(session.state, () => session.getSectionLayout());
     const [selectedKey, setSelectedKey] = useState<string | null>(null);
@@ -96,17 +95,18 @@ export function InboxBoard() {
         });
     });
 
+    // Always refetch when opening the Inbox (mount / return from a PR) and when the allowlist size changes.
     useEffect(() => {
-        void session.loadInbox();
-    }, [session, selectedCount, inbox.stale]);
+        void session.refreshInbox();
+    }, [session, selectedCount]);
 
-    // Refresh on Inbox mount, when returning from a PR, and whenever the signed-in account changes.
+    // Repo swaps that keep the same count still flip `stale` — pick those up without a second mount fetch loop.
     useEffect(() => {
-        if (!viewerLogin) {
+        if (!inbox.stale) {
             return;
         }
-        void session.revalidateInbox();
-    }, [session, viewerLogin]);
+        void session.loadInbox();
+    }, [session, inbox.stale]);
 
     useQuietRevalidate(() => {
         void session.revalidateInbox();

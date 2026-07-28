@@ -776,6 +776,11 @@ export function createEasyReviewSession({ github, store, oauth }: EasyReviewSess
         await refreshInbox();
     }
 
+    /** Mark the inbox dirty so the next Inbox visit / loadInbox picks up a fresh GitHub fetch. */
+    function invalidateInbox(): void {
+        setInbox({ stale: true });
+    }
+
     async function toggleSection(id: InboxSectionId): Promise<void> {
         const { expandedSections } = state.state.inbox;
         const isExpanded = expandedSections.includes(id);
@@ -2383,6 +2388,7 @@ export function createEasyReviewSession({ github, store, oauth }: EasyReviewSess
         loadInbox,
         refreshInbox,
         revalidateInbox,
+        invalidateInbox,
         toggleSection,
         getSectionLayout,
         setSectionHidden,
