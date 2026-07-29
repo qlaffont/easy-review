@@ -1,6 +1,7 @@
 import { Building2, ExternalLink, Github, ShieldCheck } from "lucide-react";
 import { useEffect } from "react";
 
+import { AppFooter } from "#/components/app-footer.tsx";
 import { ThemeMenuButton } from "#/components/theme-menu.tsx";
 import { Alert, AlertDescription, AlertTitle } from "#/components/ui/alert.tsx";
 import { Button } from "#/components/ui/button.tsx";
@@ -51,7 +52,7 @@ export function ConnectGithubScreen({ onClose }: { onClose?: () => void }) {
     }
 
     return (
-        <div className="relative mx-auto flex w-full max-w-2xl flex-col gap-8 px-6 py-16">
+        <div className="relative mx-auto flex min-h-svh w-full max-w-2xl flex-col gap-8 px-6 py-16">
             <div className="absolute top-4 right-4 sm:top-6 sm:right-6">
                 <ThemeMenuButton />
             </div>
@@ -137,6 +138,10 @@ export function ConnectGithubScreen({ onClose }: { onClose?: () => void }) {
                     HTTP-only cookie and is attached by the server when proxying requests to GitHub.
                 </AlertDescription>
             </Alert>
+
+            <div className="mt-auto">
+                <AppFooter />
+            </div>
         </div>
     );
 }

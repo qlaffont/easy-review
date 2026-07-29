@@ -5,6 +5,7 @@ import { ActionsProvider } from "#/components/actions/actions-provider.tsx";
 import { ClipboardHotkeys } from "#/components/actions/clipboard-hotkeys.tsx";
 import { EscapeToInboxHotkey } from "#/components/actions/escape-to-inbox.tsx";
 import { RefreshPullRequestHotkey } from "#/components/actions/refresh-pull-request-hotkey.tsx";
+import { AppFooter } from "#/components/app-footer.tsx";
 import { AppHeader } from "#/components/app-header.tsx";
 import { ConnectGithubScreen } from "#/components/auth/connect-github-screen.tsx";
 import { CommandPalette } from "#/components/command-palette.tsx";
@@ -39,6 +40,7 @@ export function SessionGate({ children }: { children: React.ReactNode }) {
                                 </div>
                             ) : null}
                             <main className="flex-1">{children}</main>
+                            <AppFooter />
                         </div>
                         <EscapeToInboxHotkey />
                         <RefreshPullRequestHotkey />
