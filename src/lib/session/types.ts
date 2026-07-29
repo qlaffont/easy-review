@@ -17,6 +17,17 @@ export type ReviewerStatus = {
 /** Whether GitHub thinks the branches can still be combined. */
 export type MergeableState = "mergeable" | "conflicting" | "unknown";
 
+/** GitHub `mergeStateStatus` — whether the PR meets merge requirements (reviews, checks, etc.). */
+export type MergeStateStatus =
+    | "behind"
+    | "blocked"
+    | "clean"
+    | "dirty"
+    | "draft"
+    | "has_hooks"
+    | "unknown"
+    | "unstable";
+
 /** Everything an Inbox row needs. Deliberately flat so it can be cached as JSON. */
 export type PullRequestSummary = {
     /** `owner/repo#number`, stable across refreshes. */
@@ -141,6 +152,10 @@ export type PullRequestDetail = PullRequestSummary & {
     defaultMergeMethod: MergeMethod | null;
     /** Commits on the pull request — used for merge-method copy. */
     commitCount: number;
+    /** Whether reviews, checks, and other rules allow merging (GitHub merge box). */
+    mergeStateStatus: MergeStateStatus;
+    /** True when the signed-in viewer may bypass branch rules and merge anyway. */
+    viewerCanMergeAsAdmin: boolean;
 };
 
 /** One commit on a pull request (the Commits tab list). */

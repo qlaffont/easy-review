@@ -70,6 +70,8 @@ describe("getPullRequest", () => {
                             reactionGroups: [],
                             baseRefOid: "base",
                             headRefOid: "head",
+                            mergeStateStatus: "BLOCKED",
+                            viewerCanMergeAsAdmin: false,
                             mergeable: "CONFLICTING",
                             baseRef: {
                                 branchProtectionRule: {
@@ -154,6 +156,8 @@ describe("getPullRequest", () => {
                                     body: "",
                                     baseRefOid: "base",
                                     headRefOid: "head",
+                                    mergeStateStatus: "BLOCKED",
+                                    viewerCanMergeAsAdmin: true,
                                     mergeable: "MERGEABLE",
                                     baseRef: { branchProtectionRule: null },
                                     labels: { nodes: [] },

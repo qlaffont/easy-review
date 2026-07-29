@@ -41,7 +41,13 @@ import {
     type FileViewState,
     type ViewedFileMarks,
 } from "#/lib/diff-preferences.ts";
-import { buildFileTree, defaultExpandedDirPaths, type FileTreeDirNode, type FileTreeNode } from "#/lib/file-tree.ts";
+import {
+    buildFileTree,
+    defaultExpandedDirPaths,
+    filePathsInDisplayOrder,
+    type FileTreeDirNode,
+    type FileTreeNode,
+} from "#/lib/file-tree.ts";
 import { useSession } from "#/lib/session/provider.tsx";
 import { notifyAction } from "#/lib/toast.ts";
 import { cn } from "#/lib/utils.ts";
@@ -238,27 +244,27 @@ export function ReviewChanges({
     })();
 
     function setPathViewed(path: string, viewed: boolean) {
-        setViewedMarks((current) => {
-            const next = { ...current };
-            if (viewed && headSha) {
-                next[path] = headSha;
-            } else {
-                delete next[path];
-            }
-            writeViewedFileMarks(repository, number, next);
-            return next;
-        });
+        const nextMarks = { ...viewedMarks };
+        if (viewed && headSha) {
+            nextMarks[path] = headSha;
+        } else {
+            delete nextMarks[path];
+        }
+        setViewedMarks(nextMarks);
+        writeViewedFileMarks(repository, number, nextMarks);
 
         if (viewed) {
-            const files = filesItems;
-            const index = files.findIndex((file) => file.path === path);
-            const isDone = (candidate: string) =>
-                candidate === path || fileViewState(viewedMarks, candidate, headSha) === "viewed";
-            const nextFile =
-                files.slice(index + 1).find((file) => !isDone(file.path)) ??
-                files.slice(0, Math.max(0, index)).find((file) => !isDone(file.path));
-            if (nextFile) {
-                setSelectedPath(nextFile.path);
+            const orderedPaths = filePathsInDisplayOrder(filesItems, preferences.fileListLayout);
+            const index = orderedPaths.indexOf(path);
+            if (index === -1) {
+                return;
+            }
+            const isViewed = (candidate: string) => fileViewState(nextMarks, candidate, headSha) === "viewed";
+            const nextPath =
+                orderedPaths.slice(index + 1).find((candidate) => !isViewed(candidate)) ??
+                orderedPaths.slice(0, index).find((candidate) => !isViewed(candidate));
+            if (nextPath) {
+                setSelectedPath(nextPath);
             }
         }
     }

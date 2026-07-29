@@ -1,10 +1,18 @@
 import { useNavigate } from "@tanstack/react-router";
 import { useSelector } from "@tanstack/react-store";
-import { AlertTriangle, Check, ChevronDown, GitMerge, GitPullRequestDraft, RotateCcw } from "lucide-react";
+import { AlertTriangle, Check, CheckCircle2, ChevronDown, CircleX, GitPullRequestDraft, Users } from "lucide-react";
 import { useMemo, useRef, useState } from "react";
 
 import type { MergeMethod, PullRequestDetail } from "#/lib/session/types.ts";
 
+import {
+    checksStatusLabel,
+    isMergeBlockedByRequirements,
+    isReviewBlocking,
+    mergeFooterHint,
+    mergingBlockedDescription,
+    reviewRequiredDescription,
+} from "#/components/pr/merge-requirements.ts";
 import {
     AlertDialog,
     AlertDialogAction,
@@ -17,6 +25,7 @@ import {
     AlertDialogTrigger,
 } from "#/components/ui/alert-dialog.tsx";
 import { Button } from "#/components/ui/button.tsx";
+import { Checkbox } from "#/components/ui/checkbox.tsx";
 import {
     DropdownMenu,
     DropdownMenuContent,
@@ -68,6 +77,7 @@ export function PullRequestControls({ detail }: { detail: PullRequestDetail }) {
     const unresolvedThreads = useMemo(() => threads.items.filter((thread) => !thread.isResolved), [threads.items]);
     const [error, setError] = useState<string | null>(null);
     const [busy, setBusy] = useState(false);
+    const [bypassRules, setBypassRules] = useState(false);
     const busyRef = useRef(false);
     const mergeOptions = mergeMethodOptions(detail.allowedMergeMethods, detail.commitCount);
     const [mergeMethod, setMergeMethod] = useState<MergeMethod>(
@@ -137,8 +147,19 @@ export function PullRequestControls({ detail }: { detail: PullRequestDetail }) {
         );
     }
 
-    const mergeBlocked = detail.mergeable === "conflicting" || detail.isDraft || mergeOptions.length === 0;
+    const requirementsBlocked = isMergeBlockedByRequirements(detail);
+    const conflictBlocked = detail.mergeable === "conflicting";
+    const draftBlocked = detail.isDraft;
+    const canBypass = detail.viewerCanMergeAsAdmin;
+    const mergeBlocked =
+        conflictBlocked ||
+        draftBlocked ||
+        mergeOptions.length === 0 ||
+        (requirementsBlocked && !(canBypass && bypassRules));
     const mergeDisabled = busy || mergeBlocked;
+    const blockedDescription = mergingBlockedDescription(detail);
+    const checksStatus = checksStatusLabel(detail);
+    const pendingReviewCount = detail.reviewRequests.length;
     const activeMergeMethod = mergeOptions.some((method) => method.value === mergeMethod)
         ? mergeMethod
         : (mergeOptions[0]?.value ?? mergeMethod);
@@ -152,7 +173,7 @@ export function PullRequestControls({ detail }: { detail: PullRequestDetail }) {
         <section className="overflow-hidden rounded-lg border">
             <h2 className="sr-only">Manage</h2>
 
-            {detail.mergeable === "conflicting" ? (
+            {conflictBlocked ? (
                 <StatusRow
                     icon={<AlertTriangle className="size-4" aria-hidden="true" />}
                     iconClassName="bg-muted text-muted-foreground"
@@ -168,7 +189,7 @@ export function PullRequestControls({ detail }: { detail: PullRequestDetail }) {
                 />
             ) : null}
 
-            {detail.isDraft ? (
+            {draftBlocked ? (
                 <StatusRow
                     icon={<GitPullRequestDraft className="size-4" aria-hidden="true" />}
                     iconClassName="bg-muted text-muted-foreground"
@@ -198,24 +219,25 @@ export function PullRequestControls({ detail }: { detail: PullRequestDetail }) {
                 />
             ) : null}
 
-            {detail.requiredApprovingReviewCount != null &&
-            detail.requiredApprovingReviewCount > 0 &&
-            detail.reviewDecision === "review-required" ? (
+            {isReviewBlocking(detail) ? (
                 <StatusRow
-                    icon={<GitMerge className="size-4" aria-hidden="true" />}
-                    iconClassName="bg-muted text-muted-foreground"
-                    title={`At least ${detail.requiredApprovingReviewCount} approving ${
-                        detail.requiredApprovingReviewCount === 1 ? "review is" : "reviews are"
-                    } required to merge this pull request.`}
+                    icon={<CircleX className="size-4" aria-hidden="true" />}
+                    iconClassName="bg-red-500/10 text-red-600 dark:text-red-400"
+                    title={detail.reviewDecision === "changes-requested" ? "Changes requested" : "Review required"}
+                    description={
+                        detail.reviewDecision === "changes-requested"
+                            ? "Changes have been requested on this pull request."
+                            : reviewRequiredDescription(detail)
+                    }
                 />
             ) : null}
 
-            {detail.reviewRequests.length > 0 ? (
+            {isReviewBlocking(detail) && pendingReviewCount > 0 ? (
                 <StatusRow
-                    icon={<RotateCcw className="size-4" aria-hidden="true" />}
+                    icon={<Users className="size-4" aria-hidden="true" />}
                     iconClassName="bg-muted text-muted-foreground"
-                    title="Reviewers have already been requested"
-                    description="Ask them again if they need another look."
+                    title={`${pendingReviewCount} pending ${pendingReviewCount === 1 ? "review" : "reviews"}`}
+                    description="Waiting for requested reviewers to submit their review."
                     action={
                         <Button
                             size="sm"
@@ -244,16 +266,41 @@ export function PullRequestControls({ detail }: { detail: PullRequestDetail }) {
                 />
             ) : null}
 
+            {checksStatus ? (
+                <StatusRow
+                    icon={<CheckCircle2 className="size-4" aria-hidden="true" />}
+                    iconClassName={
+                        checksStatus.ok
+                            ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
+                            : "bg-red-500/10 text-red-600 dark:text-red-400"
+                    }
+                    title={checksStatus.title}
+                />
+            ) : null}
+
+            {requirementsBlocked && blockedDescription && !conflictBlocked && !draftBlocked ? (
+                <StatusRow
+                    icon={<AlertTriangle className="size-4" aria-hidden="true" />}
+                    iconClassName="bg-red-500/10 text-red-600 dark:text-red-400"
+                    title="Merging is blocked"
+                    description={blockedDescription}
+                />
+            ) : null}
+
             <div className="flex flex-wrap items-center justify-end gap-x-3 gap-y-2 bg-muted/20 px-4 py-3">
                 <p className="mr-auto text-xs text-muted-foreground">
-                    {mergeOptions.length === 0
-                        ? "No merge methods are enabled for this repository."
-                        : detail.mergeable === "conflicting"
-                          ? `Conflicts with ${detail.baseRefName} — resolve them before merging.`
-                          : detail.isDraft
-                            ? "Draft pull requests cannot be merged."
-                            : `Ready to land into ${detail.baseRefName}.`}
+                    {mergeFooterHint(detail, mergeOptions.length, mergeBlocked)}
                 </p>
+                {canBypass ? (
+                    <label className="flex cursor-pointer items-center gap-2 text-xs text-red-600 dark:text-red-400">
+                        <Checkbox
+                            checked={bypassRules}
+                            onCheckedChange={(checked) => setBypassRules(checked === true)}
+                            disabled={busy || conflictBlocked || draftBlocked}
+                        />
+                        Merge without waiting for requirements (bypass rules)
+                    </label>
+                ) : null}
                 {unresolvedThreads.length > 0 ? (
                     <Button size="sm" variant="outline" disabled={busy} onClick={() => void resolveAllThreads()}>
                         Resolve all threads
@@ -276,9 +323,13 @@ export function PullRequestControls({ detail }: { detail: PullRequestDetail }) {
                             </AlertDialogTrigger>
                             <AlertDialogContent>
                                 <AlertDialogHeader>
-                                    <AlertDialogTitle>Merge pull request?</AlertDialogTitle>
+                                    <AlertDialogTitle>
+                                        {canBypass && bypassRules ? "Bypass rules and merge?" : "Merge pull request?"}
+                                    </AlertDialogTitle>
                                     <AlertDialogDescription>
-                                        This will {activeMergeMethod} {detail.headRefName} into {detail.baseRefName}.
+                                        {canBypass && bypassRules
+                                            ? `This will ${activeMergeMethod} ${detail.headRefName} into ${detail.baseRefName} without waiting for merge requirements.`
+                                            : `This will ${activeMergeMethod} ${detail.headRefName} into ${detail.baseRefName}.`}
                                     </AlertDialogDescription>
                                 </AlertDialogHeader>
                                 <AlertDialogFooter>

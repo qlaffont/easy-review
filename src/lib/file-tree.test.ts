@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { PullRequestFile } from "#/lib/session/types.ts";
 
-import { buildFileTree, defaultExpandedDirPaths } from "#/lib/file-tree.ts";
+import { buildFileTree, defaultExpandedDirPaths, filePathsInDisplayOrder } from "#/lib/file-tree.ts";
 
 function file(path: string, status: PullRequestFile["status"] = "modified"): PullRequestFile {
     return { path, previousPath: null, status, additions: 1, deletions: 0, stub: null };
@@ -45,5 +45,17 @@ describe("defaultExpandedDirPaths", () => {
     it("includes every directory path", () => {
         const tree = buildFileTree([file("a/b/c.ts"), file("a/d.ts")]);
         expect([...defaultExpandedDirPaths(tree)].sort()).toEqual(["a", "a/b"]);
+    });
+});
+
+describe("filePathsInDisplayOrder", () => {
+    const files = [file("z.txt"), file("src/b.ts"), file("src/a.ts"), file("docs/readme.md")];
+
+    it("returns API order in flat layout", () => {
+        expect(filePathsInDisplayOrder(files, "flat")).toEqual(["z.txt", "src/b.ts", "src/a.ts", "docs/readme.md"]);
+    });
+
+    it("returns tree walk order in tree layout", () => {
+        expect(filePathsInDisplayOrder(files, "tree")).toEqual(["docs/readme.md", "src/a.ts", "src/b.ts", "z.txt"]);
     });
 });

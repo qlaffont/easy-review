@@ -7,6 +7,7 @@ import type {
     FileChangeStatus,
     MergeableState,
     MergeMethod,
+    MergeStateStatus,
     PullRequestComment,
     PullRequestCommit,
     PullRequestDetail,
@@ -2174,6 +2175,8 @@ type PullRequestDetailNode = Omit<PullRequestNode, "commits"> & {
     reactionGroups: Array<ReactionGroupNode>;
     baseRefOid: string;
     headRefOid: string;
+    mergeStateStatus: string;
+    viewerCanMergeAsAdmin: boolean;
     baseRef: {
         branchProtectionRule: {
             requiresApprovingReviews: boolean;
@@ -2267,6 +2270,8 @@ const PULL_REQUEST_QUERY = `
                 }
                 baseRefOid
                 headRefOid
+                mergeStateStatus
+                viewerCanMergeAsAdmin
                 baseRef {
                     branchProtectionRule {
                         requiresApprovingReviews
@@ -3160,6 +3165,27 @@ function toCheckCount(
     return checkRuns + redacted;
 }
 
+function toMergeStateStatus(status: string | null | undefined): MergeStateStatus {
+    switch (status) {
+        case "BEHIND":
+            return "behind";
+        case "BLOCKED":
+            return "blocked";
+        case "CLEAN":
+            return "clean";
+        case "DIRTY":
+            return "dirty";
+        case "DRAFT":
+            return "draft";
+        case "HAS_HOOKS":
+            return "has_hooks";
+        case "UNSTABLE":
+            return "unstable";
+        default:
+            return "unknown";
+    }
+}
+
 function toMergeableState(mergeable: PullRequestNode["mergeable"] | null | undefined): MergeableState {
     switch (mergeable) {
         case "MERGEABLE":
@@ -3341,6 +3367,8 @@ function toPullRequestDetail(node: PullRequestDetailNode, settings: RepositoryMe
         allowedMergeMethods,
         defaultMergeMethod: toDefaultMergeMethod(settings, allowedMergeMethods),
         commitCount: node.commits.totalCount,
+        mergeStateStatus: toMergeStateStatus(node.mergeStateStatus),
+        viewerCanMergeAsAdmin: node.viewerCanMergeAsAdmin ?? false,
     };
 }
 

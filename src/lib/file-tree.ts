@@ -107,3 +107,29 @@ export function defaultExpandedDirPaths(nodes: ReadonlyArray<FileTreeNode>): Set
     walk(nodes);
     return paths;
 }
+
+/** File paths in the same order as the Review Changes sidebar (flat list or tree walk). */
+export function filePathsInDisplayOrder(files: ReadonlyArray<PullRequestFile>, layout: "flat" | "tree"): Array<string> {
+    if (layout === "flat") {
+        return files.map((file) => file.path);
+    }
+
+    return flattenFileTreePaths(buildFileTree(files));
+}
+
+function flattenFileTreePaths(nodes: ReadonlyArray<FileTreeNode>): Array<string> {
+    const paths: Array<string> = [];
+
+    function walk(list: ReadonlyArray<FileTreeNode>) {
+        for (const node of list) {
+            if (node.kind === "file") {
+                paths.push(node.file.path);
+                continue;
+            }
+            walk(node.children);
+        }
+    }
+
+    walk(nodes);
+    return paths;
+}

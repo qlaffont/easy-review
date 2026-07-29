@@ -147,6 +147,18 @@ function buildPullRequest(input: PullRequestInput): PullRequestDetail {
         allowedMergeMethods: input.allowedMergeMethods ?? ["merge", "squash", "rebase"],
         defaultMergeMethod: input.defaultMergeMethod ?? "squash",
         commitCount: input.commitCount ?? 1,
+        mergeStateStatus:
+            input.mergeStateStatus ??
+            (input.isDraft
+                ? "draft"
+                : input.reviewDecision === "review-required" || input.reviewDecision === "changes-requested"
+                  ? "blocked"
+                  : input.checks === "failure"
+                    ? "unstable"
+                    : input.mergeable === "conflicting"
+                      ? "dirty"
+                      : "clean"),
+        viewerCanMergeAsAdmin: input.viewerCanMergeAsAdmin ?? false,
     };
 }
 
