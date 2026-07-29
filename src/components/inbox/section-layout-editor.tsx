@@ -25,6 +25,7 @@ import {
     Download,
     Filter,
     GripVertical,
+    Inbox,
     Plus,
     Trash2,
     Upload,
@@ -47,8 +48,9 @@ import {
     resolveSectionVisual,
     visualForSection,
 } from "#/components/inbox/section-visuals.ts";
+import { SettingsDialogTitle } from "#/components/settings/settings-ui.tsx";
 import { Button } from "#/components/ui/button.tsx";
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "#/components/ui/dialog.tsx";
+import { Dialog, DialogContent, DialogDescription, DialogHeader } from "#/components/ui/dialog.tsx";
 import {
     DropdownMenu,
     DropdownMenuContent,
@@ -139,7 +141,12 @@ export function SectionLayoutEditor({ open, onOpenChange }: { open: boolean; onO
             <Dialog open={open} onOpenChange={onOpenChange}>
                 <DialogContent className="flex max-h-[90svh] w-full flex-col gap-4 overflow-hidden sm:max-w-2xl">
                     <DialogHeader className="min-w-0 shrink-0 space-y-1.5 pr-8 text-left">
-                        <DialogTitle>Inbox sections</DialogTitle>
+                        <SettingsDialogTitle
+                            icon={Inbox}
+                            toneClassName="border-sky-500/35 bg-sky-500/15 text-sky-700 dark:text-sky-300"
+                        >
+                            Inbox settings
+                        </SettingsDialogTitle>
                         <DialogDescription className="text-pretty">
                             Hide, rename, reorder, and restyle buckets — or edit their filters. Sections match
                             independently, so the same PR can appear in more than one. Saved in this browser.

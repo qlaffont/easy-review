@@ -38,6 +38,8 @@ export type FakeGithub = GithubClient & {
     setRepositoryAssignees(token: string, repository: string, users: Array<RepositoryUser>): void;
     /** Seed labels for a repository. */
     setRepositoryLabels(token: string, repository: string, labels: Array<RepositoryLabel>): void;
+    /** Default branch used when rendering stack trunk labels. */
+    setRepositoryDefaultBranch(token: string, repository: string, defaultBranch: string): void;
     /** Add a pull request to a repository. */
     addPullRequest(token: string, pullRequest: PullRequestInput): PullRequestDetail;
     /** Seed the files (and optional before/after text) for a pull request. */
@@ -50,6 +52,8 @@ export type FakeGithub = GithubClient & {
         headRefName: string;
         baseRefName: string;
     }>;
+    /** Stack index loads, one entry per `listRepositoryStackIndex` call. */
+    stackIndexQueries: Array<string>;
     /** Paths asked for via `getPullRequestFileDiff`, in order. */
     fileDiffQueries: Array<string>;
     /** Submitted reviews, in order. */
@@ -217,8 +221,10 @@ export function createFakeGithub(): FakeGithub {
     const timelineByPullRequest = new Map<string, Array<PullRequestTimelineItem>>();
     const assigneesByRepository = new Map<string, Array<RepositoryUser>>();
     const labelsByRepository = new Map<string, Array<RepositoryLabel>>();
+    const defaultBranchByRepository = new Map<string, string>();
     const pullRequestQueries: Array<ReadonlyArray<string>> = [];
     const relatedPullRequestQueries: FakeGithub["relatedPullRequestQueries"] = [];
+    const stackIndexQueries: FakeGithub["stackIndexQueries"] = [];
     const fileDiffQueries: Array<string> = [];
     const submittedReviews: FakeGithub["submittedReviews"] = [];
     const calls: Array<string> = [];
@@ -366,6 +372,7 @@ export function createFakeGithub(): FakeGithub {
         calls,
         pullRequestQueries,
         relatedPullRequestQueries,
+        stackIndexQueries,
         fileDiffQueries,
         submittedReviews,
         addAccount(token, viewer) {
@@ -412,6 +419,9 @@ export function createFakeGithub(): FakeGithub {
                     },
                 ]);
             }
+            if (!defaultBranchByRepository.has(repoKey)) {
+                defaultBranchByRepository.set(repoKey, "main");
+            }
             return entry;
         },
         setRepositoryAssignees(token, repository, users) {
@@ -419,6 +429,9 @@ export function createFakeGithub(): FakeGithub {
         },
         setRepositoryLabels(token, repository, labels) {
             labelsByRepository.set(`${token}:${repository}`, [...labels]);
+        },
+        setRepositoryDefaultBranch(token, repository, defaultBranch) {
+            defaultBranchByRepository.set(`${token}:${repository}`, defaultBranch);
         },
         addPullRequest(token, input) {
             const pullRequest = buildPullRequest(input);
@@ -594,6 +607,19 @@ export function createFakeGithub(): FakeGithub {
                             matchesRelatedRefs(pullRequest, input.headRefName, input.baseRefName),
                     )
                     .map(toSummary);
+            });
+        },
+        listRepositoryStackIndex(token, repository) {
+            stackIndexQueries.push(repository);
+
+            return respond("listRepositoryStackIndex", () => {
+                authenticate(token);
+                return {
+                    defaultBranch: defaultBranchByRepository.get(`${token}:${repository}`) ?? "main",
+                    pullRequests: (pullRequestsByToken.get(token) ?? [])
+                        .filter((pullRequest) => pullRequest.repository === repository)
+                        .map(toSummary),
+                };
             });
         },
         getPullRequest(token, repository, number) {

@@ -75,6 +75,14 @@ export type GithubClient = {
             baseRefName: string;
         },
     ): Promise<Array<PullRequestSummary>>;
+    /**
+     * Every pull request in one repository plus its default branch — used to infer stack-less
+     * dependency chains from `baseRefName` / `headRefName` alone.
+     */
+    listRepositoryStackIndex(
+        token: string,
+        repository: string,
+    ): Promise<{ defaultBranch: string | null; pullRequests: Array<PullRequestSummary> }>;
     /** One pull request in full. Throws a `not-found` error when the session cannot see it. */
     getPullRequest(token: string, repository: string, number: number): Promise<PullRequestDetail>;
     /** Users who can be assigned (and usually requested as reviewers) on the repository. */

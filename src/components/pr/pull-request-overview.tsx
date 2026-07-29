@@ -33,6 +33,7 @@ import { MarkdownComposer } from "#/components/pr/markdown-composer.tsx";
 import { Markdown } from "#/components/pr/markdown.tsx";
 import { PullRequestControls } from "#/components/pr/pull-request-controls.tsx";
 import { PullRequestCopyMenu } from "#/components/pr/pull-request-copy-menu.tsx";
+import { PullRequestStackPanel } from "#/components/pr/pull-request-stack-panel.tsx";
 import { ReactionBar } from "#/components/pr/reaction-bar.tsx";
 import { RelatedPullRequestsSidebar } from "#/components/pr/related-pull-requests.tsx";
 import { ReviewChangesMenu } from "#/components/pr/review-changes-menu.tsx";
@@ -219,6 +220,7 @@ export function PullRequestOverview({
                 {activeTab === "conversation" ? (
                     <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_16rem]">
                         <div id="conversation" className="flex min-w-0 scroll-mt-20 flex-col gap-5">
+                            <PullRequestStackPanel repository={repository} number={number} />
                             <Description
                                 detail={page.detail}
                                 headline={headline}

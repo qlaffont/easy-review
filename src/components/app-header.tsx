@@ -1,4 +1,4 @@
-import { FileDiff, Inbox, LogOut, Settings2 } from "lucide-react";
+import { FileDiff, Inbox, Layers, LogOut, Settings2 } from "lucide-react";
 import { lazy, Suspense, useState } from "react";
 
 import { RepoPickerTrigger } from "#/components/repos/repo-picker.tsx";
@@ -23,6 +23,12 @@ const PrSettingsEditor = lazy(() =>
     import("#/components/pr/pr-settings-editor.tsx").then((module) => ({ default: module.PrSettingsEditor })),
 );
 
+const StackSettingsEditor = lazy(() =>
+    import("#/components/stack/stack-settings-editor.tsx").then((module) => ({
+        default: module.StackSettingsEditor,
+    })),
+);
+
 function preloadInboxSettings() {
     void import("#/components/inbox/section-layout-editor.tsx");
 }
@@ -31,11 +37,16 @@ function preloadPrSettings() {
     void import("#/components/pr/pr-settings-editor.tsx");
 }
 
+function preloadStackSettings() {
+    void import("#/components/stack/stack-settings-editor.tsx");
+}
+
 export function AppHeader() {
     const session = useSession();
     const viewer = useSessionState((state) => state.auth.viewer);
     const [inboxSettingsOpen, setInboxSettingsOpen] = useState(false);
     const [prSettingsOpen, setPrSettingsOpen] = useState(false);
+    const [stackSettingsOpen, setStackSettingsOpen] = useState(false);
 
     return (
         <header className="flex h-12 items-center justify-between gap-4 bg-background px-4">
@@ -79,6 +90,14 @@ export function AppHeader() {
                         <FileDiff aria-hidden="true" />
                         PR Settings
                     </DropdownMenuItem>
+                    <DropdownMenuItem
+                        onSelect={() => setStackSettingsOpen(true)}
+                        onPointerEnter={preloadStackSettings}
+                        onFocus={preloadStackSettings}
+                    >
+                        <Layers aria-hidden="true" />
+                        Stack Settings
+                    </DropdownMenuItem>
                     <ThemeMenuSub />
                     <DropdownMenuSeparator />
                     <DropdownMenuItem
@@ -101,6 +120,11 @@ export function AppHeader() {
             {prSettingsOpen ? (
                 <Suspense fallback={<LazyChunkFallback label="Loading PR settings…" />}>
                     <PrSettingsEditor open={prSettingsOpen} onOpenChange={setPrSettingsOpen} />
+                </Suspense>
+            ) : null}
+            {stackSettingsOpen ? (
+                <Suspense fallback={<LazyChunkFallback label="Loading stack settings…" />}>
+                    <StackSettingsEditor open={stackSettingsOpen} onOpenChange={setStackSettingsOpen} />
                 </Suspense>
             ) : null}
         </header>

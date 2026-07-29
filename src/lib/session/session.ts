@@ -55,6 +55,7 @@ import {
     matchesPullRequestSearchQuery,
     parseGitHubPullRequestUrl,
 } from "#/lib/session/pull-request-search.ts";
+import { resolvePullRequestStack, type ResolvedPullRequestStack } from "#/lib/session/pull-request-stacks.ts";
 import { mergeRelatedPullRequests, selectRelatedPullRequests } from "#/lib/session/related-pull-requests.ts";
 import {
     defaultFilterForPreset,
@@ -64,6 +65,7 @@ import {
     normalizeSectionFilter,
     recipeById,
 } from "#/lib/session/section-filters.ts";
+import { areStacksEnabled, getStackPreferences } from "#/lib/stack-preferences.ts";
 
 /** Pre-OAuth localStorage key — removed on restore/disconnect so leftovers cannot leak. */
 const LEGACY_BROWSER_TOKEN_KEY = "auth:token";
@@ -185,6 +187,20 @@ export type RelatedPullRequestsState = {
     error: SessionError | null;
 };
 
+export type RepoStackIndexState = {
+    status: "idle" | "loading" | "ready" | "error";
+    pullRequests: Array<PullRequestSummary>;
+    defaultBranch: string | null;
+    error: SessionError | null;
+    lastLoadedAt: string | null;
+};
+
+export type PullRequestStackState = {
+    status: "idle" | "loading" | "ready" | "error";
+    stack: ResolvedPullRequestStack | null;
+    error: SessionError | null;
+};
+
 export type RepositoryMetadataState = {
     status: "idle" | "loading" | "ready" | "error";
     users: Array<RepositoryUser>;
@@ -208,6 +224,8 @@ export type SessionState = {
     pullRequestCommits: Record<string, PullRequestCommitsState>;
     /** Cross-repo siblings sharing head+base, keyed by `owner/repo#number`. */
     relatedPullRequests: Record<string, RelatedPullRequestsState>;
+    /** Same-repo pull requests for stack inference, keyed by `owner/repo`. */
+    repoStackIndices: Record<string, RepoStackIndexState>;
     /** Assignable users + labels keyed by `owner/repo`. */
     repositoryMetadata: Record<string, RepositoryMetadataState>;
 };
@@ -313,6 +331,13 @@ export function createEasyReviewSession({ github, store, oauth }: EasyReviewSess
         labels: [],
         error: null,
     };
+    const initialRepoStackIndexState: RepoStackIndexState = {
+        status: "idle",
+        pullRequests: [],
+        defaultBranch: null,
+        error: null,
+        lastLoadedAt: null,
+    };
 
     const state = new Store<SessionState>({
         auth: initialAuthState,
@@ -324,6 +349,7 @@ export function createEasyReviewSession({ github, store, oauth }: EasyReviewSess
         conversationComments: {},
         pullRequestCommits: {},
         relatedPullRequests: {},
+        repoStackIndices: {},
         repositoryMetadata: {},
     });
 
@@ -345,6 +371,7 @@ export function createEasyReviewSession({ github, store, oauth }: EasyReviewSess
     const latestConversationCommentLoads = new Map<string, number>();
     const latestPullRequestCommitLoads = new Map<string, number>();
     const latestRelatedPullRequestLoads = new Map<string, number>();
+    const latestRepoStackIndexLoads = new Map<string, number>();
     const latestRepositoryMetadataLoads = new Map<string, number>();
     /** Last-write-wins for summary typing so overlapping persists cannot drop characters. */
     const latestDraftBodyWrites = new Map<string, number>();
@@ -449,6 +476,10 @@ export function createEasyReviewSession({ github, store, oauth }: EasyReviewSess
             latestRelatedPullRequestLoads.set(key, attempt + 1);
         }
 
+        for (const [key, attempt] of latestRepoStackIndexLoads) {
+            latestRepoStackIndexLoads.set(key, attempt + 1);
+        }
+
         setRepos({ ...initialRepositoriesState });
         setInbox({ ...initialInboxState });
         state.setState((prev) => ({
@@ -459,6 +490,7 @@ export function createEasyReviewSession({ github, store, oauth }: EasyReviewSess
             conversationComments: {},
             pullRequestCommits: {},
             relatedPullRequests: {},
+            repoStackIndices: {},
             repositoryMetadata: {},
         }));
     }
@@ -738,6 +770,7 @@ export function createEasyReviewSession({ github, store, oauth }: EasyReviewSess
                 lastLoadedAt,
                 error: null,
             });
+            void prefetchRepoStackIndices([...new Set(pullRequests.map((pullRequest) => pullRequest.repository))]);
         } catch (error) {
             if (attempt !== latestInboxLoad) return;
             setInbox({
@@ -1890,6 +1923,111 @@ export function createEasyReviewSession({ github, store, oauth }: EasyReviewSess
         return state.state.relatedPullRequests[pullRequestKey(repository, number)] ?? initialRelatedState;
     }
 
+    function setRepoStackIndex(repository: string, patch: Partial<RepoStackIndexState>): void {
+        state.setState((prev) => ({
+            ...prev,
+            repoStackIndices: {
+                ...prev.repoStackIndices,
+                [repository]: {
+                    ...(prev.repoStackIndices[repository] ?? initialRepoStackIndexState),
+                    ...patch,
+                },
+            },
+        }));
+    }
+
+    function resolveStackFor(repository: string, number: number): ResolvedPullRequestStack | null {
+        if (!areStacksEnabled()) {
+            return null;
+        }
+
+        const index = state.state.repoStackIndices[repository] ?? initialRepoStackIndexState;
+        const { hideClosed } = getStackPreferences();
+
+        return resolvePullRequestStack({
+            repository,
+            number,
+            pullRequests: index.pullRequests,
+            defaultBranch: index.defaultBranch,
+            hideClosed,
+        });
+    }
+
+    async function loadRepoStackIndex(repository: string): Promise<void> {
+        if (!areStacksEnabled()) {
+            return;
+        }
+
+        const current = state.state.repoStackIndices[repository];
+        if (current?.status === "loading") {
+            return;
+        }
+
+        const attempt = (latestRepoStackIndexLoads.get(repository) ?? 0) + 1;
+        latestRepoStackIndexLoads.set(repository, attempt);
+        setRepoStackIndex(repository, {
+            status: current?.pullRequests.length ? "ready" : "loading",
+            error: null,
+        });
+
+        try {
+            const index = await github.listRepositoryStackIndex(requireToken(), repository);
+            if (attempt !== latestRepoStackIndexLoads.get(repository)) {
+                return;
+            }
+
+            setRepoStackIndex(repository, {
+                status: "ready",
+                pullRequests: index.pullRequests,
+                defaultBranch: index.defaultBranch,
+                error: null,
+                lastLoadedAt: new Date().toISOString(),
+            });
+        } catch (error) {
+            if (attempt !== latestRepoStackIndexLoads.get(repository)) {
+                return;
+            }
+
+            setRepoStackIndex(repository, {
+                status: current?.pullRequests.length ? "ready" : "error",
+                error: toSessionError(error),
+            });
+        }
+    }
+
+    function prefetchRepoStackIndices(repositories: ReadonlyArray<string>): void {
+        if (!areStacksEnabled()) {
+            return;
+        }
+
+        for (const repository of repositories) {
+            const current = state.state.repoStackIndices[repository];
+            if (current?.status === "loading" || current?.status === "ready") {
+                continue;
+            }
+            void loadRepoStackIndex(repository);
+        }
+    }
+
+    function getRepoStackIndex(repository: string): RepoStackIndexState {
+        return state.state.repoStackIndices[repository] ?? initialRepoStackIndexState;
+    }
+
+    function getPullRequestStack(repository: string, number: number): PullRequestStackState {
+        if (!areStacksEnabled()) {
+            return { status: "idle", stack: null, error: null };
+        }
+
+        const index = getRepoStackIndex(repository);
+        const stack = resolveStackFor(repository, number);
+
+        return {
+            status: index.status,
+            stack,
+            error: index.error,
+        };
+    }
+
     async function addPullRequestComment(
         repository: string,
         number: number,
@@ -2563,6 +2701,9 @@ export function createEasyReviewSession({ github, store, oauth }: EasyReviewSess
         loadRelatedPullRequests,
         expandRelatedPullRequests,
         getRelatedPullRequests,
+        loadRepoStackIndex,
+        getRepoStackIndex,
+        getPullRequestStack,
         addPullRequestComment,
         loadRepositoryMetadata,
         getRepositoryMetadata,

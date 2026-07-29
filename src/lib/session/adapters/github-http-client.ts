@@ -71,6 +71,10 @@ const REPOSITORY_PAGE_LIMIT = 10;
 const INBOX_BATCH_SIZE = 10;
 const OPEN_PULL_REQUESTS_PER_REPOSITORY = 30;
 const MERGED_PULL_REQUESTS_PER_REPOSITORY = 10;
+/** Stack index scans more history than the Inbox because chains can include older merged/closed PRs. */
+const STACK_OPEN_PULL_REQUESTS = 100;
+const STACK_CLOSED_PULL_REQUESTS = 50;
+const STACK_MERGED_PULL_REQUESTS = 50;
 /** Related scans batch a few repos per search query (query length + rate limit). */
 const RELATED_SEARCH_REPO_BATCH_SIZE = 10;
 const RELATED_SEARCH_RESULT_CAP = 25;
@@ -483,6 +487,32 @@ export function createGithubHttpClient(
             }
 
             return [...byKey.values()].sort(comparePullRequestsByUpdatedAtDesc);
+        },
+
+        async listRepositoryStackIndex(token, repository) {
+            const [owner = "", name = ""] = repository.split("/");
+            const data = await graphql<RepositoryStackIndexQuery>(
+                token,
+                buildRepositoryStackIndexQuery(owner, name),
+                undefined,
+                { keepPartial: true },
+            );
+            const node = data.repository;
+
+            if (!node) {
+                throw new EasyReviewError("not-found", `${repository} does not exist, or this session cannot see it.`);
+            }
+
+            const byKey = new Map<string, PullRequestSummary>();
+            for (const pullRequest of [...node.open.nodes, ...node.closed.nodes, ...node.merged.nodes]) {
+                const summary = toPullRequestSummary(pullRequest);
+                byKey.set(summary.key, summary);
+            }
+
+            return {
+                defaultBranch: node.defaultBranchRef?.name ?? null,
+                pullRequests: [...byKey.values()],
+            };
         },
 
         async getPullRequest(token, repository, number) {
@@ -2034,7 +2064,6 @@ const SEARCH_PULL_REQUESTS_QUERY = `
     }
 `;
 
-/** One document, one alias pair per repository: the whole batch costs a single round trip. */
 function buildInboxQuery(repositories: ReadonlyArray<string>): string {
     const selections = repositories.map((nameWithOwner, index) => {
         const [owner = "", name = ""] = nameWithOwner.split("/");
@@ -2058,6 +2087,46 @@ function buildInboxQuery(repositories: ReadonlyArray<string>): string {
     return `
         query EasyReviewInbox {
             ${selections.join("\n")}
+        }
+
+        fragment InboxPullRequest on PullRequest {
+            ${PULL_REQUEST_FIELDS}
+        }
+    `;
+}
+
+type RepositoryStackIndexQuery = {
+    repository: {
+        defaultBranchRef: { name: string } | null;
+        open: { nodes: Array<PullRequestNode> };
+        closed: { nodes: Array<PullRequestNode> };
+        merged: { nodes: Array<PullRequestNode> };
+    } | null;
+};
+
+function buildRepositoryStackIndexQuery(owner: string, name: string): string {
+    return `
+        query EasyReviewRepositoryStackIndex {
+            repository(owner: ${JSON.stringify(owner)}, name: ${JSON.stringify(name)}) {
+                defaultBranchRef {
+                    name
+                }
+                open: pullRequests(
+                    states: [OPEN]
+                    first: ${STACK_OPEN_PULL_REQUESTS}
+                    orderBy: { field: UPDATED_AT, direction: DESC }
+                ) { nodes { ...InboxPullRequest } }
+                closed: pullRequests(
+                    states: [CLOSED]
+                    first: ${STACK_CLOSED_PULL_REQUESTS}
+                    orderBy: { field: UPDATED_AT, direction: DESC }
+                ) { nodes { ...InboxPullRequest } }
+                merged: pullRequests(
+                    states: [MERGED]
+                    first: ${STACK_MERGED_PULL_REQUESTS}
+                    orderBy: { field: UPDATED_AT, direction: DESC }
+                ) { nodes { ...InboxPullRequest } }
+            }
         }
 
         fragment InboxPullRequest on PullRequest {

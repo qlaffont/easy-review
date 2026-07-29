@@ -1,8 +1,25 @@
-import { Columns2, Rows2 } from "lucide-react";
+import {
+    AlignJustify,
+    Columns2,
+    FileDiff,
+    Files,
+    FolderTree,
+    Inbox,
+    Maximize2,
+    MessageSquareOff,
+    PanelLeft,
+    RemoveFormatting,
+    Rows2,
+    Workflow,
+} from "lucide-react";
 
+import {
+    SettingsDialogTitle,
+    SettingsPreferenceRow,
+    SettingsSectionHeading,
+} from "#/components/settings/settings-ui.tsx";
 import { Button } from "#/components/ui/button.tsx";
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "#/components/ui/dialog.tsx";
-import { Switch } from "#/components/ui/switch.tsx";
+import { Dialog, DialogContent, DialogDescription, DialogHeader } from "#/components/ui/dialog.tsx";
 import { useDiffPreferences } from "#/lib/diff-preferences.ts";
 import { cn } from "#/lib/utils.ts";
 
@@ -13,7 +30,12 @@ export function PrSettingsEditor({ open, onOpenChange }: { open: boolean; onOpen
         <Dialog open={open} onOpenChange={onOpenChange}>
             <DialogContent className="max-h-[85svh] overflow-y-auto sm:max-w-md">
                 <DialogHeader>
-                    <DialogTitle>PR Settings</DialogTitle>
+                    <SettingsDialogTitle
+                        icon={FileDiff}
+                        toneClassName="border-violet-500/35 bg-violet-500/15 text-violet-700 dark:text-violet-300"
+                    >
+                        PR Settings
+                    </SettingsDialogTitle>
                     <DialogDescription>
                         Defaults for pull request review. Saved in this browser and apply on every pull request.
                     </DialogDescription>
@@ -21,8 +43,9 @@ export function PrSettingsEditor({ open, onOpenChange }: { open: boolean; onOpen
 
                 <div className="flex flex-col gap-5">
                     <section className="flex flex-col gap-3">
-                        <h3 className="text-xs font-medium text-muted-foreground">Workflow</h3>
-                        <PreferenceRow
+                        <SettingsSectionHeading icon={Workflow}>Workflow</SettingsSectionHeading>
+                        <SettingsPreferenceRow
+                            icon={Inbox}
                             title="Return to Inbox after review or merge"
                             description="After you submit a review or merge a pull request, go back to the Inbox."
                             checked={preferences.returnToInboxAfterReviewOrMerge}
@@ -33,20 +56,23 @@ export function PrSettingsEditor({ open, onOpenChange }: { open: boolean; onOpen
                     </section>
 
                     <section className="flex flex-col gap-3">
-                        <h3 className="text-xs font-medium text-muted-foreground">Files changed</h3>
-                        <PreferenceRow
+                        <SettingsSectionHeading icon={Files}>Files changed</SettingsSectionHeading>
+                        <SettingsPreferenceRow
+                            icon={Maximize2}
                             title="Full width"
                             description="Expand the Files changed panel to the full viewport width."
                             checked={preferences.fullWidth}
                             onCheckedChange={(fullWidth) => setPreferences({ fullWidth })}
                         />
-                        <PreferenceRow
+                        <SettingsPreferenceRow
+                            icon={PanelLeft}
                             title="Show file list"
                             description="Keep the changed-files sidebar visible while reviewing."
                             checked={preferences.showFileList}
                             onCheckedChange={(showFileList) => setPreferences({ showFileList })}
                         />
-                        <PreferenceRow
+                        <SettingsPreferenceRow
+                            icon={FolderTree}
                             title="File tree"
                             description="Group changed files by folder instead of a flat path list."
                             checked={preferences.fileListLayout === "tree"}
@@ -55,9 +81,12 @@ export function PrSettingsEditor({ open, onOpenChange }: { open: boolean; onOpen
                     </section>
 
                     <section className="flex flex-col gap-3">
-                        <h3 className="text-xs font-medium text-muted-foreground">Diff display</h3>
+                        <SettingsSectionHeading icon={FileDiff}>Diff display</SettingsSectionHeading>
                         <div className="flex flex-col gap-2">
-                            <p className="text-sm font-medium">Layout</p>
+                            <p className="flex items-center gap-1.5 text-sm font-medium">
+                                <Columns2 className="size-3.5 text-muted-foreground" aria-hidden="true" />
+                                Layout
+                            </p>
                             <div className="grid grid-cols-2 gap-2" role="radiogroup" aria-label="Diff layout">
                                 <LayoutOption
                                     label="Unified"
@@ -73,19 +102,22 @@ export function PrSettingsEditor({ open, onOpenChange }: { open: boolean; onOpen
                                 />
                             </div>
                         </div>
-                        <PreferenceRow
+                        <SettingsPreferenceRow
+                            icon={RemoveFormatting}
                             title="Hide whitespace"
                             description="Ignore whitespace-only changes in the diff."
                             checked={preferences.hideWhitespace}
                             onCheckedChange={(hideWhitespace) => setPreferences({ hideWhitespace })}
                         />
-                        <PreferenceRow
+                        <SettingsPreferenceRow
+                            icon={AlignJustify}
                             title="Compact line height"
                             description="Tighten spacing between diff lines."
                             checked={preferences.compactLineHeight}
                             onCheckedChange={(compactLineHeight) => setPreferences({ compactLineHeight })}
                         />
-                        <PreferenceRow
+                        <SettingsPreferenceRow
+                            icon={MessageSquareOff}
                             title="Minimize comments"
                             description="Collapse review threads under each file so the diff stays readable."
                             checked={preferences.minimizeComments}
@@ -95,28 +127,6 @@ export function PrSettingsEditor({ open, onOpenChange }: { open: boolean; onOpen
                 </div>
             </DialogContent>
         </Dialog>
-    );
-}
-
-function PreferenceRow({
-    title,
-    description,
-    checked,
-    onCheckedChange,
-}: {
-    title: string;
-    description: string;
-    checked: boolean;
-    onCheckedChange: (checked: boolean) => void;
-}) {
-    return (
-        <label className="flex cursor-pointer items-start justify-between gap-4 rounded-md border px-3 py-2.5">
-            <span className="flex min-w-0 flex-col gap-0.5">
-                <span className="text-sm font-medium">{title}</span>
-                <span className="text-xs text-muted-foreground">{description}</span>
-            </span>
-            <Switch checked={checked} onCheckedChange={onCheckedChange} className="mt-0.5" />
-        </label>
     );
 }
 

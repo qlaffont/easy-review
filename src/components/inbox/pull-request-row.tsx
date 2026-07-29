@@ -13,6 +13,7 @@ import { memo } from "react";
 import type { PullRequestSummary, ReviewState } from "#/lib/session/types.ts";
 
 import { ChecksDot } from "#/components/pr/checks-dot.tsx";
+import { PullRequestStackBadge } from "#/components/pr/pull-request-stack-panel.tsx";
 import { HelpTooltip } from "#/components/ui/help-tooltip.tsx";
 import { RelativeTime } from "#/components/ui/relative-time.tsx";
 import { cn } from "#/lib/utils.ts";
@@ -192,6 +193,7 @@ export const PullRequestRow = memo(function PullRequestRow({
                 <span className="flex min-w-0 items-center gap-2">
                     <PullRequestStateIcon pullRequest={pullRequest} />
                     <span className="truncate font-medium text-foreground">{pullRequest.title}</span>
+                    <PullRequestStackBadge repository={pullRequest.repository} number={pullRequest.number} />
                     {hasConflicts ? (
                         <HelpTooltip label="This branch has conflicts that must be resolved">
                             <span className="inline-flex shrink-0 items-center gap-1 text-xs font-medium text-amber-700 dark:text-amber-400">
