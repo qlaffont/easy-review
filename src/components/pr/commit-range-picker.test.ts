@@ -2,7 +2,14 @@ import { describe, expect, it } from "vitest";
 
 import type { PullRequestCommit } from "#/lib/session/types.ts";
 
-import { rangeFromSelectValues, selectValuesFromRange, toCommitOptions } from "#/components/pr/commit-range-picker.tsx";
+import {
+    COMMIT_RANGE_BASE_VALUE,
+    commitRangeTriggerLabel,
+    commitRangeTriggerTooltip,
+    rangeFromSelectValues,
+    selectValuesFromRange,
+    toCommitOptions,
+} from "#/components/pr/commit-range-picker.tsx";
 
 function commit(oid: string, headline = oid): PullRequestCommit {
     return {
@@ -22,11 +29,12 @@ describe("commit range picker", () => {
     const baseSha = "base000";
 
     it("treats base…last as the full pull request", () => {
-        expect(rangeFromSelectValues("__base__", "ccc3333", commits, baseSha)).toEqual({ mode: "all" });
+        expect(rangeFromSelectValues(COMMIT_RANGE_BASE_VALUE, "ccc3333", commits, baseSha)).toEqual({ mode: "all" });
         expect(selectValuesFromRange({ mode: "all" }, commits, baseSha)).toEqual({
-            from: "__base__",
+            from: COMMIT_RANGE_BASE_VALUE,
             to: "ccc3333",
         });
+        expect(commitRangeTriggerLabel({ mode: "all" }, commits, baseSha)).toBe("All 3 commits");
     });
 
     it("isolates a middle commit as parent…commit", () => {
@@ -38,12 +46,30 @@ describe("commit range picker", () => {
     });
 
     it("only offers head commits after the selected base", () => {
-        expect(toCommitOptions(commits, "__base__").map((entry) => entry.oid)).toEqual([
+        expect(toCommitOptions(commits, COMMIT_RANGE_BASE_VALUE).map((entry) => entry.oid)).toEqual([
             "aaa1111",
             "bbb2222",
             "ccc3333",
         ]);
         expect(toCommitOptions(commits, "aaa1111").map((entry) => entry.oid)).toEqual(["bbb2222", "ccc3333"]);
         expect(toCommitOptions(commits, "bbb2222").map((entry) => entry.oid)).toEqual(["ccc3333"]);
+    });
+
+    it("shows From/To hashes when a range is selected", () => {
+        expect(
+            commitRangeTriggerLabel({ mode: "range", baseOid: "aaa1111", headOid: "bbb2222" }, commits, baseSha),
+        ).toBe("From: aaa1111 - To: bbb2222");
+        expect(
+            commitRangeTriggerTooltip({ mode: "range", baseOid: "aaa1111", headOid: "bbb2222" }, commits, baseSha),
+        ).toBe("From: aaa1111 · one\nTo: bbb2222 · two");
+    });
+
+    it("labels the PR base in the From/To trigger", () => {
+        expect(commitRangeTriggerLabel({ mode: "range", baseOid: baseSha, headOid: "bbb2222" }, commits, baseSha)).toBe(
+            "From: base000 - To: bbb2222",
+        );
+        expect(
+            commitRangeTriggerTooltip({ mode: "range", baseOid: baseSha, headOid: "bbb2222" }, commits, baseSha),
+        ).toBe("From: base000 · Pull request merge base\nTo: bbb2222 · two");
     });
 });

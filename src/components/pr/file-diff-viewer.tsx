@@ -942,6 +942,54 @@ function VirtualDiffLines({
         }
     }, [path, layout, lines]);
 
+    // Horizontal trackpad/shift-wheel over the code area: the row viewport is overflow-x-hidden
+    // (virtualized), so scroll must be forwarded to the bottom pane scrollbars.
+    useEffect(() => {
+        const scroller = parentRef.current;
+        if (!scroller) {
+            return;
+        }
+
+        const onWheel = (event: WheelEvent) => {
+            const shiftAsHorizontal = event.shiftKey && event.deltaY !== 0 && event.deltaX === 0;
+            if (!shiftAsHorizontal && Math.abs(event.deltaX) < Math.abs(event.deltaY)) {
+                return;
+            }
+            const dx = shiftAsHorizontal ? event.deltaY : event.deltaX;
+            if (dx === 0) {
+                return;
+            }
+
+            let target: HTMLDivElement | null = null;
+            if (layout === "split") {
+                const root = splitRootRef.current;
+                if (!root) {
+                    return;
+                }
+                const rect = root.getBoundingClientRect();
+                const dividerX = rect.left + rect.width * splitLeftRatio;
+                target = event.clientX < dividerX ? leftScrollRef.current : rightScrollRef.current;
+            } else {
+                target = unifiedScrollRef.current;
+            }
+            if (!target || target.scrollWidth <= target.clientWidth + 1) {
+                return;
+            }
+
+            const max = target.scrollWidth - target.clientWidth;
+            const next = Math.min(max, Math.max(0, target.scrollLeft + dx));
+            if (next === target.scrollLeft) {
+                return;
+            }
+
+            event.preventDefault();
+            target.scrollLeft = next;
+        };
+
+        scroller.addEventListener("wheel", onWheel, { passive: false });
+        return () => scroller.removeEventListener("wheel", onWheel);
+    }, [layout, splitLeftRatio]);
+
     useEffect(() => {
         if (!selected) {
             return;
@@ -1067,19 +1115,19 @@ function VirtualDiffLines({
 
             {layout === "split" ? (
                 <div
-                    className="grid shrink-0 border-t bg-muted/20"
+                    className="grid shrink-0 border-t bg-muted/20 font-mono text-xs"
                     style={{ gridTemplateColumns: "var(--diff-split-left) minmax(0,1fr)" }}
                 >
                     <div
                         ref={leftScrollRef}
-                        className="overflow-x-auto border-r border-border"
+                        className="h-3 overflow-x-auto border-r border-border"
                         onScroll={(event) => setLeftScroll(event.currentTarget.scrollLeft)}
                     >
                         <div aria-hidden="true" style={{ width: leftContentWidth, height: 1 }} />
                     </div>
                     <div
                         ref={rightScrollRef}
-                        className="overflow-x-auto"
+                        className="h-3 overflow-x-auto"
                         onScroll={(event) => setRightScroll(event.currentTarget.scrollLeft)}
                     >
                         <div aria-hidden="true" style={{ width: rightContentWidth, height: 1 }} />
@@ -1088,7 +1136,7 @@ function VirtualDiffLines({
             ) : (
                 <div
                     ref={unifiedScrollRef}
-                    className="shrink-0 overflow-x-auto border-t bg-muted/20"
+                    className="h-3 shrink-0 overflow-x-auto border-t bg-muted/20 font-mono text-xs"
                     onScroll={(event) => setUnifiedScroll(event.currentTarget.scrollLeft)}
                 >
                     <div aria-hidden="true" style={{ width: unifiedContentWidth, height: 1 }} />

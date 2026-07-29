@@ -209,6 +209,33 @@ export function ReviewChanges({
           selectedDiff.refreshing === true;
     const activeDiffError = isolatingRange ? rangeDiffError : (selectedDiff?.error?.message ?? null);
     const selectedViewState = selectedPath ? fileViewState(viewedMarks, selectedPath, headSha) : "unseen";
+    const selectionDiffStats = (() => {
+        if (isolatingRange) {
+            if (rangeFilesStatus !== "ready") {
+                return null;
+            }
+            return filesItems.reduce(
+                (totals, file) => ({
+                    additions: totals.additions + file.additions,
+                    deletions: totals.deletions + file.deletions,
+                }),
+                { additions: 0, deletions: 0 },
+            );
+        }
+        if (page.detail) {
+            return { additions: page.detail.additions, deletions: page.detail.deletions };
+        }
+        if (filesStatus !== "ready") {
+            return null;
+        }
+        return filesItems.reduce(
+            (totals, file) => ({
+                additions: totals.additions + file.additions,
+                deletions: totals.deletions + file.deletions,
+            }),
+            { additions: 0, deletions: 0 },
+        );
+    })();
 
     function setPathViewed(path: string, viewed: boolean) {
         setViewedMarks((current) => {
@@ -266,126 +293,133 @@ export function ReviewChanges({
     return (
         <div className={cn(preferences.fullWidth && "relative left-1/2 w-screen max-w-[100vw] -translate-x-1/2 px-4")}>
             <section id="review" className="flex min-h-0 scroll-mt-20 flex-col overflow-hidden rounded-lg border">
-                <header className="flex shrink-0 flex-col gap-2 border-b bg-muted/40 px-3 py-2">
-                    <div className="flex items-center justify-between gap-3">
-                        <div className="flex min-w-0 items-center gap-3">
-                            <h2 className="text-sm font-medium">
-                                Files changed
-                                {fileCount !== null ? (
-                                    <span className="ml-2 text-xs font-normal text-muted-foreground tabular-nums">
-                                        {fileCount}
-                                    </span>
-                                ) : null}
-                            </h2>
-                            {fileCount !== null && fileCount > 0 ? (
-                                <ViewedProgress viewed={viewedCount} total={fileCount} />
+                <header className="flex shrink-0 items-center justify-between gap-3 border-b bg-muted/40 px-3 py-2">
+                    <div className="flex min-w-0 flex-1 items-center gap-3">
+                        <h2 className="shrink-0 text-sm font-medium">
+                            Files changed
+                            {fileCount !== null ? (
+                                <span className="ml-2 text-xs font-normal text-muted-foreground tabular-nums">
+                                    {fileCount}
+                                </span>
                             ) : null}
-                        </div>
-                        <div className="flex shrink-0 items-center gap-2">
-                            <HelpTooltip
-                                label={
-                                    preferences.fullWidth
-                                        ? "Constrain Files changed to the page width"
-                                        : "Expand Files changed to full viewport width"
-                                }
+                        </h2>
+                        {fileCount !== null && fileCount > 0 ? (
+                            <ViewedProgress viewed={viewedCount} total={fileCount} />
+                        ) : null}
+                        <CommitRangePicker
+                            commits={commits.items}
+                            baseSha={baseSha}
+                            range={commitRange}
+                            disabled={commits.status !== "ready"}
+                            onChange={setCommitRange}
+                        />
+                        {selectionDiffStats ? (
+                            <span
+                                className="flex shrink-0 items-center gap-1 text-xs tabular-nums"
+                                aria-label={`${selectionDiffStats.additions} additions, ${selectionDiffStats.deletions} deletions`}
                             >
-                                <Button
-                                    type="button"
-                                    variant="ghost"
-                                    size="sm"
-                                    className="h-7 gap-1.5 px-2 text-xs"
-                                    aria-pressed={preferences.fullWidth}
-                                    aria-label={preferences.fullWidth ? "Exit full width" : "Full width"}
-                                    onClick={() => setPreferences({ fullWidth: !preferences.fullWidth })}
-                                >
-                                    {preferences.fullWidth ? (
-                                        <Minimize2 className="size-3.5" aria-hidden="true" />
-                                    ) : (
-                                        <Maximize2 className="size-3.5" aria-hidden="true" />
-                                    )}
-                                    <span className="hidden sm:inline">
-                                        {preferences.fullWidth ? "Exit full width" : "Full width"}
-                                    </span>
-                                </Button>
-                            </HelpTooltip>
-                            <HelpTooltip
-                                label={
-                                    preferences.showFileList ? "Hide file list for more review space" : "Show file list"
-                                }
-                            >
-                                <Button
-                                    type="button"
-                                    variant="ghost"
-                                    size="sm"
-                                    className="h-7 gap-1.5 px-2 text-xs"
-                                    aria-pressed={preferences.showFileList}
-                                    aria-label={preferences.showFileList ? "Hide file list" : "Show file list"}
-                                    onClick={() => setPreferences({ showFileList: !preferences.showFileList })}
-                                >
-                                    <span className="relative size-3.5">
-                                        <PanelLeftClose
-                                            className={cn(
-                                                "absolute inset-0 size-3.5 transition-[opacity,transform] duration-200 ease-out motion-reduce:transition-none",
-                                                preferences.showFileList
-                                                    ? "scale-100 opacity-100"
-                                                    : "scale-75 opacity-0",
-                                            )}
-                                            aria-hidden="true"
-                                        />
-                                        <PanelLeftOpen
-                                            className={cn(
-                                                "absolute inset-0 size-3.5 transition-[opacity,transform] duration-200 ease-out motion-reduce:transition-none",
-                                                preferences.showFileList
-                                                    ? "scale-75 opacity-0"
-                                                    : "scale-100 opacity-100",
-                                            )}
-                                            aria-hidden="true"
-                                        />
-                                    </span>
-                                    <span className="hidden sm:inline">
-                                        {preferences.showFileList ? "Hide files" : "Files"}
-                                    </span>
-                                </Button>
-                            </HelpTooltip>
-                            <HelpTooltip label="Reload the changed-files list from GitHub">
-                                <Button
-                                    variant="ghost"
-                                    size="sm"
-                                    className="h-7 px-2 text-xs"
-                                    disabled={isolatingRange ? rangeFilesStatus === "loading" : page.files.refreshing}
-                                    onClick={() => {
-                                        if (commitRange.mode === "range") {
-                                            setCommitRange({ ...commitRange });
-                                            return;
-                                        }
-                                        void notifyAction(() => session.refreshPullRequestFiles(repository, number), {
-                                            loading: "Refreshing files…",
-                                            success: "File list refreshed",
-                                            error: "Could not refresh files.",
-                                        });
-                                    }}
-                                >
-                                    <RefreshCw
-                                        className={cn(
-                                            "size-3.5",
-                                            (isolatingRange ? rangeFilesStatus === "loading" : page.files.refreshing) &&
-                                                "animate-spin",
-                                        )}
-                                    />
-                                    Refresh
-                                </Button>
-                            </HelpTooltip>
-                            <ReviewChangesMenu repository={repository} number={number} />
-                            <DiffSettingsMenu preferences={preferences} onChange={setPreferences} />
-                        </div>
+                                <span className="text-emerald-600 dark:text-emerald-400">
+                                    +{selectionDiffStats.additions}
+                                </span>
+                                <span className="text-red-600 dark:text-red-400">−{selectionDiffStats.deletions}</span>
+                                <SelectionDiffStatBars
+                                    additions={selectionDiffStats.additions}
+                                    deletions={selectionDiffStats.deletions}
+                                />
+                            </span>
+                        ) : null}
                     </div>
-                    <CommitRangePicker
-                        commits={commits.items}
-                        baseSha={baseSha}
-                        range={commitRange}
-                        disabled={commits.status !== "ready"}
-                        onChange={setCommitRange}
-                    />
+                    <div className="flex shrink-0 items-center gap-2">
+                        <HelpTooltip
+                            label={
+                                preferences.fullWidth
+                                    ? "Constrain Files changed to the page width"
+                                    : "Expand Files changed to full viewport width"
+                            }
+                        >
+                            <Button
+                                type="button"
+                                variant="ghost"
+                                size="sm"
+                                className="h-7 gap-1.5 px-2 text-xs"
+                                aria-pressed={preferences.fullWidth}
+                                aria-label={preferences.fullWidth ? "Exit full width" : "Full width"}
+                                onClick={() => setPreferences({ fullWidth: !preferences.fullWidth })}
+                            >
+                                {preferences.fullWidth ? (
+                                    <Minimize2 className="size-3.5" aria-hidden="true" />
+                                ) : (
+                                    <Maximize2 className="size-3.5" aria-hidden="true" />
+                                )}
+                                <span className="hidden sm:inline">
+                                    {preferences.fullWidth ? "Exit full width" : "Full width"}
+                                </span>
+                            </Button>
+                        </HelpTooltip>
+                        <HelpTooltip
+                            label={preferences.showFileList ? "Hide file list for more review space" : "Show file list"}
+                        >
+                            <Button
+                                type="button"
+                                variant="ghost"
+                                size="sm"
+                                className="h-7 gap-1.5 px-2 text-xs"
+                                aria-pressed={preferences.showFileList}
+                                aria-label={preferences.showFileList ? "Hide file list" : "Show file list"}
+                                onClick={() => setPreferences({ showFileList: !preferences.showFileList })}
+                            >
+                                <span className="relative size-3.5">
+                                    <PanelLeftClose
+                                        className={cn(
+                                            "absolute inset-0 size-3.5 transition-[opacity,transform] duration-200 ease-out motion-reduce:transition-none",
+                                            preferences.showFileList ? "scale-100 opacity-100" : "scale-75 opacity-0",
+                                        )}
+                                        aria-hidden="true"
+                                    />
+                                    <PanelLeftOpen
+                                        className={cn(
+                                            "absolute inset-0 size-3.5 transition-[opacity,transform] duration-200 ease-out motion-reduce:transition-none",
+                                            preferences.showFileList ? "scale-75 opacity-0" : "scale-100 opacity-100",
+                                        )}
+                                        aria-hidden="true"
+                                    />
+                                </span>
+                                <span className="hidden sm:inline">
+                                    {preferences.showFileList ? "Hide files" : "Files"}
+                                </span>
+                            </Button>
+                        </HelpTooltip>
+                        <HelpTooltip label="Reload the changed-files list from GitHub">
+                            <Button
+                                variant="ghost"
+                                size="sm"
+                                className="h-7 px-2 text-xs"
+                                disabled={isolatingRange ? rangeFilesStatus === "loading" : page.files.refreshing}
+                                onClick={() => {
+                                    if (commitRange.mode === "range") {
+                                        setCommitRange({ ...commitRange });
+                                        return;
+                                    }
+                                    void notifyAction(() => session.refreshPullRequestFiles(repository, number), {
+                                        loading: "Refreshing files…",
+                                        success: "File list refreshed",
+                                        error: "Could not refresh files.",
+                                    });
+                                }}
+                            >
+                                <RefreshCw
+                                    className={cn(
+                                        "size-3.5",
+                                        (isolatingRange ? rangeFilesStatus === "loading" : page.files.refreshing) &&
+                                            "animate-spin",
+                                    )}
+                                />
+                                Refresh
+                            </Button>
+                        </HelpTooltip>
+                        <ReviewChangesMenu repository={repository} number={number} />
+                        <DiffSettingsMenu preferences={preferences} onChange={setPreferences} />
+                    </div>
                 </header>
 
                 {filesError ? <p className="border-b px-3 py-2 text-sm text-destructive">{filesError}</p> : null}
@@ -560,6 +594,35 @@ function ViewedProgress({ viewed, total }: { viewed: number; total: number }) {
                 viewed
             </span>
         </div>
+    );
+}
+
+function SelectionDiffStatBars({ additions, deletions }: { additions: number; deletions: number }) {
+    const total = additions + deletions;
+    if (total === 0) {
+        return null;
+    }
+
+    const blocks = 5;
+    const addBlocks = Math.round((additions / total) * blocks);
+    const delBlocks = Math.min(blocks - addBlocks, Math.round((deletions / total) * blocks));
+
+    return (
+        <span className="ml-0.5 inline-flex gap-px" aria-hidden="true">
+            {Array.from({ length: blocks }, (_, index) => (
+                <span
+                    key={index}
+                    className={cn(
+                        "size-1.5 rounded-[1px]",
+                        index < addBlocks
+                            ? "bg-emerald-500"
+                            : index < addBlocks + delBlocks
+                              ? "bg-red-500"
+                              : "bg-muted-foreground/25",
+                    )}
+                />
+            ))}
+        </span>
     );
 }
 
