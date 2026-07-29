@@ -105,6 +105,25 @@ describe("staged review drafts", () => {
         await expect(session.submitReview("acme/api", 1)).rejects.toMatchObject({ kind: "unknown" });
     });
 
+    it("does not mark an empty draft stale when the head moves after submit", async () => {
+        const session = await connectedWithPr();
+        await session.addPendingComment("acme/api", 1, {
+            path: "src/a.ts",
+            line: 1,
+            side: "RIGHT",
+            body: "shipped",
+        });
+        await session.submitReview("acme/api", 1);
+
+        github.setPullRequestHead(TOKEN, "acme/api", 1, "sha-bbb");
+        await session.refreshPullRequest("acme/api", 1);
+
+        const draft = session.getReviewDraft("acme/api", 1);
+        expect(draft.stale).toBe(false);
+        expect(draft.headSha).toBe("sha-bbb");
+        expect(draft.comments).toEqual([]);
+    });
+
     it("posts a single line comment immediately without touching the staged draft", async () => {
         const session = await connectedWithPr();
         await session.addPendingComment("acme/api", 1, {

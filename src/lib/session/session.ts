@@ -1231,6 +1231,11 @@ export function createEasyReviewSession({ github, store, oauth }: EasyReviewSess
         };
     }
 
+    /** Anything the reviewer would lose if we silently rewrote the draft onto a new head. */
+    function draftHasPendingWork(draft: Pick<ReviewDraft, "body" | "comments" | "event">): boolean {
+        return draft.comments.length > 0 || Boolean(draft.body.trim()) || draft.event !== "comment";
+    }
+
     function viewerLogin(): string | null {
         return state.state.auth.viewer?.login ?? null;
     }
@@ -1265,6 +1270,7 @@ export function createEasyReviewSession({ github, store, oauth }: EasyReviewSess
      * Load a draft from browser storage (or create an empty one) and mark it stale when the live
      * head has moved past the SHA the comments were written against. An empty stored head means
      * the draft was staged before the PR detail arrived — bind it to the live tip, do not stale it.
+     * Empty drafts (nothing pending) silently rebind to the new tip — no false “head moved” banner.
      */
     async function syncDraftWithHead(detail: PullRequestDetail): Promise<void> {
         const key = pullRequestKey(detail.repository, detail.number);
@@ -1274,12 +1280,21 @@ export function createEasyReviewSession({ github, store, oauth }: EasyReviewSess
             : null;
         const base = stored ?? emptyDraft(detail.repository, detail.number, detail.headSha);
         const boundHead = Boolean(stored?.headSha);
+        const headMoved = boundHead && stored!.headSha !== detail.headSha;
+        const hasWork = draftHasPendingWork(base);
+
+        if (headMoved && !hasWork) {
+            const draft = emptyDraft(detail.repository, detail.number, detail.headSha);
+            await persistDraft(draft);
+            return;
+        }
+
         const draft: ReviewDraft = {
             ...base,
             repository: detail.repository,
             number: detail.number,
-            stale: boundHead && stored!.headSha !== detail.headSha,
-            headSha: boundHead ? stored!.headSha : detail.headSha,
+            stale: headMoved && hasWork,
+            headSha: headMoved && hasWork ? stored!.headSha : boundHead ? stored!.headSha : detail.headSha,
         };
 
         state.setState((prev) => ({ ...prev, reviewDrafts: { ...prev.reviewDrafts, [key]: draft } }));
