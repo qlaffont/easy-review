@@ -2,6 +2,7 @@ import { TanStackDevtools } from "@tanstack/react-devtools";
 import { HeadContent, Outlet, Scripts, createRootRoute } from "@tanstack/react-router";
 import { TanStackRouterDevtoolsPanel } from "@tanstack/react-router-devtools";
 
+import { AppUpdateWatcher } from "#/components/app-update-watcher.tsx";
 import { SessionGate } from "#/components/session-gate.tsx";
 import { ThemeProvider } from "#/components/theme-provider.tsx";
 import { Toaster } from "#/components/ui/sonner.tsx";
@@ -44,9 +45,12 @@ export const Route = createRootRoute({
 
 function RootLayout() {
     return (
-        <SessionGate>
-            <Outlet />
-        </SessionGate>
+        <>
+            <SessionGate>
+                <Outlet />
+            </SessionGate>
+            <AppUpdateWatcher />
+        </>
     );
 }
 
