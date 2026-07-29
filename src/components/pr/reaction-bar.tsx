@@ -1,10 +1,12 @@
 import { SmilePlus } from "lucide-react";
 import { useState } from "react";
 
-import type { ReactionContent, ReactionGroup } from "#/lib/session/types.ts";
+import type { ReactionContent, ReactionGroup, ReviewThreadComment } from "#/lib/session/types.ts";
 
 import { Button } from "#/components/ui/button.tsx";
 import { Popover, PopoverContent, PopoverTrigger } from "#/components/ui/popover.tsx";
+import { useSession } from "#/lib/session/provider.tsx";
+import { notifyAction } from "#/lib/toast.ts";
 import { cn } from "#/lib/utils.ts";
 
 export const REACTION_OPTIONS: Array<{ content: ReactionContent; emoji: string; label: string }> = [
@@ -103,5 +105,33 @@ export function ReactionBar({
                 </PopoverContent>
             </Popover>
         </div>
+    );
+}
+
+export function ReviewThreadCommentReactions({
+    repository,
+    number,
+    comment,
+}: {
+    repository: string;
+    number: number;
+    comment: ReviewThreadComment;
+}) {
+    const session = useSession();
+
+    return (
+        <ReactionBar
+            groups={comment.reactionGroups}
+            onToggle={(content) => {
+                void notifyAction(
+                    () => session.toggleReviewCommentReaction(repository, number, comment.databaseId, content),
+                    {
+                        loading: "Updating reaction…",
+                        success: "Reaction updated",
+                        error: "Could not update the reaction.",
+                    },
+                );
+            }}
+        />
     );
 }

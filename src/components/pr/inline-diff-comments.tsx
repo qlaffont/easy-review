@@ -8,6 +8,7 @@ import { CommentActionsMenu, quoteMarkdown } from "#/components/pr/comment-actio
 import { suggestionOriginalFromHunk } from "#/components/pr/diff-hunk-preview.tsx";
 import { MarkdownComposer } from "#/components/pr/markdown-composer.tsx";
 import { Markdown } from "#/components/pr/markdown.tsx";
+import { ReviewThreadCommentReactions } from "#/components/pr/reaction-bar.tsx";
 import { ReviewThreadStatusLabels } from "#/components/pr/review-thread-status.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import { RelativeTime } from "#/components/ui/relative-time.tsx";
@@ -320,6 +321,11 @@ function ThreadCommentCard({
                                         }
                                     />
                                 </div>
+                                <ReviewThreadCommentReactions
+                                    repository={repository}
+                                    number={number}
+                                    comment={comment}
+                                />
                             </div>
                         );
                     })}

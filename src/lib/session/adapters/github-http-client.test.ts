@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { createGithubHttpClient } from "#/lib/session/adapters/github-http-client.ts";
+import { createGithubHttpClient, resolveReviewRequestPayload } from "#/lib/session/adapters/github-http-client.ts";
 import { EasyReviewError } from "#/lib/session/errors.ts";
 
 type GraphqlBody = { data?: unknown; errors?: Array<{ type?: string; message: string }> };
@@ -614,5 +614,26 @@ describe("getPullRequestFileDiff", () => {
         expect(requests.some((url) => /useAutoInsRetrieval\.ts(?:\?|$)/.test(url))).toBe(false);
         expect(requests.some((url) => url.includes("useAutoInsRetrieval%2Ets"))).toBe(true);
         expect(diff.lines.some((line) => line.kind === "add" && line.text === "ok")).toBe(true);
+    });
+});
+
+describe("resolveReviewRequestPayload", () => {
+    const current = {
+        users: [{ login: "hubot" }],
+        teams: [{ name: "Justice League", slug: "justice-league" }],
+    };
+
+    it("routes pending users and teams to the correct REST fields", () => {
+        expect(resolveReviewRequestPayload(["hubot", "Justice League"], current)).toEqual({
+            all: { reviewers: ["hubot"], team_reviewers: ["justice-league"] },
+            pending: { reviewers: ["hubot"], team_reviewers: ["justice-league"] },
+        });
+    });
+
+    it("treats unknown identifiers as user logins when re-requesting after a review", () => {
+        expect(resolveReviewRequestPayload(["mona"], current, { treatUnknownAsUserLogins: true })).toEqual({
+            all: { reviewers: ["mona"], team_reviewers: [] },
+            pending: { reviewers: [], team_reviewers: [] },
+        });
     });
 });

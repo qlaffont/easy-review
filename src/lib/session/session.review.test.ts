@@ -44,11 +44,13 @@ beforeEach(() => {
         comments: [
             {
                 id: "c1",
+                databaseId: 1,
                 author: "hubot",
                 authorAvatarUrl: null,
                 body: "Please rename this.",
                 createdAt: "2026-07-01T00:00:00.000Z",
                 url: "https://github.com/acme/api/pull/1#discussion_r1",
+                reactionGroups: [],
             },
         ],
     });

@@ -208,11 +208,13 @@ export function createSeededGithub(): GithubClient {
                 comments: [
                     {
                         id: `comment-${repository}-${number}-1`,
+                        databaseId: number * 100 + 1,
                         author: faker.internet.username().toLowerCase(),
                         authorAvatarUrl: `https://avatars.githubusercontent.com/u/${faker.number.int({ min: 1, max: 99_999 })}?v=4`,
                         body: "Is returning 2 intentional, or should this stay at 1 until the flag ships?",
                         createdAt: faker.date.recent({ days: 3 }).toISOString(),
                         url: `https://github.com/${repository}/pull/${number}#discussion_r${number}`,
+                        reactionGroups: [],
                     },
                 ],
             });

@@ -211,6 +211,28 @@ export type GithubClient = {
         content: ReactionContent,
         viewerLogin: string,
     ): Promise<number | null>;
+    /** Add a reaction to a pull request review comment (diff thread). */
+    createReviewCommentReaction(
+        token: string,
+        repository: string,
+        commentId: number,
+        content: ReactionContent,
+    ): Promise<number>;
+    /** Remove a reaction from a pull request review comment. */
+    deleteReviewCommentReaction(
+        token: string,
+        repository: string,
+        commentId: number,
+        reactionId: number,
+    ): Promise<void>;
+    /** Find the viewer's reaction id on a pull request review comment. */
+    findReviewCommentReactionId(
+        token: string,
+        repository: string,
+        commentId: number,
+        content: ReactionContent,
+        viewerLogin: string,
+    ): Promise<number | null>;
     /** Merge an open, mergeable pull request. */
     mergePullRequest(token: string, repository: string, number: number, method: MergeMethod): Promise<void>;
     /** Close an open pull request without merging. */

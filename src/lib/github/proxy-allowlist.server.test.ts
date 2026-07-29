@@ -35,6 +35,10 @@ describe("isAllowedGithubProxyRequest", () => {
         expect(isAllowedGithubProxyRequest("GET", "/user/repos", undefined)).toBe(true);
         expect(isAllowedGithubProxyRequest("GET", "/repos/acme/api/labels", undefined)).toBe(true);
         expect(isAllowedGithubProxyRequest("POST", "/repos/acme/api/pulls/1/reviews", new ArrayBuffer(0))).toBe(true);
+        expect(isAllowedGithubProxyRequest("GET", "/repos/acme/api/pulls/1/requested_reviewers", undefined)).toBe(true);
+        expect(
+            isAllowedGithubProxyRequest("DELETE", "/repos/acme/api/pulls/1/requested_reviewers", new ArrayBuffer(0)),
+        ).toBe(true);
         expect(isAllowedGithubProxyRequest("PUT", "/repos/acme/api/pulls/1/merge", new ArrayBuffer(0))).toBe(true);
         expect(isAllowedGithubProxyRequest("PATCH", "/repos/acme/api/git/refs/heads/main", new ArrayBuffer(0))).toBe(
             true,

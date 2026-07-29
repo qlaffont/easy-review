@@ -252,12 +252,15 @@ export type ReviewDraft = {
 
 export type ReviewThreadComment = {
     id: string;
+    /** Numeric REST id — required for reaction create/delete. */
+    databaseId: number;
     author: string;
     authorAvatarUrl: string | null;
     body: string;
     createdAt: string;
     /** Permalink on GitHub (`…#discussion_r…`). */
     url: string;
+    reactionGroups: Array<ReactionGroup>;
 };
 
 /** A conversation comment on the pull request (GitHub issue comment), not a diff review. */

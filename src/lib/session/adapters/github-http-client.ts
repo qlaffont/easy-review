@@ -749,7 +749,10 @@ export function createGithubHttpClient(
                 }
 
                 for (const node of connection.nodes) {
-                    threads.push(toReviewThread(node));
+                    const thread = toReviewThread(node);
+                    if (thread) {
+                        threads.push(thread);
+                    }
                 }
 
                 if (!connection.pageInfo.hasNextPage) {
@@ -914,7 +917,12 @@ export function createGithubHttpClient(
                 addPullRequestReviewThreadReply: { comment: ReviewThreadCommentNode };
             }>(token, REPLY_TO_THREAD_MUTATION, { threadId, body });
 
-            return toThreadComment(data.addPullRequestReviewThreadReply.comment);
+            const comment = toThreadComment(data.addPullRequestReviewThreadReply.comment);
+            if (!comment) {
+                throw new EasyReviewError("unknown", "Could not read the new reply from GitHub.");
+            }
+
+            return comment;
         },
 
         async setReviewThreadResolved(token, threadId, resolved) {
@@ -1002,9 +1010,9 @@ export function createGithubHttpClient(
             }
 
             const [owner = "", name = ""] = repository.split("/");
-            await restJson(token, "POST", `/repos/${owner}/${name}/pulls/${number}/requested_reviewers`, {
-                reviewers: [...reviewers],
-            });
+            const current = await getRequestedReviewers(token, owner, name, number);
+            const payload = resolveReviewRequestPayload(reviewers, current, { treatUnknownAsUserLogins: true }).all;
+            await postReviewRequestPayload(token, owner, name, number, payload);
         },
 
         async removeReviewers(token, repository, number, reviewers) {
@@ -1013,9 +1021,9 @@ export function createGithubHttpClient(
             }
 
             const [owner = "", name = ""] = repository.split("/");
-            await restJson(token, "DELETE", `/repos/${owner}/${name}/pulls/${number}/requested_reviewers`, {
-                reviewers: [...reviewers],
-            });
+            const current = await getRequestedReviewers(token, owner, name, number);
+            const payload = resolveReviewRequestPayload(reviewers, current).pending;
+            await deleteReviewRequestPayload(token, owner, name, number, payload);
         },
 
         async reRequestReview(token, repository, number, reviewers) {
@@ -1024,20 +1032,30 @@ export function createGithubHttpClient(
             }
 
             const [owner = "", name = ""] = repository.split("/");
-            const path = `/repos/${owner}/${name}/pulls/${number}/requested_reviewers`;
-            const body = { reviewers: [...reviewers] };
+            const current = await getRequestedReviewers(token, owner, name, number);
+            const { all, pending } = resolveReviewRequestPayload(reviewers, current, {
+                treatUnknownAsUserLogins: true,
+            });
 
-            await restJson(token, "DELETE", path, body);
+            if (!hasReviewRequestPayload(all)) {
+                return;
+            }
+
+            if (hasReviewRequestPayload(pending)) {
+                await deleteReviewRequestPayload(token, owner, name, number, pending);
+            }
 
             try {
-                await restJson(token, "POST", path, body);
+                await postReviewRequestPayload(token, owner, name, number, all);
             } catch (error) {
-                // Best-effort restore: DELETE already cleared the requests; put them back
+                // Best-effort restore: DELETE already cleared pending requests; put them back
                 // before surfacing the failure so the PR is not left without reviewers.
-                try {
-                    await restJson(token, "POST", path, body);
-                } catch {
-                    // Preserve the original POST failure.
+                if (hasReviewRequestPayload(pending)) {
+                    try {
+                        await postReviewRequestPayload(token, owner, name, number, pending);
+                    } catch {
+                        // Preserve the original POST failure.
+                    }
                 }
 
                 throw error;
@@ -1366,6 +1384,36 @@ export function createGithubHttpClient(
             )) as Array<{ id: number; user: { login: string } | null; content: string }>;
             return rows.find((row) => row.user?.login === viewerLogin)?.id ?? null;
         },
+
+        async createReviewCommentReaction(token, repository, commentId, content) {
+            const [owner = "", name = ""] = repository.split("/");
+            const created = (await restJson(
+                token,
+                "POST",
+                `/repos/${owner}/${name}/pulls/comments/${commentId}/reactions`,
+                { content },
+            )) as { id: number };
+            return created.id;
+        },
+
+        async deleteReviewCommentReaction(token, repository, commentId, reactionId) {
+            const [owner = "", name = ""] = repository.split("/");
+            await restJson(
+                token,
+                "DELETE",
+                `/repos/${owner}/${name}/pulls/comments/${commentId}/reactions/${reactionId}`,
+            );
+        },
+
+        async findReviewCommentReactionId(token, repository, commentId, content, viewerLogin) {
+            const [owner = "", name = ""] = repository.split("/");
+            const rows = (await restJson(
+                token,
+                "GET",
+                `/repos/${owner}/${name}/pulls/comments/${commentId}/reactions?content=${encodeURIComponent(content)}&per_page=100`,
+            )) as Array<{ id: number; user: { login: string } | null; content: string }>;
+            return rows.find((row) => row.user?.login === viewerLogin)?.id ?? null;
+        },
     };
 
     async function restJson(token: string, method: string, path: string, body?: unknown): Promise<unknown> {
@@ -1397,6 +1445,54 @@ export function createGithubHttpClient(
         }
 
         return response.json();
+    }
+
+    async function getRequestedReviewers(
+        token: string,
+        owner: string,
+        name: string,
+        number: number,
+    ): Promise<RequestedReviewersSnapshot> {
+        const data = (await restJson(token, "GET", `/repos/${owner}/${name}/pulls/${number}/requested_reviewers`)) as {
+            users?: Array<{ login: string }>;
+            teams?: Array<{ name: string; slug: string }>;
+        };
+
+        return {
+            users: data.users ?? [],
+            teams: data.teams ?? [],
+        };
+    }
+
+    async function postReviewRequestPayload(
+        token: string,
+        owner: string,
+        name: string,
+        number: number,
+        payload: ReviewRequestPayload,
+    ): Promise<void> {
+        if (!hasReviewRequestPayload(payload)) {
+            return;
+        }
+
+        await restJson(token, "POST", `/repos/${owner}/${name}/pulls/${number}/requested_reviewers`, payload);
+    }
+
+    async function deleteReviewRequestPayload(
+        token: string,
+        owner: string,
+        name: string,
+        number: number,
+        payload: ReviewRequestPayload,
+    ): Promise<void> {
+        if (!hasReviewRequestPayload(payload)) {
+            return;
+        }
+
+        await restJson(token, "DELETE", `/repos/${owner}/${name}/pulls/${number}/requested_reviewers`, {
+            reviewers: payload.reviewers,
+            ...(payload.team_reviewers.length > 0 ? { team_reviewers: payload.team_reviewers } : {}),
+        });
     }
 
     async function rest(token: string, path: string, accept = "application/vnd.github+json"): Promise<Response> {
@@ -1552,6 +1648,55 @@ function bytesToBase64(bytes: Uint8Array): string {
         binary += String.fromCharCode(...bytes.subarray(offset, offset + chunk));
     }
     return btoa(binary);
+}
+
+type RequestedReviewersSnapshot = {
+    users: Array<{ login: string }>;
+    teams: Array<{ name: string; slug: string }>;
+};
+
+type ReviewRequestPayload = {
+    reviewers: string[];
+    team_reviewers: string[];
+};
+
+function hasReviewRequestPayload(payload: ReviewRequestPayload): boolean {
+    return payload.reviewers.length > 0 || payload.team_reviewers.length > 0;
+}
+
+/** Map UI identifiers (user logins or team names/slugs) to GitHub REST review-request bodies. */
+export function resolveReviewRequestPayload(
+    identifiers: ReadonlyArray<string>,
+    current: RequestedReviewersSnapshot,
+    options: { treatUnknownAsUserLogins?: boolean } = {},
+): { all: ReviewRequestPayload; pending: ReviewRequestPayload } {
+    const pendingUserLogins = new Set(current.users.map((user) => user.login));
+    const teamSlugByName = new Map(current.teams.map((team) => [team.name, team.slug]));
+    const teamSlugs = new Set(current.teams.map((team) => team.slug));
+
+    const all: ReviewRequestPayload = { reviewers: [], team_reviewers: [] };
+    const pending: ReviewRequestPayload = { reviewers: [], team_reviewers: [] };
+
+    for (const identifier of identifiers) {
+        if (pendingUserLogins.has(identifier)) {
+            all.reviewers.push(identifier);
+            pending.reviewers.push(identifier);
+            continue;
+        }
+
+        const teamSlug = teamSlugByName.get(identifier) ?? (teamSlugs.has(identifier) ? identifier : null);
+        if (teamSlug) {
+            all.team_reviewers.push(teamSlug);
+            pending.team_reviewers.push(teamSlug);
+            continue;
+        }
+
+        if (options.treatUnknownAsUserLogins) {
+            all.reviewers.push(identifier);
+        }
+    }
+
+    return { all, pending };
 }
 
 type PullRequestNode = {
@@ -1953,6 +2098,7 @@ const PULL_REQUEST_FIELDS = `
                 }
                 ... on Team {
                     name
+                    slug
                 }
             }
         }
@@ -3298,11 +3444,13 @@ function nextRestPath(linkHeader: string | null): string | null {
 
 type ReviewThreadCommentNode = {
     id: string;
+    databaseId: number | null;
     url: string;
     body: string;
     createdAt: string;
     diffHunk?: string | null;
     author: { login: string; avatarUrl: string | null } | null;
+    reactionGroups: Array<ReactionGroupNode>;
 };
 
 type ReviewThreadNode = {
@@ -3343,6 +3491,7 @@ const REVIEW_THREADS_QUERY = `
                         comments(first: 50) {
                             nodes {
                                 id
+                                databaseId
                                 url
                                 body
                                 createdAt
@@ -3350,6 +3499,13 @@ const REVIEW_THREADS_QUERY = `
                                 author {
                                     login
                                     avatarUrl
+                                }
+                                reactionGroups {
+                                    content
+                                    viewerHasReacted
+                                    reactors {
+                                        totalCount
+                                    }
                                 }
                             }
                         }
@@ -3369,12 +3525,20 @@ const REPLY_TO_THREAD_MUTATION = `
         addPullRequestReviewThreadReply(input: { pullRequestReviewThreadId: $threadId, body: $body }) {
             comment {
                 id
+                databaseId
                 url
                 body
                 createdAt
                 author {
                     login
                     avatarUrl
+                }
+                reactionGroups {
+                    content
+                    viewerHasReacted
+                    reactors {
+                        totalCount
+                    }
                 }
             }
         }
@@ -3414,19 +3578,33 @@ function toGithubReviewEvent(event: ReviewEvent): "COMMENT" | "APPROVE" | "REQUE
     }
 }
 
-function toThreadComment(node: ReviewThreadCommentNode): ReviewThreadComment {
+function toThreadComment(node: ReviewThreadCommentNode): ReviewThreadComment | null {
+    if (node.databaseId == null) {
+        return null;
+    }
+
     return {
         id: node.id,
+        databaseId: node.databaseId,
         author: node.author?.login ?? "ghost",
         authorAvatarUrl: node.author?.avatarUrl ?? null,
         body: node.body,
         createdAt: node.createdAt,
         url: node.url,
+        reactionGroups: toReactionGroups(node.reactionGroups),
     };
 }
 
-function toReviewThread(node: ReviewThreadNode): ReviewThread {
-    const comments = node.comments.nodes;
+function toReviewThread(node: ReviewThreadNode): ReviewThread | null {
+    const comments = node.comments.nodes.flatMap((comment) => {
+        const mapped = toThreadComment(comment);
+        return mapped ? [mapped] : [];
+    });
+
+    if (comments.length === 0) {
+        return null;
+    }
+
     return {
         id: node.id,
         path: node.path,
@@ -3435,7 +3613,7 @@ function toReviewThread(node: ReviewThreadNode): ReviewThread {
         side: node.diffSide,
         isResolved: node.isResolved,
         isOutdated: node.isOutdated,
-        diffHunk: comments[0]?.diffHunk ?? null,
-        comments: comments.map(toThreadComment),
+        diffHunk: node.comments.nodes[0]?.diffHunk ?? null,
+        comments,
     };
 }

@@ -217,6 +217,7 @@ export function createFakeGithub(): FakeGithub {
     let reactionCounter = 0;
     const issueReactions = new Map<string, Array<{ id: number; content: ReactionContent; user: string }>>();
     const commentReactions = new Map<number, Array<{ id: number; content: ReactionContent; user: string }>>();
+    const reviewCommentReactions = new Map<number, Array<{ id: number; content: ReactionContent; user: string }>>();
 
     function reactionGroupsFrom(
         rows: Array<{ content: ReactionContent; user: string }>,
@@ -258,6 +259,28 @@ export function createFakeGithub(): FakeGithub {
                 item.kind === "comment" && item.databaseId === commentId ? { ...item, reactionGroups: groups } : item,
             ),
         );
+    }
+
+    function syncReviewCommentReactions(commentId: number, viewerLogin: string) {
+        const rows = reviewCommentReactions.get(commentId) ?? [];
+        const groups = reactionGroupsFrom(rows, viewerLogin);
+
+        for (const [key, threads] of threadsByPullRequest) {
+            let changed = false;
+            const next = threads.map((thread) => ({
+                ...thread,
+                comments: thread.comments.map((comment) => {
+                    if (comment.databaseId !== commentId) {
+                        return comment;
+                    }
+                    changed = true;
+                    return { ...comment, reactionGroups: groups };
+                }),
+            }));
+            if (changed) {
+                threadsByPullRequest.set(key, next);
+            }
+        }
     }
 
     function authenticate(token: string): GithubViewer {
@@ -735,6 +758,7 @@ export function createFakeGithub(): FakeGithub {
                 const key = filesKey(token, input.repository, input.number);
                 const created = input.comments.map((comment, index) => {
                     const id = `thread-${++replyCounter}-${index}`;
+                    const databaseId = replyCounter;
                     return {
                         id,
                         path: comment.path,
@@ -747,11 +771,13 @@ export function createFakeGithub(): FakeGithub {
                         comments: [
                             {
                                 id: `${id}-c0`,
+                                databaseId,
                                 author: account?.login ?? "octocat",
                                 authorAvatarUrl: account?.avatarUrl ?? null,
                                 body: comment.body,
                                 createdAt: new Date().toISOString(),
-                                url: `https://github.com/${input.repository}/pull/${input.number}#discussion_r${replyCounter}`,
+                                url: `https://github.com/${input.repository}/pull/${input.number}#discussion_r${databaseId}`,
+                                reactionGroups: [],
                             },
                         ],
                     } satisfies ReviewThread;
@@ -778,11 +804,13 @@ export function createFakeGithub(): FakeGithub {
                     const pullNumber = keyMatch?.[2] ?? "1";
                     const reply: ReviewThreadComment = {
                         id: `reply-${++replyCounter}`,
+                        databaseId: replyCounter,
                         author: account?.login ?? "octocat",
                         authorAvatarUrl: account?.avatarUrl ?? null,
                         body,
                         createdAt: new Date().toISOString(),
                         url: `https://github.com/${repository}/pull/${pullNumber}#discussion_r${replyCounter}`,
+                        reactionGroups: [],
                     };
                     const updated = {
                         ...threads[index]!,
@@ -1115,6 +1143,37 @@ export function createFakeGithub(): FakeGithub {
             return respond("findIssueCommentReactionId", () => {
                 authenticate(token);
                 const rows = commentReactions.get(commentId) ?? [];
+                return rows.find((row) => row.content === content && row.user === viewerLogin)?.id ?? null;
+            });
+        },
+        createReviewCommentReaction(token, _repository, commentId, content) {
+            return respond("createReviewCommentReaction", () => {
+                const viewer = authenticate(token);
+                const rows = reviewCommentReactions.get(commentId) ?? [];
+                const existing = rows.find((row) => row.content === content && row.user === viewer.login);
+                if (existing) {
+                    return existing.id;
+                }
+                const id = ++reactionCounter;
+                reviewCommentReactions.set(commentId, [...rows, { id, content, user: viewer.login }]);
+                syncReviewCommentReactions(commentId, viewer.login);
+                return id;
+            });
+        },
+        deleteReviewCommentReaction(token, _repository, commentId, reactionId) {
+            return respond("deleteReviewCommentReaction", () => {
+                const viewer = authenticate(token);
+                reviewCommentReactions.set(
+                    commentId,
+                    (reviewCommentReactions.get(commentId) ?? []).filter((row) => row.id !== reactionId),
+                );
+                syncReviewCommentReactions(commentId, viewer.login);
+            });
+        },
+        findReviewCommentReactionId(token, _repository, commentId, content, viewerLogin) {
+            return respond("findReviewCommentReactionId", () => {
+                authenticate(token);
+                const rows = reviewCommentReactions.get(commentId) ?? [];
                 return rows.find((row) => row.content === content && row.user === viewerLogin)?.id ?? null;
             });
         },

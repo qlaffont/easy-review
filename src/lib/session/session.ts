@@ -2319,6 +2319,74 @@ export function createEasyReviewSession({ github, store, oauth }: EasyReviewSess
         });
     }
 
+    async function toggleReviewCommentReaction(
+        repository: string,
+        number: number,
+        commentId: number,
+        content: ReactionContent,
+    ): Promise<void> {
+        const token = requireToken();
+        const viewerLogin = state.state.auth.viewer?.login;
+        if (!viewerLogin) {
+            throw unauthorized();
+        }
+
+        const key = pullRequestKey(repository, number);
+        const threads = state.state.reviewThreads[key] ?? initialThreadsState;
+        let already = false;
+
+        for (const thread of threads.items) {
+            const comment = thread.comments.find((entry) => entry.databaseId === commentId);
+            if (comment) {
+                already = comment.reactionGroups.some((group) => group.content === content && group.viewerHasReacted);
+                break;
+            }
+        }
+
+        if (already) {
+            const reactionId = await github.findReviewCommentReactionId(
+                token,
+                repository,
+                commentId,
+                content,
+                viewerLogin,
+            );
+            if (reactionId != null) {
+                await github.deleteReviewCommentReaction(token, repository, commentId, reactionId);
+            }
+        } else {
+            await github.createReviewCommentReaction(token, repository, commentId, content);
+        }
+
+        state.setState((prev) => {
+            const current = prev.reviewThreads[key] ?? initialThreadsState;
+            return {
+                ...prev,
+                reviewThreads: {
+                    ...prev.reviewThreads,
+                    [key]: {
+                        ...current,
+                        items: current.items.map((thread) => ({
+                            ...thread,
+                            comments: thread.comments.map((comment) =>
+                                comment.databaseId === commentId
+                                    ? {
+                                          ...comment,
+                                          reactionGroups: patchReactionGroups(
+                                              comment.reactionGroups,
+                                              content,
+                                              !already,
+                                          ),
+                                      }
+                                    : comment,
+                            ),
+                        })),
+                    },
+                },
+            };
+        });
+    }
+
     async function mergePullRequest(repository: string, number: number, method: MergeMethod): Promise<void> {
         await github.mergePullRequest(requireToken(), repository, number, method);
         await refreshAfterMutation(repository, number);
@@ -2510,6 +2578,7 @@ export function createEasyReviewSession({ github, store, oauth }: EasyReviewSess
         listRepositoryBranches,
         toggleIssueReaction,
         toggleIssueCommentReaction,
+        toggleReviewCommentReaction,
         mergePullRequest,
         closePullRequest,
         uploadPullRequestMedia,

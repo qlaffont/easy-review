@@ -27,7 +27,7 @@ import { DiffHunkPreview, suggestionOriginalFromHunk } from "#/components/pr/dif
 import { EditedMeta } from "#/components/pr/edited-meta.tsx";
 import { MarkdownComposer } from "#/components/pr/markdown-composer.tsx";
 import { Markdown } from "#/components/pr/markdown.tsx";
-import { ReactionBar } from "#/components/pr/reaction-bar.tsx";
+import { ReactionBar, ReviewThreadCommentReactions } from "#/components/pr/reaction-bar.tsx";
 import { ReviewThreadStatusLabels } from "#/components/pr/review-thread-status.tsx";
 import {
     AlertDialog,
@@ -540,6 +540,13 @@ function TimelineReviewThread({
                                                 : null
                                         }
                                     />
+                                    <div className="mt-2">
+                                        <ReviewThreadCommentReactions
+                                            repository={repository}
+                                            number={number}
+                                            comment={comment}
+                                        />
+                                    </div>
                                 </div>
                             ))}
 
