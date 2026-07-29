@@ -41,6 +41,12 @@ describe("isAllowedGithubProxyRequest", () => {
         );
         expect(isAllowedGithubProxyRequest("GET", "/repos/acme/api/contents/src/a.ts", undefined)).toBe(true);
         expect(isAllowedGithubProxyRequest("GET", "/repos/acme/api/compare/abc...def", undefined)).toBe(true);
+        expect(isAllowedGithubProxyRequest("GET", "/repos/acme/api/git/ref/uploads/pr/42", undefined)).toBe(true);
+        expect(isAllowedGithubProxyRequest("POST", "/repos/acme/api/git/blobs", new ArrayBuffer(0))).toBe(true);
+        expect(isAllowedGithubProxyRequest("POST", "/repos/acme/api/git/refs", new ArrayBuffer(0))).toBe(true);
+        expect(isAllowedGithubProxyRequest("PATCH", "/repos/acme/api/git/refs/uploads/pr/42", new ArrayBuffer(0))).toBe(
+            true,
+        );
         expect(isAllowedGithubProxyRequest("GET", "/repos/../user", undefined)).toBe(false);
     });
 

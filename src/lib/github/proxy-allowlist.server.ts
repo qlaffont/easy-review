@@ -46,9 +46,12 @@ const REST_RULES: Array<Rule> = [
     { methods: new Set(["PUT"]), pattern: /^\/repos\/[^/]+\/[^/]+\/pulls\/\d+\/merge$/ },
     { methods: new Set(["PATCH"]), pattern: /^\/repos\/[^/]+\/[^/]+\/pulls\/\d+$/ },
     { methods: GET, pattern: /^\/repos\/[^/]+\/[^/]+\/git\/commits\/[^/]+$/ },
+    /** Media upload + apply-suggestions: read/create/update git objects and refs. */
+    { methods: GET, pattern: /^\/repos\/[^/]+\/[^/]+\/git\/ref\/.+$/ },
     { methods: new Set(["POST"]), pattern: /^\/repos\/[^/]+\/[^/]+\/git\/blobs$/ },
     { methods: new Set(["POST"]), pattern: /^\/repos\/[^/]+\/[^/]+\/git\/trees$/ },
     { methods: new Set(["POST"]), pattern: /^\/repos\/[^/]+\/[^/]+\/git\/commits$/ },
+    { methods: new Set(["POST"]), pattern: /^\/repos\/[^/]+\/[^/]+\/git\/refs$/ },
     { methods: new Set(["PATCH"]), pattern: /^\/repos\/[^/]+\/[^/]+\/git\/refs\/.+$/ },
 ];
 
