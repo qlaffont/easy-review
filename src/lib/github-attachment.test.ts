@@ -4,13 +4,20 @@ import { describe, expect, it } from "vitest";
 
 import { Markdown } from "#/components/pr/markdown.tsx";
 import {
+    isGithubPrivateMediaUrl,
+    isGithubRepoBlobRawUrl,
     isGithubUserAttachmentUrl,
     parseGithubAttachmentMarkdownHtml,
+    parseGithubRepoBlobRawUrl,
     repositoryFromGithubBaseUrl,
     shouldEmbedGithubAttachment,
 } from "#/lib/github-attachment.ts";
 
 const ATTACHMENT = "https://github.com/user-attachments/assets/0682c898-4e3a-4209-a711-54519406d6a8";
+const REPO_BLOB =
+    "https://github.com/acme/api/blob/b395d09f1dd536188676eeb4a6958f77aebf3f08/ae48774b65c9-shot.png?raw=true";
+const REPO_BLOB_ENCODED =
+    "https://github.com/acme/api/blob/b395d09f1dd536188676eeb4a6958f77aebf3f08/ae48774b65c9-shot%2Epng?raw=true";
 
 function renderMarkdown(source: string): string {
     return renderToStaticMarkup(createElement(Markdown, { source, baseUrl: "https://github.com/acme/api" }));
@@ -29,6 +36,30 @@ describe("isGithubUserAttachmentUrl", () => {
     });
 });
 
+describe("parseGithubRepoBlobRawUrl", () => {
+    it("parses easy-review upload blob raw urls", () => {
+        expect(parseGithubRepoBlobRawUrl(REPO_BLOB)).toEqual({
+            repository: "acme/api",
+            sha: "b395d09f1dd536188676eeb4a6958f77aebf3f08",
+            path: "ae48774b65c9-shot.png",
+        });
+        expect(isGithubRepoBlobRawUrl(REPO_BLOB)).toBe(true);
+        expect(isGithubPrivateMediaUrl(REPO_BLOB)).toBe(true);
+    });
+
+    it("decodes legacy %2E upload urls", () => {
+        expect(parseGithubRepoBlobRawUrl(REPO_BLOB_ENCODED)?.path).toBe("ae48774b65c9-shot.png");
+    });
+
+    it("rejects blob urls without raw=true", () => {
+        expect(
+            parseGithubRepoBlobRawUrl(
+                "https://github.com/acme/api/blob/b395d09f1dd536188676eeb4a6958f77aebf3f08/shot.png",
+            ),
+        ).toBeNull();
+    });
+});
+
 describe("shouldEmbedGithubAttachment", () => {
     it("embeds autolinks whose text is the attachment url", () => {
         expect(shouldEmbedGithubAttachment(ATTACHMENT, ATTACHMENT)).toBe(true);
@@ -41,7 +72,7 @@ describe("shouldEmbedGithubAttachment", () => {
 
 describe("Markdown github attachment embeds", () => {
     it("renders a bare user-attachments url as media, not a plain link", () => {
-        const html = renderMarkdown(`fix concurrency:\n\n${ATTACHMENT}`);
+        const html = renderMarkdown(`Fix concurrency:\n\n${ATTACHMENT}`);
 
         expect(html).toContain(`src="${ATTACHMENT}"`);
         expect(html).toMatch(/<(?:img|video)\b/);
@@ -64,6 +95,12 @@ describe("Markdown github attachment embeds", () => {
         expect(html).toContain(`href="${ATTACHMENT}"`);
         expect(html).toContain("Open asset");
         expect(html).not.toMatch(/<(?:img|video)\b/);
+    });
+
+    it("routes repo blob raw images through private media resolution", () => {
+        const html = renderMarkdown(`![shot.png](${REPO_BLOB})`);
+        expect(html).toContain(`src="${REPO_BLOB}"`);
+        expect(html).toMatch(/<img\b/);
     });
 });
 

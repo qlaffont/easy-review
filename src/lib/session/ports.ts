@@ -238,6 +238,14 @@ export type GithubClient = {
         repository: string,
         attachmentUrl: string,
     ): Promise<{ kind: "image" | "video"; src: string; name?: string } | null>;
+    /**
+     * Resolve Easy Review–uploaded `blob/<sha>/…?raw=true` media via the Contents API
+     * (`download_url` or inline base64) so private-repo previews can render without cookies.
+     */
+    resolveRepoBlobMedia(
+        token: string,
+        mediaUrl: string,
+    ): Promise<{ kind: "image" | "video"; src: string; name?: string } | null>;
 };
 
 /** Browser persistence, narrowed to what the session needs so IndexedDB can replace it later. */

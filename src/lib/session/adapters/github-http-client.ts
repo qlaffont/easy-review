@@ -26,7 +26,12 @@ import type {
 } from "#/lib/session/types.ts";
 
 import { mediaKindForNameAndType, mediaMarkdown, sanitizeMediaFileName } from "#/lib/composer-media.ts";
-import { isGithubUserAttachmentUrl, parseGithubAttachmentMarkdownHtml } from "#/lib/github-attachment.ts";
+import {
+    isGithubUserAttachmentUrl,
+    mediaKindFromPath,
+    parseGithubAttachmentMarkdownHtml,
+    parseGithubRepoBlobRawUrl,
+} from "#/lib/github-attachment.ts";
 import { applySuggestionsToFile, type SuggestionChange } from "#/lib/session/apply-suggestion.ts";
 import { buildFileDiff } from "#/lib/session/build-file-diff.ts";
 import { mapCheckRuns, type CheckContextInput } from "#/lib/session/check-runs.ts";
@@ -1126,7 +1131,8 @@ export function createGithubHttpClient(
                     });
                 }
 
-                const url = `https://github.com/${owner}/${name}/blob/${commit.sha}/${encodePath(uniqueName)}?raw=true`;
+                // Use web path encoding (keep `.`) — `encodePath`’s `%2E` breaks github.com / <img>.
+                const url = `https://github.com/${owner}/${name}/blob/${commit.sha}/${encodeGithubWebPath(uniqueName)}?raw=true`;
                 return { url, markdown: mediaMarkdown(kind, safeName, url) };
             } catch (cause) {
                 if (cause instanceof EasyReviewError && cause.kind === "forbidden") {
@@ -1168,6 +1174,53 @@ export function createGithubHttpClient(
             }
 
             return parseGithubAttachmentMarkdownHtml(await response.text());
+        },
+
+        async resolveRepoBlobMedia(token, mediaUrl) {
+            const parsed = parseGithubRepoBlobRawUrl(mediaUrl);
+            if (!parsed) {
+                return null;
+            }
+
+            const [owner = "", name = ""] = parsed.repository.split("/");
+            const payload = (await restJson(
+                token,
+                "GET",
+                `/repos/${owner}/${name}/contents/${encodePath(parsed.path)}?ref=${encodeURIComponent(parsed.sha)}`,
+            )) as {
+                type?: string;
+                encoding?: string;
+                content?: string;
+                download_url?: string | null;
+                name?: string;
+            };
+
+            if (payload.type !== "file") {
+                return null;
+            }
+
+            const kind = mediaKindFromPath(parsed.path);
+            const fileName = payload.name ?? parsed.path.split("/").pop();
+
+            if (typeof payload.download_url === "string" && payload.download_url.length > 0) {
+                return {
+                    kind,
+                    src: payload.download_url,
+                    ...(fileName ? { name: fileName } : {}),
+                };
+            }
+
+            if (typeof payload.content === "string" && payload.encoding === "base64") {
+                const mime = mimeFromMediaPath(parsed.path);
+                const base64 = payload.content.replaceAll(/\s+/g, "");
+                return {
+                    kind,
+                    src: `data:${mime};base64,${base64}`,
+                    ...(fileName ? { name: fileName } : {}),
+                };
+            }
+
+            return null;
         },
 
         async updatePullRequestBody(token, repository, number, body) {
@@ -1469,6 +1522,27 @@ function encodePath(path: string): string {
         .split("/")
         .map((segment) => encodeURIComponent(segment).replaceAll(".", "%2E"))
         .join("/");
+}
+
+/** Path segments for `github.com/.../blob/...` URLs — keep `.` so browsers and GitHub resolve media. */
+function encodeGithubWebPath(path: string): string {
+    return path
+        .split("/")
+        .map((segment) => encodeURIComponent(segment))
+        .join("/");
+}
+
+function mimeFromMediaPath(path: string): string {
+    const lower = path.toLowerCase();
+    if (lower.endsWith(".png")) return "image/png";
+    if (lower.endsWith(".jpg") || lower.endsWith(".jpeg")) return "image/jpeg";
+    if (lower.endsWith(".gif")) return "image/gif";
+    if (lower.endsWith(".webp")) return "image/webp";
+    if (lower.endsWith(".svg")) return "image/svg+xml";
+    if (lower.endsWith(".mp4")) return "video/mp4";
+    if (lower.endsWith(".webm")) return "video/webm";
+    if (lower.endsWith(".mov")) return "video/quicktime";
+    return "application/octet-stream";
 }
 
 function bytesToBase64(bytes: Uint8Array): string {

@@ -22,6 +22,7 @@ import { remarkAlert } from "remark-github-blockquote-alert";
 
 import { SuggestionApplyActions, type SuggestionApplyTarget } from "#/components/pr/suggestion-apply.tsx";
 import {
+    isGithubPrivateMediaUrl,
     isGithubUserAttachmentUrl,
     repositoryFromGithubBaseUrl,
     shouldEmbedGithubAttachment,
@@ -374,10 +375,9 @@ function AttachmentFallback({ href, name }: { href: string; name?: string }) {
 }
 
 /**
- * GitHub auto-embeds bare `user-attachments` URLs as image or video. The CDN path has no
- * extension. Resolve via GitHub’s markdown API to a signed private-user-images URL (cookies are
- * not sent on cross-origin `<img>`/`<video>` from Easy Review). Fall back to img→video probing,
- * then a link if the browser still cannot play the file (e.g. QuickTime `.mov` in Firefox).
+ * Private GitHub media: `user-attachments` (markdown API → signed CDN) or Easy Review
+ * `blob/…?raw=true` uploads (Contents `download_url`). Cookies are not sent on cross-origin
+ * `<img>`/`<video>`, so bare github.com URLs fail for private repos.
  */
 function GithubAttachmentMedia({ src }: { src: string }) {
     const repository = useContext(MarkdownRepoContext);
@@ -386,15 +386,22 @@ function GithubAttachmentMedia({ src }: { src: string }) {
     const [mode, setMode] = useState<"image" | "video">("image");
     const [failed, setFailed] = useState(false);
     const [retried, setRetried] = useState(false);
+    const isUserAttachment = isGithubUserAttachmentUrl(src);
 
     useEffect(() => {
-        if (!session || !repository) {
+        if (!session) {
+            return;
+        }
+        if (isUserAttachment && !repository) {
             return;
         }
 
         let cancelled = false;
-        void session
-            .resolveUserAttachment(repository, src)
+        const resolve = isUserAttachment
+            ? session.resolveUserAttachment(repository!, src)
+            : session.resolveRepoBlobMedia(src);
+
+        void resolve
             .then((next) => {
                 if (!cancelled && next) {
                     setResolved(next);
@@ -408,10 +415,10 @@ function GithubAttachmentMedia({ src }: { src: string }) {
         return () => {
             cancelled = true;
         };
-    }, [session, repository, src, retried]);
+    }, [session, repository, src, retried, isUserAttachment]);
 
     async function retryOrFail() {
-        if (!retried && session && repository) {
+        if (!retried && session && (!isUserAttachment || repository)) {
             setRetried(true);
             return;
         }
@@ -593,7 +600,7 @@ const components = {
         if (!isAllowedMarkdownImageSrc(src)) {
             return null;
         }
-        if (isGithubUserAttachmentUrl(src) && typeof src === "string") {
+        if (isGithubPrivateMediaUrl(src) && typeof src === "string") {
             return <GithubAttachmentMedia src={src} />;
         }
         return <img src={src} alt={alt ?? ""} loading="lazy" referrerPolicy="no-referrer" {...props} />;
@@ -601,6 +608,9 @@ const components = {
     video: ({ src, ...props }: ComponentPropsWithoutRef<"video">) => {
         if (!isAllowedMarkdownImageSrc(typeof src === "string" ? src : undefined)) {
             return null;
+        }
+        if (isGithubPrivateMediaUrl(typeof src === "string" ? src : undefined) && typeof src === "string") {
+            return <GithubAttachmentMedia src={src} />;
         }
         return <MarkdownVideo src={typeof src === "string" ? src : undefined} {...props} />;
     },
@@ -624,9 +634,17 @@ function isBlankChildren(children: ReactNode): boolean {
         if (typeof part === "number") {
             return false;
         }
-        if (isValidElement<{ children?: ReactNode }>(part)) {
+        if (isValidElement<{ children?: ReactNode; src?: unknown }>(part)) {
             if (part.type === "br") {
                 return true;
+            }
+            // Self-closing media / controls are real content (an image-only paragraph is not blank).
+            if (part.type === "img" || part.type === "video" || part.type === "hr" || part.type === "input") {
+                return false;
+            }
+            // Custom media hosts (e.g. GithubAttachmentMedia) pass `src` and have no text children.
+            if (part.props.src != null) {
+                return false;
             }
             return isBlankChildren(part.props.children);
         }

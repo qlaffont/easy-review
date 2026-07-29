@@ -360,7 +360,7 @@ export function MarkdownComposer({
         apply(tool);
     }
 
-    async function uploadMediaFiles(files: Array<File>) {
+    async function uploadMediaFiles(files: Array<File>, placement: "caret" | "end" = "caret") {
         if (!repository || pullRequestNumber == null) {
             notifyError("Open a pull request to upload media.");
             return;
@@ -370,8 +370,9 @@ export function MarkdownComposer({
         }
 
         const node = textareaRef.current;
-        const start = node?.selectionStart ?? valueRef.current.length;
-        const end = node?.selectionEnd ?? valueRef.current.length;
+        const atEnd = placement === "end";
+        const start = atEnd ? valueRef.current.length : (node?.selectionStart ?? valueRef.current.length);
+        const end = atEnd ? valueRef.current.length : (node?.selectionEnd ?? valueRef.current.length);
         const items = files.map((file) => ({
             file,
             name: file.name,
@@ -441,7 +442,11 @@ export function MarkdownComposer({
             return;
         }
         event.preventDefault();
-        void uploadMediaFiles(media.map((entry) => entry.file));
+        // Drop often resets the caret to 0 — always append so media lands after existing text.
+        void uploadMediaFiles(
+            media.map((entry) => entry.file),
+            "end",
+        );
     }
 
     const toolbarTools = compact

@@ -2348,6 +2348,10 @@ export function createEasyReviewSession({ github, store, oauth }: EasyReviewSess
         return github.resolveUserAttachment(requireToken(), repository, attachmentUrl);
     }
 
+    async function resolveRepoBlobMedia(mediaUrl: string) {
+        return github.resolveRepoBlobMedia(requireToken(), mediaUrl);
+    }
+
     /** Visible sections in the user's layout order, empty ones included when not hidden. */
     function getInboxSections(): Array<InboxSection> {
         const { inbox, repos, auth } = state.state;
@@ -2510,6 +2514,7 @@ export function createEasyReviewSession({ github, store, oauth }: EasyReviewSess
         closePullRequest,
         uploadPullRequestMedia,
         resolveUserAttachment,
+        resolveRepoBlobMedia,
     };
 }
 

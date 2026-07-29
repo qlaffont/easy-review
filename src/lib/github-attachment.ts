@@ -1,10 +1,21 @@
 /** GitHub upload CDN — images and videos share this host/path with no file extension. */
 const USER_ATTACHMENT_PATH = /^\/user-attachments\/assets\/[0-9a-f-]+\/?$/i;
 
+/** Easy Review PR media: `…/blob/<sha>/<path>?raw=true` (often private — needs auth to render). */
+const REPO_BLOB_RAW_PATH = /^\/([^/]+)\/([^/]+)\/blob\/([0-9a-f]{7,40})\/(.+)$/i;
+
+const VIDEO_PATH_EXTENSION = /\.(mp4|webm|mov|m4v|ogv)$/i;
+
 export type ResolvedGithubAttachment = {
     kind: "image" | "video";
     src: string;
     name?: string;
+};
+
+export type GithubRepoBlobRawRef = {
+    repository: string;
+    sha: string;
+    path: string;
 };
 
 export function isGithubUserAttachmentUrl(src: string | undefined): boolean {
@@ -25,6 +36,57 @@ export function isGithubUserAttachmentUrl(src: string | undefined): boolean {
     } catch {
         return false;
     }
+}
+
+/**
+ * Parse Easy Review–uploaded (or similar) repo blob raw URLs.
+ * Decodes `%2E` so older markdown with encodePath-style URLs still resolve.
+ */
+export function parseGithubRepoBlobRawUrl(src: string | undefined): GithubRepoBlobRawRef | null {
+    if (!src) {
+        return null;
+    }
+
+    try {
+        const url = new URL(src, "https://github.com");
+        if (url.protocol !== "https:" && url.protocol !== "http:") {
+            return null;
+        }
+        const host = url.hostname.toLowerCase();
+        if (host !== "github.com" && host !== "www.github.com") {
+            return null;
+        }
+        if (url.searchParams.get("raw") !== "true") {
+            return null;
+        }
+        const match = REPO_BLOB_RAW_PATH.exec(url.pathname);
+        if (!match) {
+            return null;
+        }
+        const path = decodeURIComponent(match[4]!);
+        if (!path || path.split("/").includes("..")) {
+            return null;
+        }
+        return {
+            repository: `${match[1]}/${match[2]}`,
+            sha: match[3]!,
+            path,
+        };
+    } catch {
+        return null;
+    }
+}
+
+export function isGithubRepoBlobRawUrl(src: string | undefined): boolean {
+    return parseGithubRepoBlobRawUrl(src) !== null;
+}
+
+export function mediaKindFromPath(path: string): "image" | "video" {
+    return VIDEO_PATH_EXTENSION.test(path) ? "video" : "image";
+}
+
+export function isGithubPrivateMediaUrl(src: string | undefined): boolean {
+    return isGithubUserAttachmentUrl(src) || isGithubRepoBlobRawUrl(src);
 }
 
 /**

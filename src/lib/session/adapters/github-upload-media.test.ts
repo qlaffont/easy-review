@@ -55,10 +55,44 @@ describe("uploadPullRequestMedia", () => {
         });
 
         expect(result.url).toMatch(
-            /^https:\/\/github\.com\/acme\/api\/blob\/commit-sha\/[a-f0-9]{12}-shot%2Epng\?raw=true$/,
+            /^https:\/\/github\.com\/acme\/api\/blob\/commit-sha\/[a-f0-9]{12}-shot\.png\?raw=true$/,
         );
         expect(result.markdown).toBe(`![shot.png](${result.url})`);
         expect(calls.some((call) => call.method === "POST" && call.path.endsWith("/git/refs"))).toBe(true);
+    });
+
+    it("resolves blob raw media via Contents download_url", async () => {
+        const github = createGithubHttpClient(async (input, init) => {
+            const url = String(input);
+            const method = (init?.method ?? "GET").toUpperCase();
+            if (url.includes("/graphql")) {
+                return respondJson({ data: {} } satisfies GraphqlBody);
+            }
+            if (
+                method === "GET" &&
+                url.includes("/repos/acme/api/contents/") &&
+                url.includes("ref=b395d09f1dd536188676eeb4a6958f77aebf3f08")
+            ) {
+                return respondJson({
+                    type: "file",
+                    name: "ae48774b65c9-shot.png",
+                    download_url:
+                        "https://raw.githubusercontent.com/acme/api/b395d09f1dd536188676eeb4a6958f77aebf3f08/ae48774b65c9-shot.png?token=abc",
+                });
+            }
+            return new Response(`unexpected ${method} ${url}`, { status: 500 });
+        });
+
+        const resolved = await github.resolveRepoBlobMedia(
+            "token",
+            "https://github.com/acme/api/blob/b395d09f1dd536188676eeb4a6958f77aebf3f08/ae48774b65c9-shot%2Epng?raw=true",
+        );
+
+        expect(resolved).toEqual({
+            kind: "image",
+            src: "https://raw.githubusercontent.com/acme/api/b395d09f1dd536188676eeb4a6958f77aebf3f08/ae48774b65c9-shot.png?token=abc",
+            name: "ae48774b65c9-shot.png",
+        });
     });
 
     it("explains Contents write when GitHub forbids the upload", async () => {

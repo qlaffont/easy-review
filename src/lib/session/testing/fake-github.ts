@@ -951,6 +951,25 @@ export function createFakeGithub(): FakeGithub {
                 };
             });
         },
+        resolveRepoBlobMedia(token, mediaUrl) {
+            return respond("resolveRepoBlobMedia", () => {
+                authenticate(token);
+                if (!mediaUrl.includes("/blob/") || !mediaUrl.includes("raw=true")) {
+                    return null;
+                }
+                const name = mediaUrl.split("/").pop()?.split("?")[0] ?? "upload.bin";
+                const lower = name.toLowerCase();
+                const kind =
+                    lower.endsWith(".mp4") || lower.endsWith(".webm") || lower.endsWith(".mov")
+                        ? ("video" as const)
+                        : ("image" as const);
+                return {
+                    kind,
+                    src: `https://raw.githubusercontent.com/acme/api/sha/${name}?token=test`,
+                    name,
+                };
+            });
+        },
         updatePullRequestBody(token, repository, number, body) {
             return respond("updatePullRequestBody", () => {
                 authenticate(token);
