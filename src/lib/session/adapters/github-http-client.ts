@@ -1276,11 +1276,18 @@ export function createGithubHttpClient(
             });
         },
 
-        async mergePullRequest(token, repository, number, method: MergeMethod) {
+        async mergePullRequest(token, repository, number, method: MergeMethod, options) {
             const [owner = "", name = ""] = repository.split("/");
-            await restJson(token, "PUT", `/repos/${owner}/${name}/pulls/${number}/merge`, {
-                merge_method: method,
-            });
+            const payload: Record<string, string> = { merge_method: method };
+            const commitTitle = options?.commitTitle?.trim();
+            const commitMessage = options?.commitMessage?.trim();
+            if (commitTitle) {
+                payload.commit_title = commitTitle;
+            }
+            if (commitMessage) {
+                payload.commit_message = commitMessage;
+            }
+            await restJson(token, "PUT", `/repos/${owner}/${name}/pulls/${number}/merge`, payload);
         },
 
         async closePullRequest(token, repository, number) {

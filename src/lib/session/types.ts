@@ -93,6 +93,12 @@ export type CheckRun = {
 /** How GitHub should combine the head into the base when merging. */
 export type MergeMethod = "merge" | "squash" | "rebase";
 
+/** Optional squash/merge-commit message overrides passed to GitHub on merge. */
+export type MergePullRequestOptions = {
+    commitTitle?: string;
+    commitMessage?: string;
+};
+
 /** GitHub reaction content values used on issues and comments. */
 export type ReactionContent = "+1" | "-1" | "laugh" | "confused" | "heart" | "hooray" | "rocket" | "eyes";
 

@@ -106,6 +106,12 @@ describe("pull request lifecycle", () => {
 
         expect(session.getPullRequestPage("acme/api", 1).detail?.state).toBe("merged");
         expect(session.state.state.inbox.pullRequests[0]?.state).toBe("merged");
+        expect(
+            session
+                .getInboxSections()
+                .find((section) => section.id === "waiting-for-reviewers-me")
+                ?.pullRequests.some((entry) => entry.key === "acme/api#1"),
+        ).toBe(false);
     });
 
     it("closes an open pull request after the mutation succeeds", async () => {

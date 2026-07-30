@@ -1,14 +1,25 @@
 import { useNavigate } from "@tanstack/react-router";
-import { AlertTriangle, Check, CheckCircle2, ChevronDown, CircleX, GitPullRequestDraft, Users } from "lucide-react";
+import {
+    AlertTriangle,
+    Check,
+    CheckCircle2,
+    ChevronDown,
+    CircleX,
+    GitMerge,
+    GitPullRequestDraft,
+    Users,
+} from "lucide-react";
 import { useMemo, useRef, useState } from "react";
 
 import type { MergeMethod, PullRequestDetail } from "#/lib/session/types.ts";
 
 import {
     checksStatusLabel,
+    defaultMergeCommitTitle,
     isMergeBlockedByRequirements,
     isReviewBlocking,
     mergeFooterHint,
+    mergeMethodSupportsCustomCommitMessage,
     mergingBlockedDescription,
     reviewRequiredDescription,
 } from "#/components/pr/merge-requirements.ts";
@@ -32,9 +43,12 @@ import {
     DropdownMenuSeparator,
     DropdownMenuTrigger,
 } from "#/components/ui/dropdown-menu.tsx";
+import { Input } from "#/components/ui/input.tsx";
+import { Label } from "#/components/ui/label.tsx";
+import { Textarea } from "#/components/ui/textarea.tsx";
 import { useDiffPreferences } from "#/lib/diff-preferences.ts";
 import { useReviewThreadsQuery } from "#/lib/query/pull-request.ts";
-import { useSession } from "#/lib/session/provider.tsx";
+import { useSession, useSessionState } from "#/lib/session/provider.tsx";
 import { notifyAction, notifyActionWithInboxPrompt } from "#/lib/toast.ts";
 import { cn } from "#/lib/utils.ts";
 
@@ -72,12 +86,16 @@ function mergeMethodOptions(
 export function PullRequestControls({ detail }: { detail: PullRequestDetail }) {
     const session = useSession();
     const navigate = useNavigate();
+    const viewerLogin = useSessionState((state) => state.auth.viewer?.login);
     const [preferences] = useDiffPreferences();
     const threads = useReviewThreadsQuery(detail.repository, detail.number);
     const unresolvedThreads = useMemo(() => threads.items.filter((thread) => !thread.isResolved), [threads.items]);
     const [error, setError] = useState<string | null>(null);
     const [busy, setBusy] = useState(false);
     const [bypassRules, setBypassRules] = useState(false);
+    const [mergeDialogOpen, setMergeDialogOpen] = useState(false);
+    const [commitTitle, setCommitTitle] = useState("");
+    const [commitMessage, setCommitMessage] = useState("");
     const busyRef = useRef(false);
     const mergeOptions = mergeMethodOptions(detail.allowedMergeMethods, detail.commitCount);
     const [mergeMethod, setMergeMethod] = useState<MergeMethod>(
@@ -118,9 +136,16 @@ export function PullRequestControls({ detail }: { detail: PullRequestDetail }) {
         setBusy(true);
         setError(null);
         try {
+            const mergeOptions = mergeMethodSupportsCustomCommitMessage(method)
+                ? {
+                      commitTitle: commitTitle.trim() || undefined,
+                      commitMessage: commitMessage.trim() || undefined,
+                  }
+                : undefined;
+
             await notifyActionWithInboxPrompt(
                 async () => {
-                    await session.mergePullRequest(detail.repository, detail.number, method);
+                    await session.mergePullRequest(detail.repository, detail.number, method, mergeOptions);
                 },
                 {
                     loading: "Merging pull request…",
@@ -134,12 +159,21 @@ export function PullRequestControls({ detail }: { detail: PullRequestDetail }) {
                     },
                 },
             );
+            setMergeDialogOpen(false);
         } catch (cause) {
             setError(cause instanceof Error ? cause.message : "That action failed.");
         } finally {
             busyRef.current = false;
             setBusy(false);
         }
+    }
+
+    function handleMergeDialogOpenChange(open: boolean) {
+        if (open) {
+            setCommitTitle(defaultMergeCommitTitle(detail));
+            setCommitMessage(detail.body);
+        }
+        setMergeDialogOpen(open);
     }
 
     async function resolveAllThreads() {
@@ -181,6 +215,7 @@ export function PullRequestControls({ detail }: { detail: PullRequestDetail }) {
         ? mergeMethod
         : (mergeOptions[0]?.value ?? mergeMethod);
     const selectedMerge = mergeOptions.find((method) => method.value === activeMergeMethod) ?? mergeOptions[0] ?? null;
+    const supportsCustomCommitMessage = mergeMethodSupportsCustomCommitMessage(activeMergeMethod);
     const conflictsUrl = `${detail.url}/conflicts`;
     const mergeButtonClass = mergeBlocked
         ? "bg-muted text-muted-foreground hover:bg-muted hover:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-100"
@@ -325,7 +360,7 @@ export function PullRequestControls({ detail }: { detail: PullRequestDetail }) {
                 ) : null}
                 {selectedMerge ? (
                     <div className="inline-flex">
-                        <AlertDialog>
+                        <AlertDialog open={mergeDialogOpen} onOpenChange={handleMergeDialogOpenChange}>
                             <AlertDialogTrigger asChild>
                                 <Button
                                     size="sm"
@@ -338,24 +373,70 @@ export function PullRequestControls({ detail }: { detail: PullRequestDetail }) {
                                     {selectedMerge.label}
                                 </Button>
                             </AlertDialogTrigger>
-                            <AlertDialogContent>
+                            <AlertDialogContent className="max-w-lg">
                                 <AlertDialogHeader>
-                                    <AlertDialogTitle>
-                                        {canBypass && bypassRules ? "Bypass rules and merge?" : "Merge pull request?"}
-                                    </AlertDialogTitle>
-                                    <AlertDialogDescription>
-                                        {canBypass && bypassRules
-                                            ? `This will ${activeMergeMethod} ${detail.headRefName} into ${detail.baseRefName} without waiting for merge requirements.`
-                                            : `This will ${activeMergeMethod} ${detail.headRefName} into ${detail.baseRefName}.`}
-                                    </AlertDialogDescription>
+                                    <div className="flex items-start gap-3">
+                                        <span className="flex size-8 shrink-0 items-center justify-center rounded-md bg-[#1f883d] text-white dark:bg-[#238636]">
+                                            <GitMerge className="size-4" aria-hidden="true" />
+                                        </span>
+                                        <div className="min-w-0 flex-1 space-y-1">
+                                            <AlertDialogTitle>
+                                                {canBypass && bypassRules
+                                                    ? "Bypass rules and merge?"
+                                                    : supportsCustomCommitMessage
+                                                      ? "Confirm merge"
+                                                      : "Merge pull request?"}
+                                            </AlertDialogTitle>
+                                            {!supportsCustomCommitMessage ? (
+                                                <AlertDialogDescription>
+                                                    {canBypass && bypassRules
+                                                        ? `This will ${activeMergeMethod} ${detail.headRefName} into ${detail.baseRefName} without waiting for merge requirements.`
+                                                        : `This will ${activeMergeMethod} ${detail.headRefName} into ${detail.baseRefName}.`}
+                                                </AlertDialogDescription>
+                                            ) : null}
+                                        </div>
+                                    </div>
                                 </AlertDialogHeader>
+                                {supportsCustomCommitMessage ? (
+                                    <div className="flex flex-col gap-3">
+                                        <div className="flex flex-col gap-1.5">
+                                            <Label htmlFor="merge-commit-title">Commit message</Label>
+                                            <Input
+                                                id="merge-commit-title"
+                                                value={commitTitle}
+                                                disabled={busy}
+                                                onChange={(event) => setCommitTitle(event.target.value)}
+                                            />
+                                        </div>
+                                        <div className="flex flex-col gap-1.5">
+                                            <Label htmlFor="merge-commit-body">Extended description</Label>
+                                            <Textarea
+                                                id="merge-commit-body"
+                                                rows={4}
+                                                value={commitMessage}
+                                                disabled={busy}
+                                                placeholder="Add an optional extended description…"
+                                                onChange={(event) => setCommitMessage(event.target.value)}
+                                            />
+                                        </div>
+                                        {viewerLogin ? (
+                                            <p className="text-xs text-muted-foreground">
+                                                This commit will be authored by {viewerLogin}@users.noreply.github.com.
+                                            </p>
+                                        ) : null}
+                                    </div>
+                                ) : null}
                                 <AlertDialogFooter>
-                                    <AlertDialogCancel>Cancel</AlertDialogCancel>
+                                    <AlertDialogCancel disabled={busy}>Cancel</AlertDialogCancel>
                                     <AlertDialogAction
+                                        disabled={busy}
                                         className="bg-[#1f883d] text-white hover:bg-[#1a7f37]"
-                                        onClick={() => void mergePullRequest(activeMergeMethod)}
+                                        onClick={(event) => {
+                                            event.preventDefault();
+                                            void mergePullRequest(activeMergeMethod);
+                                        }}
                                     >
-                                        {selectedMerge.label}
+                                        {busy ? "Merging…" : "Confirm merge"}
                                     </AlertDialogAction>
                                 </AlertDialogFooter>
                             </AlertDialogContent>

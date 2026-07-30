@@ -31,6 +31,7 @@ import type {
     DiffSide,
     FileDiff,
     MergeMethod,
+    MergePullRequestOptions,
     PendingLineComment,
     PullRequestComment,
     PullRequestCommit,
@@ -2684,22 +2685,27 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
             setPullRequestDetailQueryData(queryClient, key, detail);
 
             const inboxData = readInboxQueryData();
-            const nextInbox = patchInboxPullRequest(inboxData, summary);
-            syncInboxQueryData(nextInbox);
-            if (nextInbox.lastLoadedAt) {
-                await store.set(
-                    INBOX_CACHE_KEY,
-                    JSON.stringify({
-                        pullRequests: nextInbox.pullRequests,
-                        sectionPullRequests: nextInbox.sectionPullRequests,
-                        sectionCounts: nextInbox.sectionCounts,
-                        lastLoadedAt: nextInbox.lastLoadedAt,
-                    } satisfies InboxCache),
-                );
+            const login = state.state.auth.viewer?.login ?? "";
+            if (login) {
+                const nextInbox = patchInboxPullRequest(inboxData, summary, {
+                    viewerLogin: login,
+                    sections: state.state.inbox.sectionLayout,
+                });
+                syncInboxQueryData(nextInbox);
+                if (nextInbox.lastLoadedAt) {
+                    await store.set(
+                        INBOX_CACHE_KEY,
+                        JSON.stringify({
+                            pullRequests: nextInbox.pullRequests,
+                            sectionPullRequests: nextInbox.sectionPullRequests,
+                            sectionCounts: nextInbox.sectionCounts,
+                            lastLoadedAt: nextInbox.lastLoadedAt,
+                        } satisfies InboxCache),
+                    );
+                }
             }
 
             await syncDraftWithHead(detail);
-            const login = state.state.auth.viewer?.login ?? "";
             if (login) {
                 invalidatePullRequestSecondaryAfterMutation(queryClient, login, repository, number);
             }
@@ -3141,8 +3147,13 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
         });
     }
 
-    async function mergePullRequest(repository: string, number: number, method: MergeMethod): Promise<void> {
-        await github.mergePullRequest(requireToken(), repository, number, method);
+    async function mergePullRequest(
+        repository: string,
+        number: number,
+        method: MergeMethod,
+        options?: MergePullRequestOptions,
+    ): Promise<void> {
+        await github.mergePullRequest(requireToken(), repository, number, method, options);
         await refreshAfterMutation(repository, number, { reloadStack: true });
     }
 

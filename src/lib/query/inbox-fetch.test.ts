@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { PullRequestSummary } from "#/lib/session/types.ts";
 
-import { emptyInboxQueryData, fetchInboxSections } from "#/lib/query/inbox-fetch.ts";
+import { emptyInboxQueryData, fetchInboxSections, patchInboxPullRequest } from "#/lib/query/inbox-fetch.ts";
 import { EasyReviewError } from "#/lib/session/errors.ts";
 import { defaultSectionLayout } from "#/lib/session/inbox-sections.ts";
 import { createFakeGithub } from "#/lib/session/testing/fake-github.ts";
@@ -96,5 +96,39 @@ describe("fetchInboxSections", () => {
         expect(successes).toBeGreaterThan(0);
         expect(data.sectionPullRequests["approved"]).toHaveLength(1);
         expect(data.sectionPullRequests["approved"]?.[0]?.title).toBe("Cached approved PR");
+    });
+});
+
+describe("patchInboxPullRequest", () => {
+    it("moves a merged pull request out of open sections into recently merged", () => {
+        const open = cachedSummary("Deploy prod");
+        open.author = "quentin";
+        const merged = {
+            ...open,
+            state: "merged" as const,
+            mergedAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+            reviewRequests: [],
+        };
+
+        const data = emptyInboxQueryData();
+        data.sectionPullRequests["waiting-for-reviewers-me"] = [open];
+        data.sectionPullRequests["merging-and-recently-merged"] = [];
+        data.sectionCounts["waiting-for-reviewers-me"] = 1;
+        data.sectionCounts["merging-and-recently-merged"] = 0;
+        data.pullRequests = [open];
+
+        const next = patchInboxPullRequest(data, merged, {
+            viewerLogin: "quentin",
+            sections: defaultSectionLayout(),
+        });
+
+        expect(next.sectionPullRequests["waiting-for-reviewers-me"]).toEqual([]);
+        expect(next.sectionPullRequests["merging-and-recently-merged"]?.map((entry) => entry.key)).toEqual([
+            "acme/api#1",
+        ]);
+        expect(next.sectionCounts["waiting-for-reviewers-me"]).toBe(0);
+        expect(next.sectionCounts["merging-and-recently-merged"]).toBe(1);
+        expect(next.pullRequests[0]?.state).toBe("merged");
     });
 });

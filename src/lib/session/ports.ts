@@ -2,6 +2,7 @@ import type { SuggestionChange } from "#/lib/session/apply-suggestion.ts";
 import type {
     FileDiff,
     MergeMethod,
+    MergePullRequestOptions,
     PendingLineComment,
     PullRequestComment,
     PullRequestCommit,
@@ -306,7 +307,13 @@ export type GithubClient = {
         viewerLogin: string,
     ): Promise<number | null>;
     /** Merge an open, mergeable pull request. */
-    mergePullRequest(token: string, repository: string, number: number, method: MergeMethod): Promise<void>;
+    mergePullRequest(
+        token: string,
+        repository: string,
+        number: number,
+        method: MergeMethod,
+        options?: MergePullRequestOptions,
+    ): Promise<void>;
     /** Close an open pull request without merging. */
     closePullRequest(token: string, repository: string, number: number): Promise<void>;
     /**

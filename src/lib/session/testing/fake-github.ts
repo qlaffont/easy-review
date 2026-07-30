@@ -10,6 +10,7 @@ import type {
     FileDiff,
     Label,
     MergeMethod,
+    MergePullRequestOptions,
     PullRequestComment,
     PullRequestCommit,
     PullRequestDetail,
@@ -1155,7 +1156,7 @@ export function createFakeGithub(): FakeGithub {
                 });
             });
         },
-        mergePullRequest(token, repository, number, _method: MergeMethod) {
+        mergePullRequest(token, repository, number, method: MergeMethod, options?: MergePullRequestOptions) {
             return respond("mergePullRequest", () => {
                 authenticate(token);
                 const pullRequest = requirePullRequest(token, repository, number);

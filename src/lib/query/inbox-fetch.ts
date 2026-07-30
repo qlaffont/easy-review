@@ -189,17 +189,37 @@ export async function fetchInboxSections(params: {
     };
 }
 
-export function patchInboxPullRequest(data: InboxQueryData, summary: PullRequestSummary): InboxQueryData {
+export function patchInboxPullRequest(
+    data: InboxQueryData,
+    summary: PullRequestSummary,
+    context: {
+        viewerLogin: string;
+        sections: ReadonlyArray<Pick<InboxSectionLayoutEntry, "id" | "filter">>;
+    },
+): InboxQueryData {
     const pullRequests = data.pullRequests.some((pullRequest) => pullRequest.key === summary.key)
         ? data.pullRequests.map((pullRequest) => (pullRequest.key === summary.key ? summary : pullRequest))
-        : data.pullRequests;
+        : [...data.pullRequests, summary].sort(comparePullRequestsByUpdatedAtDesc);
 
+    const sectionCounts = { ...data.sectionCounts };
     const sectionPullRequests = Object.fromEntries(
-        Object.entries(data.sectionPullRequests).map(([sectionId, rows]) => [
-            sectionId,
-            rows.map((pullRequest) => (pullRequest.key === summary.key ? summary : pullRequest)),
-        ]),
+        context.sections.map((section) => {
+            const existing = data.sectionPullRequests[section.id] ?? [];
+            const wasInSection = existing.some((pullRequest) => pullRequest.key === summary.key);
+            const without = existing.filter((pullRequest) => pullRequest.key !== summary.key);
+            const matches = matchSectionFilter(summary, section.filter, context.viewerLogin);
+            const next = matches ? [...without, summary].sort(comparePullRequestsByUpdatedAtDesc) : without;
+
+            if (wasInSection && !matches && sectionCounts[section.id] != null) {
+                sectionCounts[section.id] = Math.max(0, sectionCounts[section.id] - 1);
+            }
+            if (!wasInSection && matches && sectionCounts[section.id] != null) {
+                sectionCounts[section.id] += 1;
+            }
+
+            return [section.id, next];
+        }),
     );
 
-    return { ...data, pullRequests, sectionPullRequests };
+    return { ...data, pullRequests, sectionPullRequests, sectionCounts };
 }

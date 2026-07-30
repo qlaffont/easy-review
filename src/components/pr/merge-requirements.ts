@@ -1,4 +1,4 @@
-import type { PullRequestDetail } from "#/lib/session/types.ts";
+import type { MergeMethod, PullRequestDetail } from "#/lib/session/types.ts";
 
 export function reviewRequiredDescription(detail: PullRequestDetail): string {
     const count = detail.requiredApprovingReviewCount;
@@ -77,4 +77,13 @@ export function checksStatusLabel(detail: PullRequestDetail): { title: string; o
     }
 
     return { title: "All checks have passed", ok: true };
+}
+
+/** GitHub default squash/merge-commit title: PR title plus number. */
+export function defaultMergeCommitTitle(detail: Pick<PullRequestDetail, "title" | "number">): string {
+    return `${detail.title} (#${detail.number})`;
+}
+
+export function mergeMethodSupportsCustomCommitMessage(method: MergeMethod): boolean {
+    return method === "squash" || method === "merge";
 }
