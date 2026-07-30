@@ -187,4 +187,18 @@ describe("applySuggestions", () => {
         await session.loadFileDiff("acme/api", 1, "src/a.ts");
         expect(session.getFileDiff("acme/api", 1, "src/a.ts").diff?.afterText).toBe("console.log(3)\n");
     });
+
+    it("syncs viewed file state with GitHub", async () => {
+        const session = await connectedSession();
+
+        await session.setPullRequestFileViewed("acme/api", 1, "src/a.ts", true);
+        await session.setPullRequestFileViewed("acme/api", 1, "src/b.ts", true);
+        await session.setPullRequestFileViewed("acme/api", 1, "src/a.ts", false);
+
+        expect(github.calls.filter((call) => call === "setPullRequestFileViewed")).toEqual([
+            "setPullRequestFileViewed",
+            "setPullRequestFileViewed",
+            "setPullRequestFileViewed",
+        ]);
+    });
 });

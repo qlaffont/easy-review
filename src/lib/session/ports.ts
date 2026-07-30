@@ -193,6 +193,14 @@ export type GithubClient = {
     setReviewThreadResolved(token: string, threadId: string, resolved: boolean): Promise<void>;
     /** Convert to draft (`true`) or mark ready for review (`false`). */
     setPullRequestDraft(token: string, repository: string, number: number, isDraft: boolean): Promise<void>;
+    /** Mark a changed file as viewed or unviewed for the signed-in reviewer on GitHub. */
+    setPullRequestFileViewed(
+        token: string,
+        repository: string,
+        number: number,
+        path: string,
+        viewed: boolean,
+    ): Promise<void>;
     /** Replace the pull request's labels with exactly these names. */
     setPullRequestLabels(
         token: string,

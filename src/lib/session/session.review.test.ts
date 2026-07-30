@@ -3,7 +3,9 @@ import { beforeEach, describe, expect, it } from "vitest";
 import type { FakeGithub } from "#/lib/session/testing/fake-github.ts";
 import type { MemoryStore } from "#/lib/session/testing/memory-store.ts";
 
-import { createEasyReviewSession } from "#/lib/session/session.ts";
+import { setPullRequestDetailQueryData } from "#/lib/query/pull-request.ts";
+import { queryKeys } from "#/lib/query/query-keys.ts";
+import { createEasyReviewSession, pullRequestKey } from "#/lib/session/session.ts";
 import { createFakeGithub } from "#/lib/session/testing/fake-github.ts";
 import { createMemoryStore } from "#/lib/session/testing/memory-store.ts";
 import { createTestQueryClient } from "#/lib/session/testing/test-query-client.ts";
@@ -159,6 +161,28 @@ describe("staged review drafts", () => {
         expect(threads.some((thread) => thread.comments.some((comment) => comment.body === "ship it now"))).toBe(true);
     });
 
+    it("submits a review when detail lives only in the query cache", async () => {
+        const session = createEasyReviewSession({ github, queryClient: createTestQueryClient(), store });
+        await session.connect(TOKEN);
+
+        const detail = await github.getPullRequest(TOKEN, "acme/api", 1);
+        setPullRequestDetailQueryData(session.queryClient, pullRequestKey("acme/api", 1), detail);
+
+        await session.setReviewEvent("acme/api", 1, "approve");
+        await session.submitReview("acme/api", 1);
+
+        expect(github.submittedReviews).toEqual([
+            {
+                repository: "acme/api",
+                number: 1,
+                headSha: "sha-aaa",
+                event: "approve",
+                body: "",
+                comments: [],
+            },
+        ]);
+    });
+
     it("submits one review with every pending comment and clears the draft", async () => {
         const session = await connectedWithPr();
         await session.setReviewEvent("acme/api", 1, "request-changes");
@@ -220,6 +244,45 @@ describe("staged review drafts", () => {
         expect(draft.stale).toBe(false);
         expect(draft.headSha).toBe("sha-aaa");
         expect(draft.comments[0]?.body).toBe("early note");
+    });
+
+    it("resolves threads when data lives only in the query cache", async () => {
+        const session = createEasyReviewSession({ github, queryClient: createTestQueryClient(), store });
+        await session.connect(TOKEN);
+        github.addReviewThread(TOKEN, "acme/api", 1, {
+            id: "thread-1",
+            path: "src/a.ts",
+            startLine: null,
+            line: 1,
+            side: "RIGHT",
+            isResolved: false,
+            isOutdated: false,
+            diffHunk: "@@ -1,1 +1,1 @@\n-one\n+two",
+            comments: [
+                {
+                    id: "c1",
+                    databaseId: 1,
+                    author: "hubot",
+                    authorAvatarUrl: null,
+                    body: "nit",
+                    createdAt: "2026-07-01T00:00:00.000Z",
+                    url: "https://example.com",
+                    lastEditedAt: null,
+                    editor: null,
+                    editCount: 0,
+                    edits: [],
+                    reactionGroups: [],
+                },
+            ],
+        });
+
+        const key = pullRequestKey("acme/api", 1);
+        const items = await github.listReviewThreads(TOKEN, "acme/api", 1);
+        session.queryClient.setQueryData(queryKeys.pullRequest.threads(key), { items });
+
+        await session.setReviewThreadResolved("acme/api", 1, "thread-1", true);
+
+        expect(session.getReviewThreads("acme/api", 1).items[0]?.isResolved).toBe(true);
     });
 
     it("forgets staged drafts when another account connects on the same browser", async () => {

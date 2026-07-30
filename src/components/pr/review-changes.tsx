@@ -58,7 +58,7 @@ import {
 } from "#/lib/query/pull-request.ts";
 import { useReviewDraft } from "#/lib/query/review-draft.ts";
 import { useSession } from "#/lib/session/provider.tsx";
-import { notifyAction } from "#/lib/toast.ts";
+import { notifyAction, notifyError } from "#/lib/toast.ts";
 import { cn } from "#/lib/utils.ts";
 
 const FileDiffViewer = lazy(() =>
@@ -265,6 +265,12 @@ export function ReviewChanges({
         }
         setViewedMarks(nextMarks);
         writeViewedFileMarks(repository, number, nextMarks);
+
+        if (!isolatingRange) {
+            void session.setPullRequestFileViewed(repository, number, path, viewed).catch(() => {
+                notifyError("Could not sync viewed state with GitHub.");
+            });
+        }
 
         if (viewed) {
             const orderedPaths = filePathsInDisplayOrder(filesItems, preferences.fileListLayout);

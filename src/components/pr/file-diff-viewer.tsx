@@ -13,7 +13,7 @@ import {
     UnfoldVertical,
     X,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 import { createPortal } from "react-dom";
 
 import type { DiffLayout } from "#/lib/diff-preferences.ts";
@@ -887,7 +887,7 @@ function DiffCodeCell({
                   }
                 : {})}
             {...(markSearchActive ? { "data-diff-search-active": "true" } : {})}
-            className="select-text overflow-hidden whitespace-pre px-2 text-foreground"
+            className="select-text whitespace-pre px-2 text-foreground"
         >
             {children}
         </span>
@@ -1152,8 +1152,19 @@ function buildVirtualRows(
     return rows;
 }
 
-function maxLineChars(lines: Array<DiffLine>, side?: DiffSide): number {
+/** Tabs render wider than one column; syntax spans add a little extra width. */
+function visualLineLength(text: string): number {
+    let length = 0;
+    for (const character of text) {
+        length += character === "\t" ? 4 : 1;
+    }
+    return length;
+}
+
+function longestLineText(lines: ReadonlyArray<DiffLine>, side?: DiffSide): string | null {
+    let longest: string | null = null;
     let max = 0;
+
     for (const line of lines) {
         if (line.kind === "hunk" || line.kind === "gap") {
             continue;
@@ -1164,11 +1175,77 @@ function maxLineChars(lines: Array<DiffLine>, side?: DiffSide): number {
         if (side === "RIGHT" && line.kind === "del") {
             continue;
         }
-        if (line.text.length > max) {
-            max = line.text.length;
+        const length = visualLineLength(line.text);
+        if (length > max) {
+            max = length;
+            longest = line.text;
         }
     }
-    return max;
+
+    return longest;
+}
+
+const SPLIT_LINE_NUMBER_PX = 48;
+const UNIFIED_LINE_NUMBERS_PX = 112;
+const CODE_CELL_PADDING_PX = 16;
+
+function expandTabs(text: string): string {
+    return text.replace(/\t/g, "    ");
+}
+
+function measureTextWidth(text: string, font: string): number {
+    if (typeof document === "undefined") {
+        return 0;
+    }
+    const canvas = document.createElement("canvas");
+    const context = canvas.getContext("2d");
+    if (!context) {
+        return 0;
+    }
+    context.font = font;
+    return context.measureText(expandTabs(text)).width;
+}
+
+function measurePaneContentWidth(text: string | null, lineNumbersPx: number, font: string, unifiedPrefix = ""): number {
+    if (!text) {
+        return 0;
+    }
+    const textWidth = measureTextWidth(unifiedPrefix + text, font);
+    return Math.ceil(lineNumbersPx + CODE_CELL_PADDING_PX + textWidth * 1.04) + 4;
+}
+
+function DiffLineWidthProbe({
+    text,
+    unified = false,
+    lineHeight,
+    probeRef,
+}: {
+    text: string;
+    unified?: boolean;
+    lineHeight: number;
+    probeRef: RefObject<HTMLDivElement | null>;
+}) {
+    return (
+        <div
+            ref={probeRef}
+            className={cn(
+                "inline-grid w-max font-mono text-xs",
+                unified ? "grid-cols-[3.5rem_3.5rem_minmax(0,max-content)]" : "grid-cols-[3rem_minmax(0,max-content)]",
+            )}
+            style={{ lineHeight: `${lineHeight}px` }}
+        >
+            <span className="px-1 text-right text-muted-foreground tabular-nums">9999</span>
+            {unified ? <span className="px-1 text-right text-muted-foreground tabular-nums">9999</span> : null}
+            <span className="whitespace-pre px-2 text-foreground">
+                {unified ? "+" : null}
+                {text}
+            </span>
+        </div>
+    );
+}
+
+function scrollTrackWidthPx(measuredPx: number): string {
+    return measuredPx > 0 ? `${measuredPx}px` : "100%";
 }
 
 function virtualRowIndexForMatch(virtualRows: ReadonlyArray<VirtualRow>, match: DiffSearchMatch): number {
@@ -1265,6 +1342,10 @@ function VirtualDiffLines({
     const [leftScroll, setLeftScroll] = useState(0);
     const [rightScroll, setRightScroll] = useState(0);
     const [unifiedScroll, setUnifiedScroll] = useState(0);
+    const [measuredWidths, setMeasuredWidths] = useState({ left: 0, right: 0, unified: 0 });
+    const leftProbeRef = useRef<HTMLDivElement>(null);
+    const rightProbeRef = useRef<HTMLDivElement>(null);
+    const unifiedProbeRef = useRef<HTMLDivElement>(null);
     const [selectionPopup, setSelectionPopup] = useState<SelectionPopupState | null>(null);
     /** Left pane share in split layout (0.2–0.8). */
     const [splitLeftRatio, setSplitLeftRatio] = useState(0.5);
@@ -1275,9 +1356,33 @@ function VirtualDiffLines({
     );
 
     // At least the pane width so short files still fill the editor; grow with long lines for scroll.
-    const leftContentWidth = `max(100%, calc(3rem + ${maxLineChars(lines, "LEFT")}ch + 1rem))`;
-    const rightContentWidth = `max(100%, calc(3rem + ${maxLineChars(lines, "RIGHT")}ch + 1rem))`;
-    const unifiedContentWidth = `max(100%, calc(7rem + ${maxLineChars(lines)}ch + 1rem))`;
+    const longestLeft = useMemo(() => longestLineText(lines, "LEFT"), [lines]);
+    const longestRight = useMemo(() => longestLineText(lines, "RIGHT"), [lines]);
+    const longestUnified = useMemo(() => longestLineText(lines), [lines]);
+    const leftTrackWidth = scrollTrackWidthPx(measuredWidths.left);
+    const rightTrackWidth = scrollTrackWidthPx(measuredWidths.right);
+    const unifiedTrackWidth = scrollTrackWidthPx(measuredWidths.unified);
+
+    useLayoutEffect(() => {
+        const root = splitRootRef.current;
+        if (!root) {
+            return;
+        }
+
+        const font = getComputedStyle(root).font;
+        const probeLeft = leftProbeRef.current?.getBoundingClientRect().width ?? 0;
+        const probeRight = rightProbeRef.current?.getBoundingClientRect().width ?? 0;
+        const probeUnified = unifiedProbeRef.current?.getBoundingClientRect().width ?? 0;
+
+        setMeasuredWidths({
+            left: Math.max(probeLeft, measurePaneContentWidth(longestLeft, SPLIT_LINE_NUMBER_PX, font)),
+            right: Math.max(probeRight, measurePaneContentWidth(longestRight, SPLIT_LINE_NUMBER_PX, font)),
+            unified: Math.max(
+                probeUnified,
+                measurePaneContentWidth(longestUnified, UNIFIED_LINE_NUMBERS_PX, font, "+"),
+            ),
+        });
+    }, [longestLeft, longestRight, longestUnified, lineHeight, layout, splitLeftRatio]);
 
     const virtualizer = useVirtualizer({
         count: virtualRows.length,
@@ -1410,8 +1515,17 @@ function VirtualDiffLines({
 
         const onWheel = (event: WheelEvent) => {
             const shiftAsHorizontal = event.shiftKey && event.deltaY !== 0 && event.deltaX === 0;
-            if (!shiftAsHorizontal && Math.abs(event.deltaX) < Math.abs(event.deltaY)) {
-                return;
+            const absX = Math.abs(event.deltaX);
+            const absY = Math.abs(event.deltaY);
+
+            if (!shiftAsHorizontal) {
+                if (absX === 0) {
+                    return;
+                }
+                // Trackpads often mix deltaX and deltaY; ignore mostly-vertical gestures.
+                if (absX < absY && absX < 6) {
+                    return;
+                }
             }
             const dx = shiftAsHorizontal ? event.deltaY : event.deltaX;
             if (dx === 0) {
@@ -1419,6 +1533,7 @@ function VirtualDiffLines({
             }
 
             let target: HTMLDivElement | null = null;
+            let contentWidthPx = 0;
             if (layout === "split") {
                 const root = splitRootRef.current;
                 if (!root) {
@@ -1426,15 +1541,24 @@ function VirtualDiffLines({
                 }
                 const rect = root.getBoundingClientRect();
                 const dividerX = rect.left + rect.width * splitLeftRatio;
-                target = event.clientX < dividerX ? leftScrollRef.current : rightScrollRef.current;
+                const onLeft = event.clientX < dividerX;
+                target = onLeft ? leftScrollRef.current : rightScrollRef.current;
+                contentWidthPx = onLeft ? measuredWidths.left : measuredWidths.right;
             } else {
                 target = unifiedScrollRef.current;
+                contentWidthPx = measuredWidths.unified;
             }
-            if (!target || target.scrollWidth <= target.clientWidth + 1) {
+            if (!target) {
                 return;
             }
 
-            const max = target.scrollWidth - target.clientWidth;
+            const trackMax = target.scrollWidth - target.clientWidth;
+            const contentMax = Math.max(0, contentWidthPx - target.clientWidth);
+            const max = Math.max(trackMax, contentMax);
+            if (max <= 0) {
+                return;
+            }
+
             const next = Math.min(max, Math.max(0, target.scrollLeft + dx));
             if (next === target.scrollLeft) {
                 return;
@@ -1442,11 +1566,25 @@ function VirtualDiffLines({
 
             event.preventDefault();
             target.scrollLeft = next;
+            if (layout === "split") {
+                const root = splitRootRef.current;
+                if (root) {
+                    const rect = root.getBoundingClientRect();
+                    const dividerX = rect.left + rect.width * splitLeftRatio;
+                    if (event.clientX < dividerX) {
+                        setLeftScroll(next);
+                    } else {
+                        setRightScroll(next);
+                    }
+                }
+            } else {
+                setUnifiedScroll(next);
+            }
         };
 
         scroller.addEventListener("wheel", onWheel, { passive: false });
         return () => scroller.removeEventListener("wheel", onWheel);
-    }, [layout, splitLeftRatio]);
+    }, [layout, splitLeftRatio, measuredWidths]);
 
     useEffect(() => {
         if (!selected) {
@@ -1538,37 +1676,27 @@ function VirtualDiffLines({
                                         selected={selected}
                                         leftScroll={leftScroll}
                                         rightScroll={rightScroll}
-                                        leftContentWidth={leftContentWidth}
-                                        rightContentWidth={rightContentWidth}
                                         searchMatches={searchMatches}
                                         activeMatchId={activeMatchId}
                                         onSelect={onSelect}
                                         onExpandGap={onExpandGap}
                                     />
                                 ) : (
-                                    <div className="overflow-hidden">
-                                        <div
-                                            style={{
-                                                width: unifiedContentWidth,
-                                                transform: `translateX(-${unifiedScroll}px)`,
-                                            }}
-                                        >
-                                            <UnifiedRow
-                                                line={row.line}
-                                                lineIndex={row.lineIndex}
-                                                path={path}
-                                                lineHeight={lineHeight}
-                                                syntax={syntax}
-                                                pendingByLine={pendingByLine}
-                                                disabled={disabled}
-                                                selected={selected}
-                                                searchMatches={searchMatches}
-                                                activeMatchId={activeMatchId}
-                                                onSelect={onSelect}
-                                                onExpandGap={onExpandGap}
-                                            />
-                                        </div>
-                                    </div>
+                                    <UnifiedRow
+                                        line={row.line}
+                                        lineIndex={row.lineIndex}
+                                        path={path}
+                                        lineHeight={lineHeight}
+                                        syntax={syntax}
+                                        pendingByLine={pendingByLine}
+                                        disabled={disabled}
+                                        selected={selected}
+                                        scroll={unifiedScroll}
+                                        searchMatches={searchMatches}
+                                        activeMatchId={activeMatchId}
+                                        onSelect={onSelect}
+                                        onExpandGap={onExpandGap}
+                                    />
                                 )}
                             </div>
                         );
@@ -1583,26 +1711,26 @@ function VirtualDiffLines({
                 >
                     <div
                         ref={leftScrollRef}
-                        className="h-3 overflow-x-auto border-r border-border"
+                        className="h-3 overflow-x-scroll border-r border-border"
                         onScroll={(event) => setLeftScroll(event.currentTarget.scrollLeft)}
                     >
-                        <div aria-hidden="true" style={{ width: leftContentWidth, height: 1 }} />
+                        <div aria-hidden="true" style={{ width: leftTrackWidth, height: 1 }} />
                     </div>
                     <div
                         ref={rightScrollRef}
-                        className="h-3 overflow-x-auto"
+                        className="h-3 overflow-x-scroll"
                         onScroll={(event) => setRightScroll(event.currentTarget.scrollLeft)}
                     >
-                        <div aria-hidden="true" style={{ width: rightContentWidth, height: 1 }} />
+                        <div aria-hidden="true" style={{ width: rightTrackWidth, height: 1 }} />
                     </div>
                 </div>
             ) : (
                 <div
                     ref={unifiedScrollRef}
-                    className="h-3 shrink-0 overflow-x-auto border-t bg-muted/20 font-mono text-xs"
+                    className="h-3 shrink-0 overflow-x-scroll border-t bg-muted/20 font-mono text-xs"
                     onScroll={(event) => setUnifiedScroll(event.currentTarget.scrollLeft)}
                 >
-                    <div aria-hidden="true" style={{ width: unifiedContentWidth, height: 1 }} />
+                    <div aria-hidden="true" style={{ width: unifiedTrackWidth, height: 1 }} />
                 </div>
             )}
 
@@ -1617,6 +1745,23 @@ function VirtualDiffLines({
                     }}
                 />
             ) : null}
+
+            <div aria-hidden className="pointer-events-none fixed top-0 -left-[10000px] opacity-0">
+                {longestLeft ? (
+                    <DiffLineWidthProbe text={longestLeft} lineHeight={lineHeight} probeRef={leftProbeRef} />
+                ) : null}
+                {longestRight ? (
+                    <DiffLineWidthProbe text={longestRight} lineHeight={lineHeight} probeRef={rightProbeRef} />
+                ) : null}
+                {longestUnified ? (
+                    <DiffLineWidthProbe
+                        text={longestUnified}
+                        unified
+                        lineHeight={lineHeight}
+                        probeRef={unifiedProbeRef}
+                    />
+                ) : null}
+            </div>
         </div>
     );
 }
@@ -1718,7 +1863,7 @@ function GapBar({
     const hidden = gap.oldEnd - gap.oldStart + 1;
 
     return (
-        <div className="flex h-full items-center gap-2 bg-sky-500/10 px-2 text-[11px] text-sky-800 dark:text-sky-200">
+        <div className="flex h-full w-full items-center gap-2 bg-sky-500/10 px-2 text-[11px] text-sky-800 dark:text-sky-200">
             {gap.expandDown ? (
                 <button
                     type="button"
@@ -1766,6 +1911,7 @@ function UnifiedRow({
     pendingByLine,
     disabled,
     selected,
+    scroll,
     searchMatches,
     activeMatchId,
     onSelect,
@@ -1779,6 +1925,7 @@ function UnifiedRow({
     pendingByLine: Set<string>;
     disabled?: boolean;
     selected: LineTarget | null;
+    scroll: number;
     searchMatches: ReadonlyArray<DiffSearchMatch>;
     activeMatchId: number;
     onSelect: (target: LineTarget) => void;
@@ -1790,7 +1937,7 @@ function UnifiedRow({
 
     if (line.kind === "hunk") {
         return (
-            <div className="flex h-full items-center bg-sky-500/10 px-2 font-sans text-[11px] text-sky-800 dark:text-sky-200">
+            <div className="flex h-full w-full items-center bg-sky-500/10 px-2 font-sans text-[11px] text-sky-800 dark:text-sky-200">
                 <span className="truncate">{line.text}</span>
             </div>
         );
@@ -1820,34 +1967,42 @@ function UnifiedRow({
     const markSearchActive = searchHighlights.some((highlight) => highlight.active);
 
     return (
-        <div
-            className={cn(
-                "grid h-full grid-cols-[3.5rem_3.5rem_minmax(0,1fr)]",
-                lineClass(line),
-                isRowSelected && "ring-1 ring-inset ring-sky-500",
-                hasPending && "outline outline-1 -outline-offset-1 outline-amber-500/60",
-            )}
-            style={{ minHeight: lineHeight }}
+        <DiffLineViewport
+            line={line}
+            scroll={scroll}
+            lineHeight={lineHeight}
+            isSelected={isRowSelected}
+            hasPending={Boolean(hasPending)}
         >
-            <DiffLineNumber
-                number={line.oldNumber}
-                target={leftTarget}
-                disabled={disabled}
-                selected={isLeftSelected}
-                onSelect={onSelect}
-            />
-            <DiffLineNumber
-                number={line.newNumber}
-                target={rightTarget}
-                disabled={disabled}
-                selected={isRightSelected}
-                onSelect={onSelect}
-            />
-            <DiffCodeCell path={path} target={target} markSearchActive={markSearchActive}>
-                {prefix(line)}
-                <DiffCodeText text={line.text} tokens={tokens} side={wordSide} searchHighlights={searchHighlights} />
-            </DiffCodeCell>
-        </div>
+            <div
+                className="grid h-full grid-cols-[3.5rem_3.5rem_minmax(0,max-content)]"
+                style={{ minHeight: lineHeight }}
+            >
+                <DiffLineNumber
+                    number={line.oldNumber}
+                    target={leftTarget}
+                    disabled={disabled}
+                    selected={isLeftSelected}
+                    onSelect={onSelect}
+                />
+                <DiffLineNumber
+                    number={line.newNumber}
+                    target={rightTarget}
+                    disabled={disabled}
+                    selected={isRightSelected}
+                    onSelect={onSelect}
+                />
+                <DiffCodeCell path={path} target={target} markSearchActive={markSearchActive}>
+                    {prefix(line)}
+                    <DiffCodeText
+                        text={line.text}
+                        tokens={tokens}
+                        side={wordSide}
+                        searchHighlights={searchHighlights}
+                    />
+                </DiffCodeCell>
+            </div>
+        </DiffLineViewport>
     );
 }
 
@@ -1861,8 +2016,6 @@ function SplitRowView({
     selected,
     leftScroll,
     rightScroll,
-    leftContentWidth,
-    rightContentWidth,
     searchMatches,
     activeMatchId,
     onSelect,
@@ -1877,8 +2030,6 @@ function SplitRowView({
     selected: LineTarget | null;
     leftScroll: number;
     rightScroll: number;
-    leftContentWidth: string;
-    rightContentWidth: string;
     searchMatches: ReadonlyArray<DiffSearchMatch>;
     activeMatchId: number;
     onSelect: (target: LineTarget) => void;
@@ -1908,6 +2059,8 @@ function SplitRowView({
     const right = row.right;
     const leftText = left?.text ?? "";
     const rightText = right?.text ?? "";
+    const leftChrome = splitPaneChrome(path, left, "LEFT", pendingByLine, selected);
+    const rightChrome = splitPaneChrome(path, right, "RIGHT", pendingByLine, selected);
     const wordDiff = left?.kind === "del" && right?.kind === "add" ? diffWords(leftText, rightText) : null;
 
     return (
@@ -1918,42 +2071,49 @@ function SplitRowView({
                 gridTemplateColumns: "var(--diff-split-left) minmax(0,1fr)",
             }}
         >
-            <div className="min-w-0 overflow-hidden border-r border-border">
-                <div style={{ width: leftContentWidth, transform: `translateX(-${leftScroll}px)` }}>
-                    <SplitCell
-                        line={left}
-                        lineIndex={row.kind === "pair" ? row.leftLineIndex : null}
-                        path={path}
-                        side="LEFT"
-                        syntax={syntax}
-                        wordDiff={wordDiff}
-                        pendingByLine={pendingByLine}
-                        disabled={disabled}
-                        selected={selected}
-                        searchMatches={searchMatches}
-                        activeMatchId={activeMatchId}
-                        onSelect={onSelect}
-                    />
-                </div>
-            </div>
-            <div className="min-w-0 overflow-hidden">
-                <div style={{ width: rightContentWidth, transform: `translateX(-${rightScroll}px)` }}>
-                    <SplitCell
-                        line={right}
-                        lineIndex={row.kind === "pair" ? row.rightLineIndex : null}
-                        path={path}
-                        side="RIGHT"
-                        syntax={syntax}
-                        wordDiff={wordDiff}
-                        pendingByLine={pendingByLine}
-                        disabled={disabled}
-                        selected={selected}
-                        searchMatches={searchMatches}
-                        activeMatchId={activeMatchId}
-                        onSelect={onSelect}
-                    />
-                </div>
-            </div>
+            <DiffLineViewport
+                line={left}
+                scroll={leftScroll}
+                lineHeight={lineHeight}
+                borderRight
+                isSelected={leftChrome.isSelected}
+                hasPending={leftChrome.hasPending}
+            >
+                <SplitCell
+                    line={left}
+                    lineIndex={row.kind === "pair" ? row.leftLineIndex : null}
+                    path={path}
+                    side="LEFT"
+                    syntax={syntax}
+                    wordDiff={wordDiff}
+                    disabled={disabled}
+                    selected={selected}
+                    searchMatches={searchMatches}
+                    activeMatchId={activeMatchId}
+                    onSelect={onSelect}
+                />
+            </DiffLineViewport>
+            <DiffLineViewport
+                line={right}
+                scroll={rightScroll}
+                lineHeight={lineHeight}
+                isSelected={rightChrome.isSelected}
+                hasPending={rightChrome.hasPending}
+            >
+                <SplitCell
+                    line={right}
+                    lineIndex={row.kind === "pair" ? row.rightLineIndex : null}
+                    path={path}
+                    side="RIGHT"
+                    syntax={syntax}
+                    wordDiff={wordDiff}
+                    disabled={disabled}
+                    selected={selected}
+                    searchMatches={searchMatches}
+                    activeMatchId={activeMatchId}
+                    onSelect={onSelect}
+                />
+            </DiffLineViewport>
         </div>
     );
 }
@@ -1965,7 +2125,6 @@ function SplitCell({
     side,
     syntax,
     wordDiff,
-    pendingByLine,
     disabled,
     selected,
     searchMatches,
@@ -1978,7 +2137,6 @@ function SplitCell({
     side: DiffSide;
     syntax: FileSyntaxMaps;
     wordDiff: ReturnType<typeof diffWords> | null;
-    pendingByLine: Set<string>;
     disabled?: boolean;
     selected: LineTarget | null;
     searchMatches: ReadonlyArray<DiffSearchMatch>;
@@ -1986,7 +2144,7 @@ function SplitCell({
     onSelect: (target: LineTarget) => void;
 }) {
     if (!line) {
-        return <div className="h-full min-h-[inherit] bg-muted/20" />;
+        return <div className="h-full min-h-[inherit]" />;
     }
 
     const target =
@@ -2016,7 +2174,6 @@ function SplitCell({
         selected.line === usableTarget.line &&
         selected.side === usableTarget.side &&
         selected.path === usableTarget.path;
-    const hasPending = usableTarget ? pendingByLine.has(`${usableTarget.side}:${usableTarget.line}`) : false;
     const number = side === "LEFT" ? line.oldNumber : line.newNumber;
     const tokens = tokensForDiffLine(syntax, line.kind, line.oldNumber, line.newNumber);
     const wordSide = side === "LEFT" ? "del" : "add";
@@ -2025,14 +2182,7 @@ function SplitCell({
     const markSearchActive = searchHighlights.some((highlight) => highlight.active);
 
     return (
-        <div
-            className={cn(
-                "grid h-full grid-cols-[3rem_minmax(0,1fr)]",
-                lineClass(line),
-                isSelected && "ring-1 ring-inset ring-sky-500",
-                hasPending && "outline outline-1 -outline-offset-1 outline-amber-500/60",
-            )}
-        >
+        <div className="grid h-full grid-cols-[3rem_minmax(0,max-content)]">
             <DiffLineNumber
                 number={number}
                 target={usableTarget}
@@ -2079,4 +2229,93 @@ function lineClass(line: DiffLine): string {
         default:
             return "";
     }
+}
+
+function diffLineSelectionClass(isSelected: boolean, hasPending: boolean): string {
+    return cn(
+        isSelected && "ring-1 ring-inset ring-sky-500",
+        hasPending && "outline outline-1 -outline-offset-1 outline-amber-500/60",
+    );
+}
+
+function splitPaneChrome(
+    path: string,
+    line: DiffLine | null,
+    side: DiffSide,
+    pendingByLine: Set<string>,
+    selected: LineTarget | null,
+): { isSelected: boolean; hasPending: boolean } {
+    if (!line) {
+        return { isSelected: false, hasPending: false };
+    }
+
+    const target =
+        line.kind === "context"
+            ? {
+                  path,
+                  line: side === "LEFT" ? (line.oldNumber as number) : (line.newNumber as number),
+                  side,
+                  text: line.text,
+              }
+            : targetForLine(path, line);
+    const usableTarget =
+        target &&
+        (side === "LEFT"
+            ? target.side === "LEFT" || line.kind === "context"
+            : target.side === "RIGHT" || line.kind === "context")
+            ? {
+                  ...target,
+                  side,
+                  line: side === "LEFT" ? (line.oldNumber ?? target.line) : (line.newNumber ?? target.line),
+              }
+            : null;
+
+    return {
+        isSelected: Boolean(
+            selected &&
+            usableTarget &&
+            selected.line === usableTarget.line &&
+            selected.side === usableTarget.side &&
+            selected.path === usableTarget.path,
+        ),
+        hasPending: usableTarget ? pendingByLine.has(`${usableTarget.side}:${usableTarget.line}`) : false,
+    };
+}
+
+function DiffLineViewport({
+    line,
+    scroll,
+    lineHeight,
+    borderRight,
+    isSelected = false,
+    hasPending = false,
+    children,
+}: {
+    line: DiffLine | null;
+    scroll: number;
+    lineHeight: number;
+    borderRight?: boolean;
+    isSelected?: boolean;
+    hasPending?: boolean;
+    children: ReactNode;
+}) {
+    return (
+        <div
+            className={cn(
+                "relative min-w-0 overflow-hidden",
+                borderRight && "border-r border-border",
+                !line && "bg-muted/20",
+                line && diffLineSelectionClass(isSelected, hasPending),
+            )}
+            style={{ minHeight: lineHeight }}
+        >
+            {line ? <div className={cn("pointer-events-none absolute inset-0", lineClass(line))} aria-hidden /> : null}
+            <div
+                className="relative min-w-full w-max"
+                style={{ transform: scroll > 0 ? `translateX(-${scroll}px)` : undefined }}
+            >
+                {children}
+            </div>
+        </div>
+    );
 }

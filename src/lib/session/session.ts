@@ -1415,7 +1415,7 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
         const attempt = (latestPullRequestLoads.get(key) ?? 0) + 1;
         latestPullRequestLoads.set(key, attempt);
 
-        const cached = state.state.pullRequests[key]?.detail ?? null;
+        const cached = resolvePullRequestDetail(repository, number);
         const keepPainted = cached != null || state.state.pullRequests[key]?.status === "ready";
         setPullRequest(key, { refreshing: true, status: keepPainted ? "ready" : "loading", error: null });
 
@@ -1455,9 +1455,14 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
 
     /** Reuse what this tab already fetched, and only call GitHub when there is nothing to show. */
     async function loadPullRequest(repository: string, number: number): Promise<void> {
-        const view = state.state.pullRequests[pullRequestKey(repository, number)];
+        const key = pullRequestKey(repository, number);
+        const view = state.state.pullRequests[key];
 
-        if (view?.refreshing || view?.status === "ready") {
+        if (view?.refreshing) {
+            return;
+        }
+
+        if (view?.status === "ready" || resolvePullRequestDetail(repository, number)) {
             return;
         }
 
@@ -1477,12 +1482,47 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
      * The overview, with the Inbox row alongside it. The row is persisted and the detail is not,
      * so after a reload the page has a title and an author to paint before GitHub answers.
      */
+    function resolvePullRequestDetail(repository: string, number: number): PullRequestDetail | null {
+        const key = pullRequestKey(repository, number);
+        const fromQuery = queryClient.getQueryData<PullRequestDetailQueryData>(
+            queryKeys.pullRequest.detail(key),
+        )?.detail;
+        return fromQuery ?? state.state.pullRequests[key]?.detail ?? null;
+    }
+
+    function resolveReviewThreadItems(key: string): Array<ReviewThread> {
+        const fromQuery = queryClient.getQueryData<ReviewThreadsQueryData>(queryKeys.pullRequest.threads(key))?.items;
+        if (fromQuery) {
+            return fromQuery;
+        }
+        return state.state.reviewThreads[key]?.items ?? [];
+    }
+
+    function resolveConversationItems(key: string): Array<PullRequestTimelineItem> {
+        const fromQuery = queryClient.getQueryData<ConversationQueryData>(
+            queryKeys.pullRequest.conversation(key),
+        )?.items;
+        if (fromQuery) {
+            return fromQuery;
+        }
+        return state.state.conversationComments[key]?.items ?? [];
+    }
+
+    function pullRequestFilesAreLoaded(key: string): boolean {
+        const fromQuery = queryClient.getQueryData<PullRequestFilesQueryData>(queryKeys.pullRequest.files(key));
+        if (fromQuery?.items.length) {
+            return true;
+        }
+        const files = state.state.pullRequests[key]?.files;
+        return files?.status === "ready" || Boolean(files?.items.length);
+    }
+
     function getPullRequestPage(repository: string, number: number): PullRequestPage {
         const key = pullRequestKey(repository, number);
         const view = state.state.pullRequests[key] ?? initialPullRequestView;
         const inboxData = readInboxQueryData();
         const summary = inboxData.pullRequests.find((pullRequest) => pullRequest.key === key) ?? null;
-        const detailData = queryClient.getQueryData<PullRequestDetailQueryData>(queryKeys.pullRequest.detail(key));
+        const detail = resolvePullRequestDetail(repository, number);
         const filesData = queryClient.getQueryData<PullRequestFilesQueryData>(queryKeys.pullRequest.files(key));
 
         return {
@@ -1490,8 +1530,10 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
             repository,
             number,
             summary,
-            detail: detailData?.detail ?? view.detail,
-            lastLoadedAt: detailData?.lastLoadedAt ?? view.lastLoadedAt,
+            detail,
+            lastLoadedAt:
+                queryClient.getQueryData<PullRequestDetailQueryData>(queryKeys.pullRequest.detail(key))?.lastLoadedAt ??
+                view.lastLoadedAt,
             files: filesData
                 ? {
                       status: "ready",
@@ -1547,9 +1589,10 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
     }
 
     async function loadPullRequestFiles(repository: string, number: number): Promise<void> {
-        const files = state.state.pullRequests[pullRequestKey(repository, number)]?.files;
+        const key = pullRequestKey(repository, number);
+        const files = state.state.pullRequests[key]?.files;
 
-        if (files?.refreshing || files?.status === "ready") {
+        if (files?.refreshing || pullRequestFilesAreLoaded(key)) {
             return;
         }
 
@@ -1757,7 +1800,7 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
             return live;
         }
 
-        const headSha = state.state.pullRequests[key]?.detail?.headSha ?? "";
+        const headSha = resolvePullRequestDetail(repository, number)?.headSha ?? "";
         return emptyDraft(repository, number, headSha);
     }
 
@@ -1768,7 +1811,7 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
             return existing;
         }
 
-        const detail = state.state.pullRequests[key]?.detail;
+        const detail = resolvePullRequestDetail(repository, number);
         if (detail) {
             await syncDraftWithHead(detail);
             return state.state.reviewDrafts[key] ?? emptyDraft(repository, number, detail.headSha);
@@ -1803,7 +1846,7 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
         input: { path: string; line: number; side: DiffSide; body: string },
     ): Promise<PendingLineComment> {
         const draft = await ensureDraft(repository, number);
-        const headSha = state.state.pullRequests[pullRequestKey(repository, number)]?.detail?.headSha ?? draft.headSha;
+        const headSha = resolvePullRequestDetail(repository, number)?.headSha ?? draft.headSha;
         const comment: PendingLineComment = {
             id: crypto.randomUUID(),
             path: input.path,
@@ -1842,13 +1885,13 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
 
     /** Drop a stale or unwanted draft so the reviewer can start clean against the current head. */
     async function discardReviewDraft(repository: string, number: number): Promise<void> {
-        const headSha = state.state.pullRequests[pullRequestKey(repository, number)]?.detail?.headSha ?? "";
+        const headSha = resolvePullRequestDetail(repository, number)?.headSha ?? "";
         await persistDraft(emptyDraft(repository, number, headSha));
     }
 
     async function submitReview(repository: string, number: number): Promise<void> {
         const draft = await ensureDraft(repository, number);
-        const detail = state.state.pullRequests[pullRequestKey(repository, number)]?.detail;
+        const detail = resolvePullRequestDetail(repository, number);
 
         if (!detail) {
             throw new EasyReviewError("unknown", "Load the pull request before submitting a review.");
@@ -1884,7 +1927,7 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
         number: number,
         input: { path: string; line: number; side: DiffSide; body: string },
     ): Promise<void> {
-        const detail = state.state.pullRequests[pullRequestKey(repository, number)]?.detail;
+        const detail = resolvePullRequestDetail(repository, number);
         if (!detail) {
             throw new EasyReviewError("unknown", "Load the pull request before commenting.");
         }
@@ -1977,8 +2020,7 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
         const reply = await github.replyToReviewThread(requireToken(), threadId, trimmed);
         const key = pullRequestKey(repository, number);
         state.setState((prev) => {
-            const current = prev.reviewThreads[key] ?? initialThreadsState;
-            const nextItems = current.items.map((thread) =>
+            const nextItems = resolveReviewThreadItems(key).map((thread) =>
                 thread.id === threadId ? { ...thread, comments: [...thread.comments, reply] } : thread,
             );
             queryClient.setQueryData<ReviewThreadsQueryData>(queryKeys.pullRequest.threads(key), { items: nextItems });
@@ -1987,8 +2029,9 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
                 reviewThreads: {
                     ...prev.reviewThreads,
                     [key]: {
-                        ...current,
+                        status: "ready",
                         items: nextItems,
+                        error: null,
                     },
                 },
             };
@@ -2005,8 +2048,7 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
         await github.setReviewThreadResolved(requireToken(), threadId, resolved);
         const key = pullRequestKey(repository, number);
         state.setState((prev) => {
-            const current = prev.reviewThreads[key] ?? initialThreadsState;
-            const nextItems = current.items.map((thread) =>
+            const nextItems = resolveReviewThreadItems(key).map((thread) =>
                 thread.id === threadId ? { ...thread, isResolved: resolved } : thread,
             );
             queryClient.setQueryData<ReviewThreadsQueryData>(queryKeys.pullRequest.threads(key), { items: nextItems });
@@ -2015,8 +2057,9 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
                 reviewThreads: {
                     ...prev.reviewThreads,
                     [key]: {
-                        ...current,
+                        status: "ready",
                         items: nextItems,
+                        error: null,
                     },
                 },
             };
@@ -2312,9 +2355,14 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
     }
 
     function loadedPullRequestSummariesForRepository(repository: string): Array<PullRequestSummary> {
-        return Object.values(state.state.pullRequests).flatMap((view) =>
+        const fromSession = Object.values(state.state.pullRequests).flatMap((view) =>
             view.detail?.repository === repository ? [view.detail] : [],
         );
+        const fromQuery = queryClient
+            .getQueriesData<PullRequestDetailQueryData>({ queryKey: ["pullRequest"] })
+            .flatMap(([, data]) => (data?.detail?.repository === repository ? [data.detail] : []));
+
+        return mergePullRequestSummaries(fromQuery, fromSession);
     }
 
     function pullRequestsForStackResolution(repository: string): Array<PullRequestSummary> {
@@ -2555,23 +2603,21 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
         const key = pullRequestKey(repository, number);
         const timelineComment: PullRequestTimelineItem = { kind: "comment", ...comment };
         state.setState((prev) => {
-            const current = prev.conversationComments[key] ?? initialConversationState;
-            const nextItems = [...current.items, timelineComment];
+            const nextItems = [...resolveConversationItems(key), timelineComment];
             queryClient.setQueryData<ConversationQueryData>(queryKeys.pullRequest.conversation(key), {
                 items: nextItems,
             });
-            const view = prev.pullRequests[key];
-            const nextDetail =
-                view?.detail != null ? { ...view.detail, commentCount: view.detail.commentCount + 1 } : null;
+            const detail = resolvePullRequestDetail(repository, number);
+            const nextDetail = detail != null ? { ...detail, commentCount: detail.commentCount + 1 } : null;
             if (nextDetail) {
                 setPullRequestDetailQueryData(queryClient, key, nextDetail);
             }
+            const view = prev.pullRequests[key];
             return {
                 ...prev,
                 conversationComments: {
                     ...prev.conversationComments,
                     [key]: {
-                        ...current,
                         status: "ready",
                         items: nextItems,
                         error: null,
@@ -2581,7 +2627,7 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
                     ? {
                           ...prev.pullRequests,
                           [key]: {
-                              ...view!,
+                              ...(view ?? initialPullRequestView),
                               detail: nextDetail,
                           },
                       }
@@ -2669,6 +2715,15 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
     async function setPullRequestDraft(repository: string, number: number, isDraft: boolean): Promise<void> {
         await github.setPullRequestDraft(requireToken(), repository, number, isDraft);
         await refreshAfterMutation(repository, number);
+    }
+
+    async function setPullRequestFileViewed(
+        repository: string,
+        number: number,
+        path: string,
+        viewed: boolean,
+    ): Promise<void> {
+        await github.setPullRequestFileViewed(requireToken(), repository, number, path, viewed);
     }
 
     async function loadRepositoryMetadata(repository: string): Promise<void> {
@@ -2762,7 +2817,7 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
         number: number,
         reviewers: ReadonlyArray<string>,
     ): Promise<void> {
-        const detail = state.state.pullRequests[pullRequestKey(repository, number)]?.detail;
+        const detail = resolvePullRequestDetail(repository, number);
         const current = new Set(detail?.reviewRequests ?? []);
         const wanted = new Set(reviewers);
         const toAdd = [...wanted].filter((login) => !current.has(login));
@@ -2904,7 +2959,7 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
         }
 
         const key = pullRequestKey(repository, number);
-        const detail = state.state.pullRequests[key]?.detail;
+        const detail = resolvePullRequestDetail(repository, number);
         const already = detail?.reactionGroups.some((group) => group.content === content && group.viewerHasReacted);
 
         if (already) {
@@ -2917,13 +2972,15 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
         }
 
         if (detail) {
+            const nextDetail = {
+                ...detail,
+                reactionGroups: patchReactionGroups(detail.reactionGroups, content, !already),
+            };
+            setPullRequestDetailQueryData(queryClient, key, nextDetail);
             setPullRequest(key, {
                 status: "ready",
                 refreshing: false,
-                detail: {
-                    ...detail,
-                    reactionGroups: patchReactionGroups(detail.reactionGroups, content, !already),
-                },
+                detail: nextDetail,
                 lastLoadedAt: new Date().toISOString(),
                 error: null,
             });
@@ -2943,8 +3000,8 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
         }
 
         const key = pullRequestKey(repository, number);
-        const conversation = state.state.conversationComments[key] ?? initialConversationState;
-        const item = conversation.items.find((entry) => entry.kind === "comment" && entry.databaseId === commentId);
+        const conversationItems = resolveConversationItems(key);
+        const item = conversationItems.find((entry) => entry.kind === "comment" && entry.databaseId === commentId);
         const already =
             item?.kind === "comment" &&
             item.reactionGroups.some((group) => group.content === content && group.viewerHasReacted);
@@ -2965,21 +3022,25 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
         }
 
         state.setState((prev) => {
-            const current = prev.conversationComments[key] ?? initialConversationState;
+            const nextItems = conversationItems.map((entry) =>
+                entry.kind === "comment" && entry.databaseId === commentId
+                    ? {
+                          ...entry,
+                          reactionGroups: patchReactionGroups(entry.reactionGroups, content, !already),
+                      }
+                    : entry,
+            );
+            queryClient.setQueryData<ConversationQueryData>(queryKeys.pullRequest.conversation(key), {
+                items: nextItems,
+            });
             return {
                 ...prev,
                 conversationComments: {
                     ...prev.conversationComments,
                     [key]: {
-                        ...current,
-                        items: current.items.map((entry) =>
-                            entry.kind === "comment" && entry.databaseId === commentId
-                                ? {
-                                      ...entry,
-                                      reactionGroups: patchReactionGroups(entry.reactionGroups, content, !already),
-                                  }
-                                : entry,
-                        ),
+                        status: "ready",
+                        items: nextItems,
+                        error: null,
                     },
                 },
             };
@@ -2999,10 +3060,10 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
         }
 
         const key = pullRequestKey(repository, number);
-        const threads = state.state.reviewThreads[key] ?? initialThreadsState;
+        const threadItems = resolveReviewThreadItems(key);
         let already = false;
 
-        for (const thread of threads.items) {
+        for (const thread of threadItems) {
             const comment = thread.comments.find((entry) => entry.databaseId === commentId);
             if (comment) {
                 already = comment.reactionGroups.some((group) => group.content === content && group.viewerHasReacted);
@@ -3026,28 +3087,26 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
         }
 
         state.setState((prev) => {
-            const current = prev.reviewThreads[key] ?? initialThreadsState;
+            const nextItems = threadItems.map((thread) => ({
+                ...thread,
+                comments: thread.comments.map((comment) =>
+                    comment.databaseId === commentId
+                        ? {
+                              ...comment,
+                              reactionGroups: patchReactionGroups(comment.reactionGroups, content, !already),
+                          }
+                        : comment,
+                ),
+            }));
+            queryClient.setQueryData<ReviewThreadsQueryData>(queryKeys.pullRequest.threads(key), { items: nextItems });
             return {
                 ...prev,
                 reviewThreads: {
                     ...prev.reviewThreads,
                     [key]: {
-                        ...current,
-                        items: current.items.map((thread) => ({
-                            ...thread,
-                            comments: thread.comments.map((comment) =>
-                                comment.databaseId === commentId
-                                    ? {
-                                          ...comment,
-                                          reactionGroups: patchReactionGroups(
-                                              comment.reactionGroups,
-                                              content,
-                                              !already,
-                                          ),
-                                      }
-                                    : comment,
-                            ),
-                        })),
+                        status: "ready",
+                        items: nextItems,
+                        error: null,
                     },
                 },
             };
@@ -3253,6 +3312,7 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
         loadRepositoryMetadata,
         getRepositoryMetadata,
         setPullRequestDraft,
+        setPullRequestFileViewed,
         setPullRequestLabels,
         setPullRequestAssignees,
         setReviewRequests,

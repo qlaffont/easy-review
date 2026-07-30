@@ -1147,6 +1147,54 @@ export function createGithubHttpClient(
             );
         },
 
+        async setPullRequestFileViewed(token, repository, number, path, viewed) {
+            const [owner = "", name = ""] = repository.split("/");
+            const lookup = await graphql<{
+                repository: { pullRequest: { id: string } | null } | null;
+            }>(
+                token,
+                `
+                    query EasyReviewPullRequestId($owner: String!, $name: String!, $number: Int!) {
+                        repository(owner: $owner, name: $name) {
+                            pullRequest(number: $number) {
+                                id
+                            }
+                        }
+                    }
+                `,
+                { owner, name, number },
+            );
+
+            const pullRequestId = lookup.repository?.pullRequest?.id;
+            if (!pullRequestId) {
+                throw new EasyReviewError("not-found", "That pull request could not be found.");
+            }
+
+            await graphql(
+                token,
+                viewed
+                    ? `
+                        mutation EasyReviewMarkFileAsViewed($pullRequestId: ID!, $path: String!) {
+                            markFileAsViewed(input: { pullRequestId: $pullRequestId, path: $path }) {
+                                pullRequest {
+                                    id
+                                }
+                            }
+                        }
+                    `
+                    : `
+                        mutation EasyReviewUnmarkFileAsViewed($pullRequestId: ID!, $path: String!) {
+                            unmarkFileAsViewed(input: { pullRequestId: $pullRequestId, path: $path }) {
+                                pullRequest {
+                                    id
+                                }
+                            }
+                        }
+                    `,
+                { pullRequestId, path },
+            );
+        },
+
         async setPullRequestLabels(token, repository, number, labels) {
             const [owner = "", name = ""] = repository.split("/");
             await restJson(token, "PUT", `/repos/${owner}/${name}/issues/${number}/labels`, {

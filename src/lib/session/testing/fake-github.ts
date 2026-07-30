@@ -243,6 +243,7 @@ export function createFakeGithub(): FakeGithub {
     const repositoriesByToken = new Map<string, Array<Repository>>();
     const pullRequestsByToken = new Map<string, Array<PullRequestDetail>>();
     const filesByPullRequest = new Map<string, Array<StoredFile>>();
+    const viewedFilesByPullRequest = new Map<string, Set<string>>();
     const threadsByPullRequest = new Map<string, Array<ReviewThread>>();
     const timelineByPullRequest = new Map<string, Array<PullRequestTimelineItem>>();
     const assigneesByRepository = new Map<string, Array<RepositoryUser>>();
@@ -1066,6 +1067,20 @@ export function createFakeGithub(): FakeGithub {
                 const pullRequest = requirePullRequest(token, repository, number);
                 requireOpen(pullRequest);
                 patchPullRequest(token, repository, number, { isDraft });
+            });
+        },
+        setPullRequestFileViewed(token, repository, number, path, viewed) {
+            return respond("setPullRequestFileViewed", () => {
+                authenticate(token);
+                requirePullRequest(token, repository, number);
+                const key = filesKey(token, repository, number);
+                const paths = viewedFilesByPullRequest.get(key) ?? new Set<string>();
+                if (viewed) {
+                    paths.add(path);
+                } else {
+                    paths.delete(path);
+                }
+                viewedFilesByPullRequest.set(key, paths);
             });
         },
         setPullRequestLabels(token, repository, number, labels) {
