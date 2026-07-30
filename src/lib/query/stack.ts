@@ -9,6 +9,7 @@ import type { PullRequestSummary } from "#/lib/session/types.ts";
 import { CACHE_POLICY } from "#/lib/query/cache-policy.ts";
 import { mergePullRequestSummaries } from "#/lib/query/inbox-fetch.ts";
 import { getInboxQueryData } from "#/lib/query/inbox.ts";
+import { useInboxPullRequests } from "#/lib/query/inbox.ts";
 import { queryKeys } from "#/lib/query/query-keys.ts";
 import { useSession, useSessionState } from "#/lib/session/provider.tsx";
 import { resolvePullRequestStack, type ResolvedPullRequestStack } from "#/lib/session/pull-request-stacks.ts";
@@ -68,11 +69,8 @@ function loadedSummariesFromQueries(
     session: ReturnType<typeof useSession>,
     repository: string,
     indexPullRequests: Array<PullRequestSummary>,
+    inboxForRepo: Array<PullRequestSummary>,
 ): Array<PullRequestSummary> {
-    const login = session.state.state.auth.viewer?.login ?? "";
-    const inboxForRepo = (getInboxQueryData(session.queryClient, login)?.pullRequests ?? []).filter(
-        (pullRequest) => pullRequest.repository === repository,
-    );
     const loadedFromDetails = session.queryClient
         .getQueriesData<PullRequestDetailQueryData>({ queryKey: ["pullRequest"] })
         .flatMap(([, data]) => {
@@ -89,13 +87,24 @@ export function usePullRequestStackQuery(
 ): PullRequestStackState & { loadGraphite: () => Promise<void> } {
     const session = useSession();
     const index = useRepoStackIndexQuery(repository);
+    const inboxForRepo = useInboxPullRequests().filter((pullRequest) => pullRequest.repository === repository);
     const override = useSessionState(
         (state) => state.pullRequestStackOverrides[pullRequestKey(repository, number)] ?? null,
     );
 
+    const loadedDetailKeys = session.queryClient
+        .getQueriesData<PullRequestDetailQueryData>({ queryKey: ["pullRequest"] })
+        .flatMap(([, data]) => {
+            const detail = data?.detail;
+            return detail?.repository === repository
+                ? [`${detail.updatedAt}:${detail.reviewDecision ?? ""}:${detail.checks}`]
+                : [];
+        })
+        .join("|");
+
     const pullRequests = useMemo(
-        () => loadedSummariesFromQueries(session, repository, index.pullRequests),
-        [session, repository, index.pullRequests],
+        () => loadedSummariesFromQueries(session, repository, index.pullRequests, inboxForRepo),
+        [session, repository, index.pullRequests, inboxForRepo, loadedDetailKeys],
     );
 
     const branchStack = useMemo((): ResolvedPullRequestStack | null => {

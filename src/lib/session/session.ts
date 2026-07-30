@@ -57,7 +57,11 @@ import {
     patchInboxPullRequest,
 } from "#/lib/query/inbox-fetch.ts";
 import { getInboxQueryData, inboxQueryKey, setInboxQueryData } from "#/lib/query/inbox.ts";
-import { invalidateInboxForRefresh, invalidatePullRequestSecondaryAfterMutation } from "#/lib/query/invalidate.ts";
+import {
+    invalidateInboxForRefresh,
+    invalidatePullRequestSecondaryAfterMutation,
+    invalidateRepositoryStackIndex,
+} from "#/lib/query/invalidate.ts";
 import { setPullRequestDetailQueryData } from "#/lib/query/pull-request.ts";
 import { queryKeys } from "#/lib/query/query-keys.ts";
 import { EasyReviewError, missingToken, toSessionError, unauthorized } from "#/lib/session/errors.ts";
@@ -1918,7 +1922,7 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
         });
 
         await persistDraft(emptyDraft(repository, number, detail.headSha));
-        await Promise.all([loadReviewThreads(repository, number), loadConversationComments(repository, number)]);
+        await refreshAfterMutation(repository, number, { reloadReviewSurfaces: true, reloadStack: true });
     }
 
     /** Publish one line comment immediately as a Comment review (does not touch the staged draft). */
@@ -1946,7 +1950,7 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
             comments: [{ path: input.path, line: input.line, side: input.side, body }],
         });
 
-        await Promise.all([loadReviewThreads(repository, number), loadConversationComments(repository, number)]);
+        await refreshAfterMutation(repository, number, { reloadReviewSurfaces: true });
     }
 
     async function loadReviewThreads(repository: string, number: number): Promise<void> {
@@ -2644,7 +2648,20 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
      * cannot paint over the mutation result. Soft-fails the fetch so a successful
      * GitHub write is not reported as an action failure.
      */
-    async function refreshAfterMutation(repository: string, number: number): Promise<void> {
+    type PullRequestMutationRefreshOptions = {
+        /** Reload conversation/threads when those surfaces were already fetched. */
+        reloadSecondary?: boolean;
+        /** Always reload review threads and conversation (after submitting review comments). */
+        reloadReviewSurfaces?: boolean;
+        /** Refetch the repo stack index when stack UI is enabled. */
+        reloadStack?: boolean;
+    };
+
+    async function refreshAfterMutation(
+        repository: string,
+        number: number,
+        options?: PullRequestMutationRefreshOptions,
+    ): Promise<void> {
         const key = pullRequestKey(repository, number);
         const attempt = (latestPullRequestLoads.get(key) ?? 0) + 1;
         latestPullRequestLoads.set(key, attempt);
@@ -2686,6 +2703,17 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
             if (login) {
                 invalidatePullRequestSecondaryAfterMutation(queryClient, login, repository, number);
             }
+            if (options?.reloadStack && areStacksEnabled()) {
+                invalidateRepositoryStackIndex(queryClient, repository);
+            }
+            if (options?.reloadReviewSurfaces) {
+                await Promise.all([
+                    loadReviewThreads(repository, number),
+                    loadConversationComments(repository, number),
+                ]);
+            } else if (options?.reloadSecondary) {
+                await refreshSecondaryPullRequestViews(repository, number);
+            }
         } catch (error) {
             if (attempt !== latestPullRequestLoads.get(key)) {
                 return;
@@ -2714,7 +2742,7 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
 
     async function setPullRequestDraft(repository: string, number: number, isDraft: boolean): Promise<void> {
         await github.setPullRequestDraft(requireToken(), repository, number, isDraft);
-        await refreshAfterMutation(repository, number);
+        await refreshAfterMutation(repository, number, { reloadStack: true });
     }
 
     async function setPullRequestFileViewed(
@@ -2831,7 +2859,7 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
             await github.removeReviewers(requireToken(), repository, number, toRemove);
         }
 
-        await refreshAfterMutation(repository, number);
+        await refreshAfterMutation(repository, number, { reloadStack: true });
     }
 
     async function reRequestReview(
@@ -2844,7 +2872,7 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
         }
 
         await github.reRequestReview(requireToken(), repository, number, reviewers);
-        await refreshAfterMutation(repository, number);
+        await refreshAfterMutation(repository, number, { reloadStack: true });
     }
 
     async function dismissReview(repository: string, number: number, reviewId: number, message: string): Promise<void> {
@@ -2854,7 +2882,7 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
         }
 
         await github.dismissReview(requireToken(), repository, number, reviewId, trimmed);
-        await refreshAfterMutation(repository, number);
+        await refreshAfterMutation(repository, number, { reloadSecondary: true, reloadStack: true });
     }
 
     async function updatePullRequestBody(repository: string, number: number, body: string): Promise<void> {
@@ -2892,7 +2920,7 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
             message,
             changes: input.changes,
         });
-        await refreshAfterMutation(repository, number);
+        await refreshAfterMutation(repository, number, { reloadStack: true });
         // Head moved — drop cached diffs so the viewer reloads the committed content.
         await refreshPullRequestFiles(repository, number);
         const commitsKey = pullRequestKey(repository, number);
@@ -3115,12 +3143,12 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
 
     async function mergePullRequest(repository: string, number: number, method: MergeMethod): Promise<void> {
         await github.mergePullRequest(requireToken(), repository, number, method);
-        await refreshAfterMutation(repository, number);
+        await refreshAfterMutation(repository, number, { reloadStack: true });
     }
 
     async function closePullRequest(repository: string, number: number): Promise<void> {
         await github.closePullRequest(requireToken(), repository, number);
-        await refreshAfterMutation(repository, number);
+        await refreshAfterMutation(repository, number, { reloadStack: true });
     }
 
     async function uploadPullRequestMedia(

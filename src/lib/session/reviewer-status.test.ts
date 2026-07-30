@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { aggregateReviewerStatuses } from "#/lib/session/reviewer-status.ts";
+import {
+    aggregateReviewerStatuses,
+    excludeAuthorFromReviewers,
+    excludeAuthorFromReviewRequests,
+} from "#/lib/session/reviewer-status.ts";
 
 describe("aggregateReviewerStatuses", () => {
     it("shows approved when the latest review is commented but an earlier review approved", () => {
@@ -71,5 +75,15 @@ describe("aggregateReviewerStatuses", () => {
         ]);
 
         expect(reviewers).toEqual([{ login: "mona", state: "dismissed", reviewId: 8 }]);
+    });
+
+    it("excludes the pull request author from reviewer lists", () => {
+        expect(
+            excludeAuthorFromReviewers("octocat", [
+                { login: "octocat", state: "approved", reviewId: 1 },
+                { login: "hubot", state: "commented", reviewId: 2 },
+            ]),
+        ).toEqual([{ login: "hubot", state: "commented", reviewId: 2 }]);
+        expect(excludeAuthorFromReviewRequests("octocat", ["octocat", "hubot"])).toEqual(["hubot"]);
     });
 });

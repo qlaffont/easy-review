@@ -65,3 +65,15 @@ export function aggregateReviewerStatuses(reviews: ReadonlyArray<RawPullRequestR
 
     return aggregated;
 }
+
+/** PR authors are not meaningful reviewers — match github.com sidebar behavior. */
+export function excludeAuthorFromReviewers<T extends { login: string }>(
+    author: string,
+    reviewers: ReadonlyArray<T>,
+): Array<T> {
+    return reviewers.filter((reviewer) => reviewer.login !== author);
+}
+
+export function excludeAuthorFromReviewRequests(author: string, reviewRequests: ReadonlyArray<string>): Array<string> {
+    return reviewRequests.filter((login) => login !== author);
+}

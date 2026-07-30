@@ -15,6 +15,7 @@ import type { PullRequestSummary, ReviewState } from "#/lib/session/types.ts";
 import { ChecksDot } from "#/components/pr/checks-dot.tsx";
 import { HelpTooltip } from "#/components/ui/help-tooltip.tsx";
 import { RelativeTime } from "#/components/ui/relative-time.tsx";
+import { excludeAuthorFromReviewRequests, excludeAuthorFromReviewers } from "#/lib/session/reviewer-status.ts";
 import { cn } from "#/lib/utils.ts";
 
 const REVIEW_STATUS_LABEL: Record<ReviewState, string> = {
@@ -51,11 +52,11 @@ type ReviewerChip = {
 function collectReviewers(pullRequest: PullRequestSummary): Array<ReviewerChip> {
     const byLogin = new Map<string, ReviewerChip>();
 
-    for (const reviewer of pullRequest.reviewers) {
+    for (const reviewer of excludeAuthorFromReviewers(pullRequest.author, pullRequest.reviewers)) {
         byLogin.set(reviewer.login, { login: reviewer.login, state: reviewer.state });
     }
 
-    for (const login of pullRequest.reviewRequests) {
+    for (const login of excludeAuthorFromReviewRequests(pullRequest.author, pullRequest.reviewRequests)) {
         if (!byLogin.has(login)) {
             byLogin.set(login, { login, state: "pending" });
         }

@@ -48,6 +48,7 @@ import { Skeleton } from "#/components/ui/skeleton.tsx";
 import { Textarea } from "#/components/ui/textarea.tsx";
 import { useRepositoryMetadataQuery } from "#/lib/query/pull-request.ts";
 import { useSession } from "#/lib/session/provider.tsx";
+import { excludeAuthorFromReviewRequests, excludeAuthorFromReviewers } from "#/lib/session/reviewer-status.ts";
 import { notifyAction } from "#/lib/toast.ts";
 import { cn } from "#/lib/utils.ts";
 
@@ -149,8 +150,10 @@ function ReviewersSection({
     const session = useSession();
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState<string | null>(null);
-    const requested = new Set(detail.reviewRequests);
-    const reviewedLogins = new Set(reviewers.map((reviewer) => reviewer.login));
+    const visibleReviewers = excludeAuthorFromReviewers(detail.author, reviewers);
+    const visibleReviewRequests = excludeAuthorFromReviewRequests(detail.author, detail.reviewRequests);
+    const requested = new Set(visibleReviewRequests);
+    const reviewedLogins = new Set(visibleReviewers.map((reviewer) => reviewer.login));
 
     async function setRequests(next: Array<string>) {
         setBusy(true);
@@ -170,16 +173,16 @@ function ReviewersSection({
 
     async function toggle(login: string) {
         if (requested.has(login)) {
-            await setRequests(detail.reviewRequests.filter((entry) => entry !== login));
+            await setRequests(visibleReviewRequests.filter((entry) => entry !== login));
             return;
         }
 
-        if (detail.reviewRequests.length >= MAX_REVIEWERS) {
+        if (visibleReviewRequests.length >= MAX_REVIEWERS) {
             setError(`You can request up to ${MAX_REVIEWERS} reviewers.`);
             return;
         }
 
-        await setRequests([...detail.reviewRequests, login]);
+        await setRequests([...visibleReviewRequests, login]);
     }
 
     async function reRequest(login: string) {
@@ -214,7 +217,7 @@ function ReviewersSection({
         }
     }
 
-    const awaiting = detail.reviewRequests.filter((login) => !reviewedLogins.has(login));
+    const awaiting = visibleReviewRequests.filter((login) => !reviewedLogins.has(login));
 
     return (
         <MetadataSection
@@ -225,7 +228,7 @@ function ReviewersSection({
             busy={busy}
             error={error}
             loading={loading}
-            selectedKeys={detail.reviewRequests}
+            selectedKeys={visibleReviewRequests}
             items={users.filter((user) => user.login !== detail.author)}
             renderItem={(user, selected) => <UserRow user={user} selected={selected} />}
             getKey={(user) => user.login}
@@ -233,9 +236,9 @@ function ReviewersSection({
             onToggle={(user) => void toggle(user.login)}
             groupSelected="Requested"
         >
-            {reviewers.length > 0 ? (
+            {visibleReviewers.length > 0 ? (
                 <ul className="flex flex-col gap-1">
-                    {reviewers.map((reviewer) => (
+                    {visibleReviewers.map((reviewer) => (
                         <ReviewerRow
                             key={`${reviewer.login}-${reviewer.reviewId}`}
                             user={
@@ -270,7 +273,7 @@ function ReviewersSection({
                 </ul>
             ) : null}
 
-            {reviewers.length === 0 && detail.reviewRequests.length === 0 ? (
+            {visibleReviewers.length === 0 && visibleReviewRequests.length === 0 ? (
                 loading ? (
                     <MetadataPeopleSkeleton />
                 ) : (
