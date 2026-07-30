@@ -3,10 +3,12 @@ import { describe, expect, it } from "vitest";
 import type { PullRequestDetail } from "#/lib/session/types.ts";
 
 import {
+    defaultMergeCommitFields,
     isMergeBlockedByRequirements,
     mergeFooterHint,
     mergingBlockedDescription,
 } from "#/components/pr/merge-requirements.ts";
+import { DEFAULT_MERGE_COMMIT_SETTINGS } from "#/lib/session/types.ts";
 
 function detail(overrides: Partial<PullRequestDetail> = {}): PullRequestDetail {
     return {
@@ -49,6 +51,9 @@ function detail(overrides: Partial<PullRequestDetail> = {}): PullRequestDetail {
         allowedMergeMethods: ["squash"],
         defaultMergeMethod: "squash",
         commitCount: 1,
+        headRepositoryOwnerLogin: "acme",
+        mergeCommits: [{ oid: "abc1234", messageHeadline: "Test", message: "Test\n\nBody" }],
+        mergeCommitSettings: DEFAULT_MERGE_COMMIT_SETTINGS,
         mergeStateStatus: "blocked",
         viewerCanMergeAsAdmin: false,
         ...overrides,
@@ -70,5 +75,56 @@ describe("merge requirements", () => {
         expect(mergeFooterHint(detail({ reviewDecision: "review-required" }), 1, true)).toBe(
             "Merging is blocked until requirements are met.",
         );
+    });
+});
+
+describe("defaultMergeCommitFields", () => {
+    it("uses an empty extended description for squash when the repo setting is BLANK", () => {
+        const result = defaultMergeCommitFields(
+            detail({
+                body: "PR description",
+                mergeCommitSettings: {
+                    ...DEFAULT_MERGE_COMMIT_SETTINGS,
+                    squashMergeCommitTitle: "PR_TITLE",
+                    squashMergeCommitMessage: "BLANK",
+                },
+            }),
+            "squash",
+        );
+
+        expect(result).toEqual({ title: "Test (#1)", message: "" });
+    });
+
+    it("uses commit messages for the default squash extended description", () => {
+        const result = defaultMergeCommitFields(
+            detail({
+                commitCount: 2,
+                mergeCommits: [
+                    { oid: "1111111", messageHeadline: "First change", message: "First change" },
+                    { oid: "2222222", messageHeadline: "Second change", message: "Second change" },
+                ],
+            }),
+            "squash",
+        );
+
+        expect(result.title).toBe("Test (#1)");
+        expect(result.message).toBe("* First change (1111111)\n* Second change (2222222)");
+    });
+
+    it("uses the merge commit title and PR title message for merge commits", () => {
+        const result = defaultMergeCommitFields(
+            detail({
+                title: "Add billing",
+                number: 42,
+                headRefName: "billing",
+                headRepositoryOwnerLogin: "acme",
+            }),
+            "merge",
+        );
+
+        expect(result).toEqual({
+            title: "Merge pull request #42 from acme/billing",
+            message: "Add billing",
+        });
     });
 });

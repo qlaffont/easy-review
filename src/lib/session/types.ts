@@ -93,6 +93,41 @@ export type CheckRun = {
 /** How GitHub should combine the head into the base when merging. */
 export type MergeMethod = "merge" | "squash" | "rebase";
 
+/** Repository setting for the default squash-merge commit title. */
+export type SquashMergeCommitTitleSetting = "PR_TITLE" | "COMMIT_OR_PR_TITLE";
+
+/** Repository setting for the default squash-merge extended description. */
+export type SquashMergeCommitMessageSetting = "BLANK" | "PR_BODY" | "COMMIT_MESSAGES";
+
+/** Repository setting for the default merge-commit title. */
+export type MergeCommitTitleSetting = "PR_TITLE" | "MERGE_MESSAGE";
+
+/** Repository setting for the default merge-commit extended description. */
+export type MergeCommitMessageSetting = "BLANK" | "PR_BODY" | "PR_TITLE";
+
+/** Default squash/merge commit message formats configured on the repository. */
+export type MergeCommitSettings = {
+    squashMergeCommitTitle: SquashMergeCommitTitleSetting;
+    squashMergeCommitMessage: SquashMergeCommitMessageSetting;
+    mergeCommitTitle: MergeCommitTitleSetting;
+    mergeCommitMessage: MergeCommitMessageSetting;
+};
+
+/** GitHub defaults when repository merge-message settings are unset. */
+export const DEFAULT_MERGE_COMMIT_SETTINGS: MergeCommitSettings = {
+    squashMergeCommitTitle: "COMMIT_OR_PR_TITLE",
+    squashMergeCommitMessage: "COMMIT_MESSAGES",
+    mergeCommitTitle: "MERGE_MESSAGE",
+    mergeCommitMessage: "PR_TITLE",
+};
+
+/** Commit metadata used to preview the squash/merge dialog defaults. */
+export type MergeCommitPreview = {
+    oid: string;
+    messageHeadline: string;
+    message: string;
+};
+
 /** Optional squash/merge-commit message overrides passed to GitHub on merge. */
 export type MergePullRequestOptions = {
     commitTitle?: string;
@@ -158,6 +193,12 @@ export type PullRequestDetail = PullRequestSummary & {
     defaultMergeMethod: MergeMethod | null;
     /** Commits on the pull request — used for merge-method copy. */
     commitCount: number;
+    /** Owner login of the head repository (fork owner when the PR comes from a fork). */
+    headRepositoryOwnerLogin: string;
+    /** Recent commits on the PR branch — used for suggested squash/merge messages. */
+    mergeCommits: Array<MergeCommitPreview>;
+    /** Repository defaults for squash and merge commit messages. */
+    mergeCommitSettings: MergeCommitSettings;
     /** Whether reviews, checks, and other rules allow merging (GitHub merge box). */
     mergeStateStatus: MergeStateStatus;
     /** True when the signed-in viewer may bypass branch rules and merge anyway. */

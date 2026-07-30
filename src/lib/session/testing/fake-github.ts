@@ -11,6 +11,7 @@ import type {
     Label,
     MergeMethod,
     MergePullRequestOptions,
+    MergeCommitPreview,
     PullRequestComment,
     PullRequestCommit,
     PullRequestDetail,
@@ -42,6 +43,7 @@ import {
 } from "#/lib/session/pull-request-search.ts";
 import { matchesRelatedRefs } from "#/lib/session/related-pull-requests.ts";
 import { matchesSectionSearchCountQuery } from "#/lib/session/section-filters.ts";
+import { DEFAULT_MERGE_COMMIT_SETTINGS } from "#/lib/session/types.ts";
 
 export type FakeGithub = GithubClient & {
     /** Register a token GitHub will accept, together with the account behind it. */
@@ -178,6 +180,17 @@ function buildPullRequest(input: PullRequestInput): PullRequestDetail {
         allowedMergeMethods: input.allowedMergeMethods ?? ["merge", "squash", "rebase"],
         defaultMergeMethod: input.defaultMergeMethod ?? "squash",
         commitCount: input.commitCount ?? 1,
+        headRepositoryOwnerLogin: input.headRepositoryOwnerLogin ?? input.repository.split("/")[0] ?? "octocat",
+        mergeCommits:
+            input.mergeCommits ??
+            ([
+                {
+                    oid: input.headSha ?? `sha-head-${input.number}`,
+                    messageHeadline: input.title ?? `Pull request ${input.number}`,
+                    message: input.body ?? "",
+                },
+            ] satisfies Array<MergeCommitPreview>),
+        mergeCommitSettings: input.mergeCommitSettings ?? DEFAULT_MERGE_COMMIT_SETTINGS,
         mergeStateStatus:
             input.mergeStateStatus ??
             (input.isDraft

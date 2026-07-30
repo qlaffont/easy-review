@@ -13,6 +13,8 @@ import type {
     MergeableState,
     MergeMethod,
     MergeStateStatus,
+    MergeCommitPreview,
+    MergeCommitSettings,
     PullRequestComment,
     PullRequestCommit,
     PullRequestDetail,
@@ -52,6 +54,7 @@ import {
 } from "#/lib/session/pull-request-search.ts";
 import { matchesRelatedRefs } from "#/lib/session/related-pull-requests.ts";
 import { aggregateReviewerStatuses } from "#/lib/session/reviewer-status.ts";
+import { DEFAULT_MERGE_COMMIT_SETTINGS } from "#/lib/session/types.ts";
 
 const DEFAULT_GRAPHQL_URL = "https://api.github.com/graphql";
 const DEFAULT_REST_URL = "https://api.github.com";
@@ -668,6 +671,10 @@ export function createGithubHttpClient(
                 squashMergeAllowed: repo.squashMergeAllowed,
                 rebaseMergeAllowed: repo.rebaseMergeAllowed,
                 viewerDefaultMergeMethod: repo.viewerDefaultMergeMethod,
+                squashMergeCommitTitle: repo.squashMergeCommitTitle,
+                squashMergeCommitMessage: repo.squashMergeCommitMessage,
+                mergeCommitTitle: repo.mergeCommitTitle,
+                mergeCommitMessage: repo.mergeCommitMessage,
             });
             if (detail.requiredApprovingReviewCount != null) {
                 return detail;
@@ -2378,8 +2385,21 @@ function buildRepositoryStackIndexQuery(owner: string, name: string): string {
     `;
 }
 
+/** Rollup state for inbox rows and stack index — one commit is enough. */
+const PULL_REQUEST_CHECK_COMMIT = `
+    commits(last: 1) {
+        nodes {
+            commit {
+                statusCheckRollup {
+                    state
+                }
+            }
+        }
+    }
+`;
+
 /** The fields behind `PullRequestSummary`, shared by the Inbox batch and the overview query. */
-const PULL_REQUEST_FIELDS = `
+const PULL_REQUEST_SUMMARY_FIELDS = `
     number
     title
     url
@@ -2426,15 +2446,6 @@ const PULL_REQUEST_FIELDS = `
             }
         }
     }
-    commits(last: 1) {
-        nodes {
-            commit {
-                statusCheckRollup {
-                    state
-                }
-            }
-        }
-    }
     labels(first: 20) {
         nodes {
             name
@@ -2447,6 +2458,8 @@ const PULL_REQUEST_FIELDS = `
         }
     }
 `;
+
+const PULL_REQUEST_FIELDS = `${PULL_REQUEST_SUMMARY_FIELDS}${PULL_REQUEST_CHECK_COMMIT}`;
 
 const SECTION_SEARCH_PULL_REQUESTS_QUERY = `
     query EasyReviewSectionPullRequests($query: String!, $first: Int!, $after: String) {
@@ -2520,6 +2533,7 @@ type PullRequestDetailNode = Omit<PullRequestNode, "commits"> & {
     reactionGroups: Array<ReactionGroupNode>;
     baseRefOid: string;
     headRefOid: string;
+    headRepositoryOwner: { login: string } | null;
     mergeStateStatus: string;
     viewerCanMergeAsAdmin: boolean;
     baseRef: {
@@ -2535,6 +2549,8 @@ type PullRequestDetailNode = Omit<PullRequestNode, "commits"> & {
         nodes: Array<{
             commit: {
                 oid: string;
+                messageHeadline?: string;
+                message?: string;
                 statusCheckRollup: {
                     state: string;
                     contexts: { totalCount?: number; nodes: Array<CheckContextNode> };
@@ -2549,6 +2565,10 @@ type RepositoryMergeSettings = {
     squashMergeAllowed: boolean;
     rebaseMergeAllowed: boolean;
     viewerDefaultMergeMethod: "MERGE" | "SQUASH" | "REBASE" | null;
+    squashMergeCommitTitle: "PR_TITLE" | "COMMIT_OR_PR_TITLE" | null;
+    squashMergeCommitMessage: "BLANK" | "PR_BODY" | "COMMIT_MESSAGES" | null;
+    mergeCommitTitle: "PR_TITLE" | "MERGE_MESSAGE" | null;
+    mergeCommitMessage: "BLANK" | "PR_BODY" | "PR_TITLE" | null;
 };
 
 type PullRequestQuery = {
@@ -2584,8 +2604,12 @@ const PULL_REQUEST_QUERY = `
             squashMergeAllowed
             rebaseMergeAllowed
             viewerDefaultMergeMethod
+            squashMergeCommitTitle
+            squashMergeCommitMessage
+            mergeCommitTitle
+            mergeCommitMessage
             pullRequest(number: $number) {
-                ${PULL_REQUEST_FIELDS}
+                ${PULL_REQUEST_SUMMARY_FIELDS}
                 body
                 lastEditedAt
                 includesCreatedEdit
@@ -2615,6 +2639,9 @@ const PULL_REQUEST_QUERY = `
                 }
                 baseRefOid
                 headRefOid
+                headRepositoryOwner {
+                    login
+                }
                 mergeStateStatus
                 viewerCanMergeAsAdmin
                 baseRef {
@@ -2634,12 +2661,15 @@ const PULL_REQUEST_QUERY = `
                         login
                     }
                 }
-                commits(last: 1) {
+                commits(last: 100) {
                     totalCount
                     nodes {
                         commit {
                             oid
+                            messageHeadline
+                            message
                             statusCheckRollup {
+                                state
                                 contexts(first: 50) {
                                     totalCount
                                     nodes {
@@ -3685,33 +3715,68 @@ function toContentEdits(
     return { editCount, edits: mapped };
 }
 
+function toMergeCommitSettings(settings: RepositoryMergeSettings): MergeCommitSettings {
+    return {
+        squashMergeCommitTitle: settings.squashMergeCommitTitle ?? DEFAULT_MERGE_COMMIT_SETTINGS.squashMergeCommitTitle,
+        squashMergeCommitMessage:
+            settings.squashMergeCommitMessage ?? DEFAULT_MERGE_COMMIT_SETTINGS.squashMergeCommitMessage,
+        mergeCommitTitle: settings.mergeCommitTitle ?? DEFAULT_MERGE_COMMIT_SETTINGS.mergeCommitTitle,
+        mergeCommitMessage: settings.mergeCommitMessage ?? DEFAULT_MERGE_COMMIT_SETTINGS.mergeCommitMessage,
+    };
+}
+
 function toPullRequestDetail(node: PullRequestDetailNode, settings: RepositoryMergeSettings): PullRequestDetail {
-    const commit = node.commits.nodes[0]?.commit;
+    const commitNodes = node.commits.nodes;
+    const headCommit = commitNodes.at(-1)?.commit ?? commitNodes[0]?.commit;
     const allowedMergeMethods = toAllowedMergeMethods(settings);
     const { editCount, edits } = toContentEdits(node.userContentEdits, {
         includesCreatedEdit: node.includesCreatedEdit,
         createdAt: node.createdAt,
         fallback: node.lastEditedAt && node.editor ? { editedAt: node.lastEditedAt, editor: node.editor } : null,
     });
+    const mergeCommits: Array<MergeCommitPreview> = commitNodes.map((entry) => ({
+        oid: entry.commit.oid,
+        messageHeadline: entry.commit.messageHeadline ?? "",
+        message: entry.commit.message ?? "",
+    }));
+    const [repositoryOwner = ""] = node.repository.nameWithOwner.split("/");
 
     return {
-        ...toPullRequestSummary(node),
+        ...toPullRequestSummary({
+            ...node,
+            commits: {
+                nodes: headCommit
+                    ? [
+                          {
+                              commit: {
+                                  statusCheckRollup: headCommit.statusCheckRollup
+                                      ? { state: headCommit.statusCheckRollup.state }
+                                      : null,
+                              },
+                          },
+                      ]
+                    : [],
+            },
+        }),
         body: node.body,
         lastEditedAt: node.lastEditedAt ?? null,
         editor: toContentEditor(node.editor),
         editCount,
         edits,
         reactionGroups: toReactionGroups(node.reactionGroups),
-        headSha: node.headRefOid || commit?.oid || "",
+        headSha: node.headRefOid || headCommit?.oid || "",
         baseSha: node.baseRefOid,
         labels: node.labels?.nodes ?? [],
         assignees: node.assignees.nodes.map((assignee) => assignee.login),
-        checkRuns: mapCheckRuns(commit?.statusCheckRollup?.contexts.nodes ?? []),
-        checkCount: toCheckCount(commit),
+        checkRuns: mapCheckRuns(headCommit?.statusCheckRollup?.contexts.nodes ?? []),
+        checkCount: toCheckCount(headCommit),
         requiredApprovingReviewCount: toRequiredApprovingReviewCount(node),
         allowedMergeMethods,
         defaultMergeMethod: toDefaultMergeMethod(settings, allowedMergeMethods),
         commitCount: node.commits.totalCount,
+        headRepositoryOwnerLogin: node.headRepositoryOwner?.login ?? repositoryOwner,
+        mergeCommits,
+        mergeCommitSettings: toMergeCommitSettings(settings),
         mergeStateStatus: toMergeStateStatus(node.mergeStateStatus),
         viewerCanMergeAsAdmin: node.viewerCanMergeAsAdmin ?? false,
     };

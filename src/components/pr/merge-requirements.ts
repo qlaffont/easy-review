@@ -1,4 +1,4 @@
-import type { MergeMethod, PullRequestDetail } from "#/lib/session/types.ts";
+import type { MergeCommitSettings, MergeMethod, PullRequestDetail } from "#/lib/session/types.ts";
 
 export function reviewRequiredDescription(detail: PullRequestDetail): string {
     const count = detail.requiredApprovingReviewCount;
@@ -79,9 +79,109 @@ export function checksStatusLabel(detail: PullRequestDetail): { title: string; o
     return { title: "All checks have passed", ok: true };
 }
 
-/** GitHub default squash/merge-commit title: PR title plus number. */
-export function defaultMergeCommitTitle(detail: Pick<PullRequestDetail, "title" | "number">): string {
+function formatPullRequestTitle(detail: Pick<PullRequestDetail, "title" | "number">): string {
     return `${detail.title} (#${detail.number})`;
+}
+
+function mergePullRequestTitle(detail: PullRequestDetail): string {
+    return `Merge pull request #${detail.number} from ${detail.headRepositoryOwnerLogin}/${detail.headRefName}`;
+}
+
+function squashCommitBody(message: string, headline: string): string {
+    const normalizedMessage = message.replace(/\r\n/g, "\n");
+    const normalizedHeadline = headline.trim();
+    const lines = normalizedMessage.split("\n");
+
+    if (lines[0]?.trim() === normalizedHeadline) {
+        return lines.slice(1).join("\n").replace(/^\n+/, "");
+    }
+
+    if (normalizedMessage.trim() === normalizedHeadline) {
+        return "";
+    }
+
+    return normalizedMessage;
+}
+
+function formatCommitMessagesList(commits: PullRequestDetail["mergeCommits"]): string {
+    return commits
+        .map((commit) => {
+            const shortOid = commit.oid.slice(0, 7);
+            return shortOid ? `* ${commit.messageHeadline} (${shortOid})` : `* ${commit.messageHeadline}`;
+        })
+        .join("\n");
+}
+
+function squashTitle(detail: PullRequestDetail, settings: MergeCommitSettings): string {
+    if (settings.squashMergeCommitTitle === "PR_TITLE") {
+        return formatPullRequestTitle(detail);
+    }
+
+    if (detail.commitCount === 1 && detail.mergeCommits[0]) {
+        return detail.mergeCommits[0].messageHeadline;
+    }
+
+    return formatPullRequestTitle(detail);
+}
+
+function squashMessage(detail: PullRequestDetail, settings: MergeCommitSettings): string {
+    if (settings.squashMergeCommitMessage === "BLANK") {
+        return "";
+    }
+
+    if (settings.squashMergeCommitMessage === "PR_BODY") {
+        return detail.body;
+    }
+
+    if (detail.commitCount === 1 && detail.mergeCommits[0]) {
+        return squashCommitBody(detail.mergeCommits[0].message, detail.mergeCommits[0].messageHeadline);
+    }
+
+    return formatCommitMessagesList(detail.mergeCommits);
+}
+
+function mergeTitle(detail: PullRequestDetail, settings: MergeCommitSettings): string {
+    if (settings.mergeCommitTitle === "PR_TITLE") {
+        return formatPullRequestTitle(detail);
+    }
+
+    return mergePullRequestTitle(detail);
+}
+
+function mergeMessage(detail: PullRequestDetail, settings: MergeCommitSettings): string {
+    if (settings.mergeCommitMessage === "BLANK") {
+        return "";
+    }
+
+    if (settings.mergeCommitMessage === "PR_BODY") {
+        return detail.body;
+    }
+
+    return detail.title;
+}
+
+/** Default commit title and extended description for the merge dialog, matching GitHub repo settings. */
+export function defaultMergeCommitFields(
+    detail: PullRequestDetail,
+    method: MergeMethod,
+): { title: string; message: string } {
+    if (method === "rebase") {
+        return { title: "", message: "" };
+    }
+
+    const settings = detail.mergeCommitSettings;
+
+    if (method === "squash") {
+        return {
+            title: squashTitle(detail, settings),
+            message: squashMessage(detail, settings),
+        };
+    }
+
+    return {
+        title: mergeTitle(detail, settings),
+        message: mergeMessage(detail, settings),
+    };
 }
 
 export function mergeMethodSupportsCustomCommitMessage(method: MergeMethod): boolean {

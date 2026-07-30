@@ -15,7 +15,7 @@ import type { MergeMethod, PullRequestDetail } from "#/lib/session/types.ts";
 
 import {
     checksStatusLabel,
-    defaultMergeCommitTitle,
+    defaultMergeCommitFields,
     isMergeBlockedByRequirements,
     isReviewBlocking,
     mergeFooterHint,
@@ -168,10 +168,15 @@ export function PullRequestControls({ detail }: { detail: PullRequestDetail }) {
         }
     }
 
+    function applyMergeCommitDefaults(method: MergeMethod) {
+        const defaults = defaultMergeCommitFields(detail, method);
+        setCommitTitle(defaults.title);
+        setCommitMessage(defaults.message);
+    }
+
     function handleMergeDialogOpenChange(open: boolean) {
         if (open) {
-            setCommitTitle(defaultMergeCommitTitle(detail));
-            setCommitMessage(detail.body);
+            applyMergeCommitDefaults(activeMergeMethod);
         }
         setMergeDialogOpen(open);
     }
@@ -472,7 +477,15 @@ export function PullRequestControls({ detail }: { detail: PullRequestDetail }) {
                                             {index > 0 ? <DropdownMenuSeparator /> : null}
                                             <DropdownMenuItem
                                                 className="items-start gap-2 py-2"
-                                                onSelect={() => setMergeMethod(method.value)}
+                                                onSelect={() => {
+                                                    setMergeMethod(method.value);
+                                                    if (
+                                                        mergeDialogOpen &&
+                                                        mergeMethodSupportsCustomCommitMessage(method.value)
+                                                    ) {
+                                                        applyMergeCommitDefaults(method.value);
+                                                    }
+                                                }}
                                             >
                                                 <Check
                                                     className={cn(
