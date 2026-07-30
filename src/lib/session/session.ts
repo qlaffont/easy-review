@@ -1079,12 +1079,15 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
     }
 
     function canLoadMoreInboxSection(sectionId: InboxSectionId): boolean {
-        const { inbox } = state.state;
-        const loaded = inbox.sectionPullRequests[sectionId]?.length ?? 0;
-        const total = inbox.sectionCounts[sectionId] ?? loaded;
-        const pagination = inbox.sectionPagination[sectionId];
+        const inboxData = readInboxQueryData();
+        const loaded = inboxData.sectionPullRequests[sectionId]?.length ?? 0;
+        const total = inboxData.sectionCounts[sectionId];
 
-        return loaded < total || pagination?.hasNextPage === true;
+        if (total !== undefined) {
+            return loaded < total;
+        }
+
+        return inboxData.sectionPagination[sectionId]?.hasNextPage === true;
     }
 
     /** Fetch the next page of pull requests for one section. */
@@ -1103,11 +1106,12 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
         setInbox({ loadingMoreSection: sectionId, error: null });
 
         try {
-            const loaded = state.state.inbox.sectionPullRequests[sectionId] ?? [];
+            const inboxData = readInboxQueryData();
+            const loaded = inboxData.sectionPullRequests[sectionId] ?? [];
 
             if (!query) {
                 const selectedSet = new Set(selected);
-                const matched = state.state.inbox.pullRequests
+                const matched = inboxData.pullRequests
                     .filter(
                         (pullRequest) =>
                             selectedSet.has(pullRequest.repository) &&
@@ -1139,11 +1143,11 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
                 query,
                 repositories: selected,
                 limit: INBOX_SECTION_LOAD_SIZE,
-                after: state.state.inbox.sectionPagination[sectionId]?.endCursor,
+                after: inboxData.sectionPagination[sectionId]?.endCursor,
             });
 
             const pullRequests = mergePullRequestSummaries(loaded, page.pullRequests);
-            const mergedPool = mergePullRequestSummaries(state.state.inbox.pullRequests, page.pullRequests);
+            const mergedPool = mergePullRequestSummaries(inboxData.pullRequests, page.pullRequests);
 
             setInbox({
                 sectionPullRequests: { ...state.state.inbox.sectionPullRequests, [sectionId]: pullRequests },
@@ -3186,6 +3190,7 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
         refreshInbox,
         revalidateInbox,
         invalidateInbox,
+        syncInboxData: syncInboxQueryData,
         canLoadMoreInboxSection,
         loadMoreInboxSection,
         toggleSection,

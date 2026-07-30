@@ -345,6 +345,18 @@ function migratePresetFilter(id: InboxSectionId, filter: SectionFilter): Section
         return defaultFilterForPreset("merging-and-recently-merged");
     }
 
+    if (id === "drafts") {
+        if (filter.cases.length !== 1) {
+            return filter;
+        }
+        const fingerprints = new Set(filter.cases[0]!.conditions.map(conditionFingerprint));
+        const legacy = new Set(["author|is|@me", "isDraft|is|true"]);
+        if (fingerprints.size !== legacy.size || [...legacy].some((entry) => !fingerprints.has(entry))) {
+            return filter;
+        }
+        return defaultFilterForPreset("drafts");
+    }
+
     if (id !== "waiting-for-reviewers") {
         return filter;
     }

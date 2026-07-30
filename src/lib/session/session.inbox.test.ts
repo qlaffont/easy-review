@@ -299,4 +299,59 @@ describe("load more", () => {
         expect(section?.pullRequests.length).toBe(12);
         expect(session.canLoadMoreInboxSection("merging-and-recently-merged")).toBe(false);
     });
+
+    it("does not offer load more when every row is already loaded", async () => {
+        const session = await connectedSession(["acme/api"]);
+        github.addPullRequest(TOKEN, {
+            repository: "acme/api",
+            number: 42,
+            author: VIEWER,
+            isDraft: true,
+        });
+
+        await session.loadInbox();
+        await session.setSectionHidden("drafts", false);
+
+        session.syncInboxData({
+            pullRequests: [],
+            sectionPullRequests: {
+                drafts: [
+                    {
+                        key: "acme/api#42",
+                        repository: "acme/api",
+                        number: 42,
+                        title: "Draft PR",
+                        url: "https://github.com/acme/api/pull/42",
+                        author: VIEWER,
+                        authorAvatarUrl: null,
+                        state: "open",
+                        isDraft: true,
+                        createdAt: "2026-07-01T00:00:00.000Z",
+                        updatedAt: "2026-07-02T00:00:00.000Z",
+                        mergedAt: null,
+                        headRefName: "draft",
+                        baseRefName: "main",
+                        reviewDecision: null,
+                        reviewRequests: [],
+                        reviewers: [],
+                        checks: "none",
+                        additions: 0,
+                        deletions: 0,
+                        changedFiles: 0,
+                        commentCount: 0,
+                        mergeable: "mergeable",
+                        assignees: [],
+                        labels: [],
+                    },
+                ],
+            },
+            sectionCounts: { drafts: 1 },
+            sectionPagination: {
+                drafts: { hasNextPage: true, endCursor: "1" },
+            },
+            lastLoadedAt: "2026-07-02T00:00:00.000Z",
+        });
+
+        expect(session.canLoadMoreInboxSection("drafts")).toBe(false);
+    });
 });

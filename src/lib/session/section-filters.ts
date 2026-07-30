@@ -376,6 +376,7 @@ export function defaultFilterForPreset(id: string): SectionFilter {
         case "drafts":
             return singleCaseFilter("My drafts", [
                 condition("author", "is", VIEWER_PERSON),
+                condition("state", "is", "open"),
                 condition("isDraft", "is", true),
             ]);
         case "merging-and-recently-merged":

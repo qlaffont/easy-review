@@ -351,9 +351,10 @@ function InboxSectionPanel({
     const visual = visualForSection(section.id, { color, customColor, icon });
     const Icon = visual.icon;
     const count = section.count;
+    const loaded = section.pullRequests.length;
     const visiblePullRequests = section.pullRequests.slice(0, visibleCount);
-    const remaining = count - visiblePullRequests.length;
-    const showLoadMore = remaining > 0 || canLoadMoreFromGitHub;
+    const hiddenLoaded = Math.max(0, loaded - visiblePullRequests.length);
+    const showLoadMore = hiddenLoaded > 0 || canLoadMoreFromGitHub;
 
     return (
         <section

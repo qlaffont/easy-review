@@ -54,6 +54,10 @@ async function fetchInboxForSession(session: EasyReviewSession, signal?: AbortSi
         throw new EasyReviewError(failure.kind, failure.message, { retryAt: failure.retryAt });
     }
 
+    if (successes > 0) {
+        session.syncInboxData(data);
+    }
+
     return data;
 }
 

@@ -99,10 +99,15 @@ describe("default section filters", () => {
         expect(matchSectionFilter(subject, defaultFilterForPreset("needs-your-review"), VIEWER)).toBe(true);
     });
 
-    it("puts your own draft in Drafts, whatever its review state", () => {
+    it("puts your own open draft in Drafts, whatever its review state", () => {
         const subject = pullRequest({ author: VIEWER, isDraft: true, reviewDecision: "approved" });
         expect(matchSectionFilter(subject, defaultFilterForPreset("drafts"), VIEWER)).toBe(true);
         expect(matchSectionFilter(subject, defaultFilterForPreset("approved"), VIEWER)).toBe(false);
+    });
+
+    it("does not put a closed draft in Drafts", () => {
+        const closedDraft = pullRequest({ author: VIEWER, state: "closed", isDraft: true });
+        expect(matchSectionFilter(closedDraft, defaultFilterForPreset("drafts"), VIEWER)).toBe(false);
     });
 
     it("puts a merged pull request in Recently merged", () => {
@@ -154,6 +159,32 @@ describe("default section filters", () => {
         expect(
             merged?.filter.cases[0]?.conditions.some(
                 (condition) => condition.field === "mergedWithinDays" && condition.value === 7,
+            ),
+        ).toBe(true);
+    });
+
+    it("upgrades a legacy Drafts default to require open state", () => {
+        const layout = normalizeSectionLayout([
+            {
+                id: "drafts",
+                filter: {
+                    cases: [
+                        {
+                            id: "case_old",
+                            name: "My drafts",
+                            conditions: [
+                                { id: "c1", field: "author", op: "is", value: "@me" },
+                                { id: "c2", field: "isDraft", op: "is", value: true },
+                            ],
+                        },
+                    ],
+                },
+            },
+        ]);
+        const drafts = layout.find((entry) => entry.id === "drafts");
+        expect(
+            drafts?.filter.cases[0]?.conditions.some(
+                (condition) => condition.field === "state" && condition.op === "is" && condition.value === "open",
             ),
         ).toBe(true);
     });
