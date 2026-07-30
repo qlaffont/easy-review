@@ -195,7 +195,7 @@ describe("stack copy helpers", () => {
             "https://github.com/acme/api/pull/148\nhttps://github.com/acme/api/pull/195",
         );
         expect(formatStackBranches(stack)).toBe("feat-a\nfeat-b");
-        expect(formatStackGhCheckoutCommands(stack)).toBe("gh pr checkout 148 && gh pr checkout 195");
+        expect(formatStackGhCheckoutCommands(stack)).toBe("gh pr checkout 148\ngh pr checkout 195");
     });
 });
 

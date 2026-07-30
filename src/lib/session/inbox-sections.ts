@@ -93,7 +93,7 @@ export const DEFAULT_INBOX_SECTIONS: ReadonlyArray<{ id: PresetInboxSectionId; l
     { id: "waiting-for-reviewers", label: "Waiting for reviewers" },
     { id: "approved", label: "Approved" },
     { id: "drafts", label: "Drafts" },
-    { id: "merging-and-recently-merged", label: "Merging and recently merged" },
+    { id: "merging-and-recently-merged", label: "Recently merged" },
     { id: "waiting-for-author", label: "Waiting for author" },
 ];
 
@@ -116,6 +116,8 @@ export const FALLBACK_SECTION_APPEARANCE: { color: SectionColorId; icon: Section
 
 export type InboxSection = InboxSectionDefinition & {
     pullRequests: Array<PullRequestSummary>;
+    /** Exact number of loaded pull requests matching this section (not limited by UI pagination). */
+    count: number;
 };
 
 /** One row of the user's Inbox layout: order in the array is display order. */
@@ -261,6 +263,14 @@ export function appearanceForSectionId(id: InboxSectionId): { color: SectionColo
     return FALLBACK_SECTION_APPEARANCE;
 }
 
+function migratePresetLabel(id: InboxSectionId, label: string): string {
+    if (id === "merging-and-recently-merged" && label === "Merging and recently merged") {
+        return defaultLabelForSection(id);
+    }
+
+    return label;
+}
+
 function parseLayoutEntry(entry: {
     id: string;
     label?: unknown;
@@ -284,12 +294,14 @@ function parseLayoutEntry(entry: {
 
     return {
         id: entry.id,
-        label:
+        label: migratePresetLabel(
+            entry.id,
             typeof entry.label === "string"
                 ? entry.label
                 : preset
                   ? defaultLabelForSection(entry.id)
                   : "Custom section",
+        ),
         hidden: entry.hidden === true,
         defaultExpanded: typeof entry.defaultExpanded === "boolean" ? entry.defaultExpanded : fallbackExpanded,
         color: isSectionColorId(entry.color) ? entry.color : appearance.color,
@@ -315,6 +327,24 @@ function conditionFingerprint(condition: { field: string; op: string; value: str
  * Upgrade known stale preset defaults in place. Custom edits (extra/missing conditions) are left alone.
  */
 function migratePresetFilter(id: InboxSectionId, filter: SectionFilter): SectionFilter {
+    if (id === "merging-and-recently-merged") {
+        if (filter.cases.length !== 1) {
+            return filter;
+        }
+        const fingerprints = new Set(filter.cases[0]!.conditions.map(conditionFingerprint));
+        const legacyStateOnly = new Set(["state|is|merged"]);
+        const legacyThirtyDay = new Set(["state|is|merged", "mergedWithinDays|is|30"]);
+        const matchesLegacy =
+            (fingerprints.size === legacyStateOnly.size &&
+                [...legacyStateOnly].every((entry) => fingerprints.has(entry))) ||
+            (fingerprints.size === legacyThirtyDay.size &&
+                [...legacyThirtyDay].every((entry) => fingerprints.has(entry)));
+        if (!matchesLegacy) {
+            return filter;
+        }
+        return defaultFilterForPreset("merging-and-recently-merged");
+    }
+
     if (id !== "waiting-for-reviewers") {
         return filter;
     }
@@ -399,7 +429,19 @@ export function normalizeExpandedSections(
     return next;
 }
 
-/** Visible sections only, in layout order, ready for `groupIntoSections`. */
+/** How many pull requests to load per section on inbox refresh / “Load more”. */
+export const INBOX_SECTION_LOAD_SIZE = 10;
+
+/** Every section in layout order (including hidden). */
+export function allSectionDefinitions(layout: ReadonlyArray<InboxSectionLayoutEntry>): Array<InboxSectionDefinition> {
+    return normalizeSectionLayout(layout).map((entry) => ({
+        id: entry.id,
+        label: entry.label.trim() || defaultLabelForSection(entry.id),
+        filter: entry.filter,
+    }));
+}
+
+/** Visible sections only, in layout order, ready for {@link inboxSectionsFromLoaded}. */
 export function visibleSectionDefinitions(
     layout: ReadonlyArray<InboxSectionLayoutEntry>,
 ): Array<InboxSectionDefinition> {
@@ -503,11 +545,33 @@ export function groupIntoSections(
     pullRequests: ReadonlyArray<PullRequestSummary>,
     viewerLogin: string,
     definitions: ReadonlyArray<InboxSectionDefinition>,
+    sectionCounts: Readonly<Record<string, number>> = {},
+): Array<InboxSection> {
+    return definitions.map((definition) => {
+        const matching = pullRequests
+            .filter((pullRequest) => matchSectionFilter(pullRequest, definition.filter, viewerLogin))
+            .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+
+        const loadedCount = matching.length;
+        const remoteCount = sectionCounts[definition.id];
+
+        return {
+            ...definition,
+            pullRequests: matching,
+            count: remoteCount ?? loadedCount,
+        };
+    });
+}
+
+/** Build inbox sections from per-section GitHub search results. */
+export function inboxSectionsFromLoaded(
+    definitions: ReadonlyArray<InboxSectionDefinition>,
+    sectionPullRequests: Readonly<Record<string, ReadonlyArray<PullRequestSummary>>>,
+    sectionCounts: Readonly<Record<string, number>>,
 ): Array<InboxSection> {
     return definitions.map((definition) => ({
         ...definition,
-        pullRequests: pullRequests
-            .filter((pullRequest) => matchSectionFilter(pullRequest, definition.filter, viewerLogin))
-            .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt)),
+        pullRequests: [...(sectionPullRequests[definition.id] ?? [])],
+        count: sectionCounts[definition.id] ?? sectionPullRequests[definition.id]?.length ?? 0,
     }));
 }

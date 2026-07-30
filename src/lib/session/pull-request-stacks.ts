@@ -111,5 +111,5 @@ export function formatStackBranches(stack: ResolvedPullRequestStack): string {
 }
 
 export function formatStackGhCheckoutCommands(stack: ResolvedPullRequestStack): string {
-    return stack.pullRequests.map((pullRequest) => `gh pr checkout ${pullRequest.number}`).join(" && ");
+    return stack.pullRequests.map((pullRequest) => `gh pr checkout ${pullRequest.number}`).join("\n");
 }

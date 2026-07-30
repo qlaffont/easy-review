@@ -1,4 +1,9 @@
-import type { GithubClient, GithubViewer } from "#/lib/session/ports.ts";
+import type {
+    GithubClient,
+    GithubViewer,
+    InboxPullRequestPagination,
+    ListPullRequestsOptions,
+} from "#/lib/session/ports.ts";
 import type {
     CheckState,
     CommitSignature,
@@ -39,9 +44,10 @@ import { mapCheckRuns, type CheckContextInput } from "#/lib/session/check-runs.t
 import { HUGE_FILE_BYTES, stubForPath } from "#/lib/session/diff-policy.ts";
 import { EasyReviewError } from "#/lib/session/errors.ts";
 import {
+    buildScopedSearchQueryBatches,
     comparePullRequestsByUpdatedAtDesc,
     matchesPullRequestSearchQuery,
-    parseGitHubPullRequestUrl,
+    parsePullRequestUrl,
     parsePullRequestNumberQuery,
 } from "#/lib/session/pull-request-search.ts";
 import { matchesRelatedRefs } from "#/lib/session/related-pull-requests.ts";
@@ -69,8 +75,8 @@ const REPOSITORY_PAGE_SIZE = 100;
 const REPOSITORY_PAGE_LIMIT = 10;
 /** Repositories asked for in a single aliased GraphQL document. */
 const INBOX_BATCH_SIZE = 10;
-const OPEN_PULL_REQUESTS_PER_REPOSITORY = 30;
-const MERGED_PULL_REQUESTS_PER_REPOSITORY = 10;
+export const OPEN_PULL_REQUESTS_PER_REPOSITORY = 30;
+export const MERGED_PULL_REQUESTS_PER_REPOSITORY = 10;
 /** Stack index scans more history than the Inbox because chains can include older merged/closed PRs. */
 const STACK_OPEN_PULL_REQUESTS = 100;
 const STACK_CLOSED_PULL_REQUESTS = 50;
@@ -316,7 +322,7 @@ export function createGithubHttpClient(
             });
         },
 
-        async listPullRequests(token, repositories) {
+        async listPullRequests(token, repositories, options) {
             const batches: Array<Array<string>> = [];
 
             for (let index = 0; index < repositories.length; index += INBOX_BATCH_SIZE) {
@@ -325,25 +331,52 @@ export function createGithubHttpClient(
 
             const pages = await Promise.all(
                 batches.map((batch) =>
-                    graphql<PullRequestsQuery>(token, buildInboxQuery(batch), undefined, { keepPartial: true }),
+                    graphql<PullRequestsQuery>(token, buildInboxQuery(batch, options), undefined, {
+                        keepPartial: true,
+                    }),
                 ),
             );
 
-            return pages.flatMap((page) =>
-                Object.values(page).flatMap((repository) =>
-                    repository === null
-                        ? []
-                        : [
-                              ...repository.open.nodes.map(toPullRequestSummary),
-                              ...repository.merged.nodes.map(toPullRequestSummary),
-                          ],
-                ),
-            );
+            const pullRequests: Array<PullRequestSummary> = [];
+            const pagination: Record<string, Partial<InboxPullRequestPagination>> = {};
+            const fetchOpen = !options?.states || options.states.includes("open");
+            const fetchMerged = !options?.states || options.states.includes("merged");
+
+            for (let batchIndex = 0; batchIndex < pages.length; batchIndex++) {
+                const page = pages[batchIndex]!;
+                const batch = batches[batchIndex]!;
+
+                for (let index = 0; index < batch.length; index++) {
+                    const nameWithOwner = batch[index];
+                    const repository = page[`repo${index}`];
+                    if (!nameWithOwner || repository === null || repository === undefined) {
+                        continue;
+                    }
+
+                    if (repository.open) {
+                        pullRequests.push(...repository.open.nodes.map(toPullRequestSummary));
+                    }
+                    if (repository.merged) {
+                        pullRequests.push(...repository.merged.nodes.map(toPullRequestSummary));
+                    }
+
+                    const repoPagination: Partial<InboxPullRequestPagination> = {};
+                    if (fetchOpen) {
+                        repoPagination.open = pageInfoFromConnection(repository.open);
+                    }
+                    if (fetchMerged) {
+                        repoPagination.merged = pageInfoFromConnection(repository.merged);
+                    }
+                    pagination[nameWithOwner] = repoPagination;
+                }
+            }
+
+            return { pullRequests, pagination };
         },
 
         async searchPullRequests(token, input) {
             const first = Math.min(Math.max(input.limit ?? 25, 1), 50);
-            const linkQuery = parseGitHubPullRequestUrl(input.query);
+            const linkQuery = parsePullRequestUrl(input.query);
 
             // Pasted GitHub PR URL → look up that exact owner/repo#number.
             if (linkQuery) {
@@ -428,6 +461,81 @@ export function createGithubHttpClient(
             }
 
             return [...byKey.values()].sort(comparePullRequestsByUpdatedAtDesc).slice(0, first);
+        },
+
+        async countPullRequests(token, input) {
+            if (input.repositories.length === 0) {
+                return 0;
+            }
+
+            const batches = buildScopedSearchQueryBatches(input.query, input.repositories);
+            if (batches.length === 0) {
+                return 0;
+            }
+
+            const pages = await Promise.all(
+                batches.map((query) => graphql<CountPullRequestsQuery>(token, COUNT_PULL_REQUESTS_QUERY, { query })),
+            );
+
+            return pages.reduce((total, page) => total + page.search.issueCount, 0);
+        },
+
+        async fetchSectionPullRequests(token, input) {
+            if (input.repositories.length === 0) {
+                return { pullRequests: [], totalCount: 0, pageInfo: { hasNextPage: false, endCursor: null } };
+            }
+
+            const limit = Math.min(Math.max(input.limit ?? 10, 1), 50);
+            const baseQuery = `${input.query.trim()} sort:updated-desc`;
+            const batches = buildScopedSearchQueryBatches(baseQuery, input.repositories);
+            if (batches.length === 0) {
+                return { pullRequests: [], totalCount: 0, pageInfo: { hasNextPage: false, endCursor: null } };
+            }
+
+            if (batches.length === 1) {
+                const data = await graphql<SectionSearchPullRequestsQuery>(token, SECTION_SEARCH_PULL_REQUESTS_QUERY, {
+                    query: batches[0]!,
+                    first: limit,
+                    after: input.after ?? null,
+                });
+
+                return {
+                    pullRequests: pullRequestsFromSearchNodes(data.search.nodes),
+                    totalCount: data.search.issueCount,
+                    pageInfo: {
+                        hasNextPage: data.search.pageInfo.hasNextPage,
+                        endCursor: data.search.pageInfo.endCursor,
+                    },
+                };
+            }
+
+            const pages = await Promise.all(
+                batches.map((query) =>
+                    graphql<SectionSearchPullRequestsQuery>(token, SECTION_SEARCH_PULL_REQUESTS_QUERY, {
+                        query,
+                        first: limit,
+                    }),
+                ),
+            );
+
+            const totalCount = pages.reduce((total, page) => total + page.search.issueCount, 0);
+            const byKey = new Map<string, PullRequestSummary>();
+
+            for (const page of pages) {
+                for (const summary of pullRequestsFromSearchNodes(page.search.nodes)) {
+                    byKey.set(summary.key, summary);
+                }
+            }
+
+            const pullRequests = [...byKey.values()].sort(comparePullRequestsByUpdatedAtDesc).slice(0, limit);
+            const hasNextPage =
+                totalCount > pullRequests.length || pages.some((page) => page.search.pageInfo.hasNextPage);
+
+            return {
+                pullRequests,
+                totalCount,
+                pageInfo: { hasNextPage, endCursor: null },
+            };
         },
 
         async listRelatedPullRequests(token, input) {
@@ -1762,11 +1870,20 @@ type PullRequestNode = {
 };
 
 type RepositoryPullRequests = {
-    open: { nodes: Array<PullRequestNode> };
-    merged: { nodes: Array<PullRequestNode> };
+    open?: { pageInfo: GraphqlPageInfo; nodes: Array<PullRequestNode> };
+    merged?: { pageInfo: GraphqlPageInfo; nodes: Array<PullRequestNode> };
 } | null;
 
+type GraphqlPageInfo = {
+    hasNextPage: boolean;
+    endCursor: string | null;
+};
+
 type PullRequestsQuery = Record<string, RepositoryPullRequests>;
+
+function pageInfoFromConnection(connection: { pageInfo: GraphqlPageInfo } | undefined): GraphqlPageInfo {
+    return connection?.pageInfo ?? { hasNextPage: false, endCursor: null };
+}
 
 function toCheckState(rollup: string | undefined): CheckState {
     switch (rollup) {
@@ -1877,6 +1994,18 @@ type SearchPullRequestNode = {
 
 type SearchPullRequestsQuery = {
     search: { nodes: Array<SearchPullRequestNode | Record<string, never> | null> };
+};
+
+type CountPullRequestsQuery = {
+    search: { issueCount: number };
+};
+
+type SectionSearchPullRequestsQuery = {
+    search: {
+        issueCount: number;
+        pageInfo: { hasNextPage: boolean; endCursor: string | null };
+        nodes: Array<PullRequestNode | Record<string, never> | null>;
+    };
 };
 
 type LookupPullRequestsByNumberQuery = Record<string, { pullRequest: SearchPullRequestNode | null } | null>;
@@ -2064,22 +2193,54 @@ const SEARCH_PULL_REQUESTS_QUERY = `
     }
 `;
 
-function buildInboxQuery(repositories: ReadonlyArray<string>): string {
+const COUNT_PULL_REQUESTS_QUERY = `
+    query EasyReviewCountPullRequests($query: String!) {
+        search(query: $query, type: ISSUE, first: 1) {
+            issueCount
+        }
+    }
+`;
+
+function buildInboxQuery(repositories: ReadonlyArray<string>, options?: ListPullRequestsOptions): string {
+    const fetchOpen = !options?.states || options.states.includes("open");
+    const fetchMerged = !options?.states || options.states.includes("merged");
+
     const selections = repositories.map((nameWithOwner, index) => {
         const [owner = "", name = ""] = nameWithOwner.split("/");
+        const cursors = options?.cursors?.[nameWithOwner];
 
-        return `
-            repo${index}: repository(owner: ${JSON.stringify(owner)}, name: ${JSON.stringify(name)}) {
+        const openSelection = fetchOpen
+            ? `
                 open: pullRequests(
                     states: [OPEN]
                     first: ${OPEN_PULL_REQUESTS_PER_REPOSITORY}
+                    ${cursors?.open ? `after: ${JSON.stringify(cursors.open)}` : ""}
                     orderBy: { field: UPDATED_AT, direction: DESC }
-                ) { nodes { ...InboxPullRequest } }
+                ) {
+                    pageInfo { hasNextPage endCursor }
+                    nodes { ...InboxPullRequest }
+                }
+            `
+            : "";
+
+        const mergedSelection = fetchMerged
+            ? `
                 merged: pullRequests(
                     states: [MERGED]
                     first: ${MERGED_PULL_REQUESTS_PER_REPOSITORY}
+                    ${cursors?.merged ? `after: ${JSON.stringify(cursors.merged)}` : ""}
                     orderBy: { field: UPDATED_AT, direction: DESC }
-                ) { nodes { ...InboxPullRequest } }
+                ) {
+                    pageInfo { hasNextPage endCursor }
+                    nodes { ...InboxPullRequest }
+                }
+            `
+            : "";
+
+        return `
+            repo${index}: repository(owner: ${JSON.stringify(owner)}, name: ${JSON.stringify(name)}) {
+                ${openSelection}
+                ${mergedSelection}
             }
         `;
     });
@@ -2203,6 +2364,38 @@ const PULL_REQUEST_FIELDS = `
         }
     }
 `;
+
+const SECTION_SEARCH_PULL_REQUESTS_QUERY = `
+    query EasyReviewSectionPullRequests($query: String!, $first: Int!, $after: String) {
+        search(query: $query, type: ISSUE, first: $first, after: $after) {
+            issueCount
+            pageInfo {
+                hasNextPage
+                endCursor
+            }
+            nodes {
+                ... on PullRequest {
+                    ${PULL_REQUEST_FIELDS}
+                }
+            }
+        }
+    }
+`;
+
+function pullRequestsFromSearchNodes(
+    nodes: Array<PullRequestNode | Record<string, never> | null>,
+): Array<PullRequestSummary> {
+    const pullRequests: Array<PullRequestSummary> = [];
+
+    for (const node of nodes) {
+        if (node == null || typeof node !== "object" || !("number" in node) || !("repository" in node)) {
+            continue;
+        }
+        pullRequests.push(toPullRequestSummary(node as PullRequestNode));
+    }
+
+    return pullRequests.sort(comparePullRequestsByUpdatedAtDesc);
+}
 
 type CheckContextNode = CheckContextInput | null;
 

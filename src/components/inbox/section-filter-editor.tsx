@@ -51,6 +51,7 @@ const FIELD_OPTIONS: Array<{ value: SectionFilterField; label: string }> = [
     { value: "additions", label: "Additions" },
     { value: "deletions", label: "Deletions" },
     { value: "updatedWithinDays", label: "Updated (days)" },
+    { value: "mergedWithinDays", label: "Merged (days)" },
 ];
 
 function fieldLabel(field: SectionFilterField): string {
@@ -550,7 +551,8 @@ function ConditionValueInput({
         condition.field === "changedFiles" ||
         condition.field === "additions" ||
         condition.field === "deletions" ||
-        condition.field === "updatedWithinDays"
+        condition.field === "updatedWithinDays" ||
+        condition.field === "mergedWithinDays"
     ) {
         return (
             <Input

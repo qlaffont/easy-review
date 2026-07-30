@@ -18,7 +18,8 @@ export function StackSettingsEditor({ open, onOpenChange }: { open: boolean; onO
                         Stack Settings
                     </SettingsDialogTitle>
                     <DialogDescription>
-                        Detect stacked pull requests from branch names in the same repo. Saved in this browser.
+                        Detect stacks from branch names, with Graphite stack comments as fallback. Saved in this
+                        browser.
                     </DialogDescription>
                 </DialogHeader>
 
@@ -26,14 +27,14 @@ export function StackSettingsEditor({ open, onOpenChange }: { open: boolean; onO
                     <SettingsPreferenceRow
                         icon={Layers}
                         title="Show pull request stacks"
-                        description="Show stack badges in the Inbox and the stack panel on pull requests. Disabled by default."
+                        description="Show the stack panel on pull request pages. Disabled by default."
                         checked={stackPreferences.enabled}
                         onCheckedChange={(enabled) => setStackPreferences({ enabled })}
                     />
                     <SettingsPreferenceRow
                         icon={GitPullRequestClosed}
                         title="Hide closed pull requests in stacks"
-                        description="Keep closed PRs out of stack badges and the stack panel."
+                        description="Keep closed PRs out of the stack panel."
                         checked={stackPreferences.hideClosed}
                         onCheckedChange={(hideClosed) => setStackPreferences({ hideClosed })}
                         disabled={!stackPreferences.enabled}

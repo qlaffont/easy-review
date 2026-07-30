@@ -20,7 +20,7 @@ import {
 import { TruncatedText } from "#/components/ui/truncated-text.tsx";
 import { availableActions } from "#/lib/actions/catalog.ts";
 import { useSession, useSessionState } from "#/lib/session/provider.tsx";
-import { matchesPullRequestSearchQuery } from "#/lib/session/pull-request-search.ts";
+import { matchesPullRequestSearchQuery, parsePullRequestUrl } from "#/lib/session/pull-request-search.ts";
 
 const GROUPS = ["Navigation", "Clipboard", "Inbox", "Pull request"] as const;
 const MAX_PR_RESULTS = 25;
@@ -125,6 +125,21 @@ export function CommandPalette() {
             setSearchingPullRequests(false);
         }
     }, [open]);
+
+    useEffect(() => {
+        if (!open) {
+            return;
+        }
+
+        const link = parsePullRequestUrl(query);
+        if (!link) {
+            return;
+        }
+
+        setOpen(false);
+        setQuery("");
+        bridge.buildContext().openPullRequest(link.repository, link.number);
+    }, [open, query, bridge]);
 
     const context = bridge.buildContext();
     const actions = availableActions(context);

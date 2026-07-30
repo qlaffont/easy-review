@@ -16,6 +16,8 @@ async function connectedWithPr() {
     const session = createEasyReviewSession({ github, store });
     await session.connect(TOKEN);
     await session.setSelectedRepositories(["acme/api"]);
+    // The inbox only fetches visible sections, and `drafts` is hidden by default.
+    await session.setSectionHidden("drafts", false);
     await session.loadInbox();
     await session.loadPullRequest("acme/api", 1);
     return session;

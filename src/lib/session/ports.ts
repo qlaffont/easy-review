@@ -24,6 +24,34 @@ export type GithubViewer = {
     avatarUrl: string | null;
 };
 
+export type InboxPullRequestPageInfo = {
+    hasNextPage: boolean;
+    endCursor: string | null;
+};
+
+export type InboxPullRequestPagination = {
+    open: InboxPullRequestPageInfo;
+    merged: InboxPullRequestPageInfo;
+};
+
+export type ListPullRequestsOptions = {
+    /** Per-repo cursors returned by a previous inbox fetch. */
+    cursors?: Readonly<Record<string, Partial<{ open: string; merged: string }>>>;
+    /** Which PR states to fetch. Defaults to both open and merged. */
+    states?: ReadonlyArray<"open" | "merged">;
+};
+
+export type ListPullRequestsResult = {
+    pullRequests: Array<PullRequestSummary>;
+    pagination: Record<string, Partial<InboxPullRequestPagination>>;
+};
+
+export type FetchSectionPullRequestsResult = {
+    pullRequests: Array<PullRequestSummary>;
+    totalCount: number;
+    pageInfo: InboxPullRequestPageInfo;
+};
+
 export type GetFileDiffOptions = {
     /** Skip the huge / generated stubs and fetch the blob anyway. Binary still refuses. */
     force?: boolean;
@@ -47,7 +75,11 @@ export type GithubClient = {
     /** Every repository the token can see, most recently pushed first. */
     listRepositories(token: string): Promise<Array<Repository>>;
     /** Open and recently merged pull requests across the given repositories, in one batch. */
-    listPullRequests(token: string, repositories: ReadonlyArray<string>): Promise<Array<PullRequestSummary>>;
+    listPullRequests(
+        token: string,
+        repositories: ReadonlyArray<string>,
+        options?: ListPullRequestsOptions,
+    ): Promise<ListPullRequestsResult>;
     /**
      * Search pull requests in the given repositories (GitHub `search` + `repo:` qualifiers).
      * Used by the command palette when no session action matches the query.
@@ -62,6 +94,30 @@ export type GithubClient = {
             limit?: number;
         },
     ): Promise<Array<PullRequestSummary>>;
+    /**
+     * Count pull requests matching a GitHub search query in the given repositories.
+     * Uses `search.issueCount` — accurate without loading every row.
+     */
+    countPullRequests(
+        token: string,
+        input: {
+            query: string;
+            repositories: ReadonlyArray<string>;
+        },
+    ): Promise<number>;
+    /**
+     * Pull requests for one inbox section: rows, total count, and search pagination in one call.
+     * Query must come from {@link sectionFilterToSearchQuery}; results are sorted by last updated.
+     */
+    fetchSectionPullRequests(
+        token: string,
+        input: {
+            query: string;
+            repositories: ReadonlyArray<string>;
+            limit?: number;
+            after?: string | null;
+        },
+    ): Promise<FetchSectionPullRequestsResult>;
     /**
      * Pull requests in other repositories that share exact head + base ref names.
      * Uses GitHub search (`head:` / `base:`) so open and merged siblings are found

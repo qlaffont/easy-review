@@ -109,13 +109,13 @@ export function InboxBoard() {
     }, [session, inbox.stale]);
 
     useQuietRevalidate(() => {
-        void session.revalidateInbox();
+        void session.revalidateInbox({ background: true });
     });
 
     useEffect(() => {
         function revalidateWhenVisible() {
             if (document.visibilityState === "visible") {
-                void session.revalidateInbox();
+                void session.revalidateInbox({ background: true });
             }
         }
 
@@ -265,11 +265,23 @@ export function InboxBoard() {
                                 onEditFilters={() => setFilterSectionId(section.id)}
                                 onChangeAppearance={() => setAppearanceSectionId(section.id)}
                                 onLoadMore={() => {
-                                    setVisibleCountBySection((current) => ({
-                                        ...current,
-                                        [section.id]: visibleCount + INBOX_SECTION_PAGE_SIZE,
-                                    }));
+                                    void (async () => {
+                                        const nextVisible = visibleCount + INBOX_SECTION_PAGE_SIZE;
+
+                                        if (nextVisible > section.pullRequests.length) {
+                                            if (session.canLoadMoreInboxSection(section.id)) {
+                                                await session.loadMoreInboxSection(section.id);
+                                            }
+                                        }
+
+                                        setVisibleCountBySection((current) => ({
+                                            ...current,
+                                            [section.id]: nextVisible,
+                                        }));
+                                    })();
                                 }}
+                                loadingMore={inbox.loadingMoreSection === section.id}
+                                canLoadMoreFromGitHub={session.canLoadMoreInboxSection(section.id)}
                                 onSelect={setSelectedKey}
                             />
                         );
@@ -316,6 +328,8 @@ function InboxSectionPanel({
     onChangeAppearance,
     onLoadMore,
     onSelect,
+    loadingMore,
+    canLoadMoreFromGitHub,
 }: {
     section: InboxSection;
     color?: SectionColorId;
@@ -329,12 +343,15 @@ function InboxSectionPanel({
     onChangeAppearance: () => void;
     onLoadMore: () => void;
     onSelect: (key: string) => void;
+    loadingMore: boolean;
+    canLoadMoreFromGitHub: boolean;
 }) {
     const visual = visualForSection(section.id, { color, customColor, icon });
     const Icon = visual.icon;
-    const count = section.pullRequests.length;
+    const count = section.count;
     const visiblePullRequests = section.pullRequests.slice(0, visibleCount);
     const remaining = count - visiblePullRequests.length;
+    const showLoadMore = remaining > 0 || canLoadMoreFromGitHub;
 
     return (
         <section
@@ -408,13 +425,21 @@ function InboxSectionPanel({
                                 onSelect={onSelect}
                             />
                         ))}
-                        {remaining > 0 ? (
+                        {showLoadMore ? (
                             <button
                                 type="button"
-                                className="cursor-pointer border-t px-3 py-2 text-left text-xs font-medium text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground"
+                                disabled={loadingMore}
+                                className="flex cursor-pointer items-center justify-center gap-2 border-t px-3 py-2.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground disabled:cursor-wait disabled:opacity-70"
                                 onClick={onLoadMore}
                             >
-                                Load more… ({remaining} remaining)
+                                {loadingMore ? (
+                                    <>
+                                        <RefreshCw className="size-3.5 animate-spin" aria-hidden="true" />
+                                        <span>Loading…</span>
+                                    </>
+                                ) : (
+                                    "Load more"
+                                )}
                             </button>
                         ) : null}
                     </div>

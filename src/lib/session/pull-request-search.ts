@@ -18,7 +18,7 @@ export function matchesPullRequestSearchQuery(
         return false;
     }
 
-    const link = parseGitHubPullRequestUrl(query);
+    const link = parsePullRequestUrl(query);
     if (link) {
         return (
             pullRequest.repository.toLowerCase() === link.repository.toLowerCase() && pullRequest.number === link.number
@@ -86,4 +86,73 @@ export function parseGitHubPullRequestUrl(query: string): ParsedPullRequestRef |
     }
 
     return { repository: `${owner}/${repo}`, number };
+}
+
+/**
+ * Parse a Graphite pull request URL (`https://app.graphite.com/github/pr/owner/repo/123/...`).
+ * Returns null when the query is not a Graphite PR link.
+ */
+export function parseGraphitePullRequestUrl(query: string): ParsedPullRequestRef | null {
+    const trimmed = query.trim();
+    if (!trimmed) {
+        return null;
+    }
+
+    const match =
+        /^(?:https?:\/\/)?(?:[\w-]+\.)*graphite\.(?:com|dev)\/github\/pr\/([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)\/(\d+)(?:\/[^\s]*)?(?:\?[^\s]*)?(?:#[^\s]*)?$/i.exec(
+            trimmed,
+        );
+    if (!match) {
+        return null;
+    }
+
+    const owner = match[1];
+    const repo = match[2];
+    const number = Number(match[3]);
+    if (!owner || !repo || !Number.isSafeInteger(number) || number <= 0) {
+        return null;
+    }
+
+    return { repository: `${owner}/${repo}`, number };
+}
+
+/** GitHub or Graphite pull request URL. */
+export function parsePullRequestUrl(query: string): ParsedPullRequestRef | null {
+    return parseGitHubPullRequestUrl(query) ?? parseGraphitePullRequestUrl(query);
+}
+
+/** GitHub rejects search queries longer than this. */
+export const GITHUB_SEARCH_QUERY_MAX_LENGTH = 256;
+
+/** Pack `repo:` qualifiers into batches under GitHub's search query length limit. */
+export function buildScopedSearchQueryBatches(baseQuery: string, repositories: ReadonlyArray<string>): Array<string> {
+    const cleaned = baseQuery.trim().replace(/\s+/g, " ");
+    if (!cleaned || repositories.length === 0) {
+        return [];
+    }
+
+    const batches: Array<string> = [];
+    let current = cleaned;
+
+    for (const repository of repositories) {
+        const qualifier = ` repo:${repository}`;
+        if (current.length + qualifier.length > GITHUB_SEARCH_QUERY_MAX_LENGTH) {
+            if (current !== cleaned) {
+                batches.push(current);
+            }
+            current = `${cleaned}${qualifier}`;
+            if (current.length > GITHUB_SEARCH_QUERY_MAX_LENGTH) {
+                current = cleaned;
+                continue;
+            }
+            continue;
+        }
+        current += qualifier;
+    }
+
+    if (current !== cleaned) {
+        batches.push(current);
+    }
+
+    return batches;
 }

@@ -105,9 +105,22 @@ describe("default section filters", () => {
         expect(matchSectionFilter(subject, defaultFilterForPreset("approved"), VIEWER)).toBe(false);
     });
 
-    it("puts a merged pull request in Merging and recently merged", () => {
-        const mine = pullRequest({ author: VIEWER, state: "merged", mergedAt: "2026-07-03T00:00:00.000Z" });
+    it("puts a merged pull request in Recently merged", () => {
+        const mine = pullRequest({
+            author: VIEWER,
+            state: "merged",
+            mergedAt: new Date(Date.now() - 2 * 86_400_000).toISOString(),
+        });
         expect(matchSectionFilter(mine, defaultFilterForPreset("merging-and-recently-merged"), VIEWER)).toBe(true);
+    });
+
+    it("does not put a merged pull request older than 7 days in Recently merged", () => {
+        const stale = pullRequest({
+            author: VIEWER,
+            state: "merged",
+            mergedAt: new Date(Date.now() - 10 * 86_400_000).toISOString(),
+        });
+        expect(matchSectionFilter(stale, defaultFilterForPreset("merging-and-recently-merged"), VIEWER)).toBe(false);
     });
 
     it("does not put unmatched PRs into any default section", () => {
@@ -120,6 +133,29 @@ describe("default section filters", () => {
             expect(matchSectionFilter(strangerApproved, defaultFilterForPreset(id), VIEWER)).toBe(false);
             expect(matchSectionFilter(otherDraft, defaultFilterForPreset(id), VIEWER)).toBe(false);
         }
+    });
+
+    it("upgrades a legacy Recently merged default to limit merged age", () => {
+        const layout = normalizeSectionLayout([
+            {
+                id: "merging-and-recently-merged",
+                filter: {
+                    cases: [
+                        {
+                            id: "case_old",
+                            name: "Merged",
+                            conditions: [{ id: "c1", field: "state", op: "is", value: "merged" }],
+                        },
+                    ],
+                },
+            },
+        ]);
+        const merged = layout.find((entry) => entry.id === "merging-and-recently-merged");
+        expect(
+            merged?.filter.cases[0]?.conditions.some(
+                (condition) => condition.field === "mergedWithinDays" && condition.value === 7,
+            ),
+        ).toBe(true);
     });
 
     it("upgrades a legacy Waiting for reviewers default to exclude requested-of-you", () => {

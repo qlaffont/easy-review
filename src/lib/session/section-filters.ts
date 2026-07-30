@@ -1,4 +1,4 @@
-import type { SectionColorId, SectionIconId } from "#/lib/session/inbox-sections.ts";
+import type { InboxSectionId, SectionColorId, SectionIconId } from "#/lib/session/inbox-sections.ts";
 import type {
     CheckState,
     MergeableState,
@@ -7,6 +7,9 @@ import type {
     ReviewDecision,
     ReviewState,
 } from "#/lib/session/types.ts";
+
+/** Default window for the “Recently merged” preset. */
+export const RECENTLY_MERGED_WITHIN_DAYS = 7;
 
 /** Stable viewer token — never bake a concrete login into portable defaults. */
 export const VIEWER_PERSON = "@me" as const;
@@ -34,6 +37,7 @@ export const SECTION_FILTER_FIELDS = [
     "additions",
     "deletions",
     "updatedWithinDays",
+    "mergedWithinDays",
 ] as const;
 
 export type SectionFilterField = (typeof SECTION_FILTER_FIELDS)[number];
@@ -274,6 +278,17 @@ function matchCondition(
             if (op === "is_not" || op === "gte") return !within;
             return false;
         }
+        case "mergedWithinDays": {
+            const days = Number(value);
+            if (!Number.isFinite(days) || days < 0) return false;
+            const mergedAt = Date.parse(pullRequest.mergedAt ?? pullRequest.updatedAt);
+            if (Number.isNaN(mergedAt)) return false;
+            const ageMs = Date.now() - mergedAt;
+            const within = ageMs <= days * 24 * 60 * 60 * 1000;
+            if (op === "is" || op === "lte") return within;
+            if (op === "is_not" || op === "gte") return !within;
+            return false;
+        }
         default:
             return false;
     }
@@ -364,7 +379,10 @@ export function defaultFilterForPreset(id: string): SectionFilter {
                 condition("isDraft", "is", true),
             ]);
         case "merging-and-recently-merged":
-            return singleCaseFilter("Merged", [condition("state", "is", "merged")]);
+            return singleCaseFilter("Merged recently", [
+                condition("state", "is", "merged"),
+                condition("mergedWithinDays", "is", RECENTLY_MERGED_WITHIN_DAYS),
+            ]);
         case "waiting-for-author":
             return singleCaseFilter("I reviewed, ball in their court", [
                 condition("state", "is", "open"),
@@ -376,6 +394,23 @@ export function defaultFilterForPreset(id: string): SectionFilter {
         default:
             return emptySectionFilter();
     }
+}
+
+/** Which GitHub inbox connection to paginate when the user loads more rows in a section. */
+export function inboxFetchStateForSection(sectionId: InboxSectionId, filter: SectionFilter): "open" | "merged" {
+    if (sectionId === "merging-and-recently-merged") {
+        return "merged";
+    }
+
+    const requiresMerged =
+        filter.cases.length > 0 &&
+        filter.cases.every((case_) =>
+            case_.conditions.some(
+                (condition) => condition.field === "state" && condition.op === "is" && condition.value === "merged",
+            ),
+        );
+
+    return requiresMerged ? "merged" : "open";
 }
 
 export type SectionRecipeId =
@@ -457,10 +492,10 @@ export const SECTION_RECIPES: ReadonlyArray<SectionRecipe> = [
     },
     {
         id: "merging-and-recently-merged",
-        label: "Merging and recently merged",
-        description: "Merged pull requests.",
+        label: "Recently merged",
+        description: `Merged pull requests from the last ${RECENTLY_MERGED_WITHIN_DAYS} days.`,
         filter: defaultFilterForPreset("merging-and-recently-merged"),
-        suggestedLabel: "Merging and recently merged",
+        suggestedLabel: "Recently merged",
         color: "violet",
         icon: "merge",
     },
@@ -530,6 +565,7 @@ const FIELD_LABELS: Record<SectionFilterField, string> = {
     additions: "Additions",
     deletions: "Deletions",
     updatedWithinDays: "Updated (days)",
+    mergedWithinDays: "Merged (days)",
 };
 
 const OP_LABELS: Record<SectionFilterOp, string> = {
@@ -665,6 +701,7 @@ export function opsForField(field: SectionFilterField): Array<SectionFilterOp> {
         case "deletions":
             return ["gte", "lte", "is"];
         case "updatedWithinDays":
+        case "mergedWithinDays":
             return ["is", "is_not"];
         default:
             return ["is", "is_not"];
@@ -705,7 +742,280 @@ export function defaultValueForField(field: SectionFilterField): string | number
             return 0;
         case "updatedWithinDays":
             return 14;
+        case "mergedWithinDays":
+            return RECENTLY_MERGED_WITHIN_DAYS;
         default:
             return "";
     }
+}
+
+/** GitHub search date qualifier (`merged:>YYYY-MM-DD`). */
+function formatGitHubSearchDate(date: Date): string {
+    return date.toISOString().slice(0, 10);
+}
+
+function daysBeforeToday(days: number): Date {
+    const date = new Date();
+    date.setUTCDate(date.getUTCDate() - days);
+    return date;
+}
+
+function quoteGitHubSearchValue(value: string): string {
+    if (/^[A-Za-z0-9._/-]+$/.test(value)) {
+        return value;
+    }
+    return `"${value.replaceAll('"', "")}"`;
+}
+
+function conditionToSearchToken(condition: SectionFilterCondition, viewerLogin: string): string | null {
+    const { field, op, value } = condition;
+
+    switch (field) {
+        case "state":
+            if (op === "is" && value === "open") return "is:open";
+            if (op === "is" && value === "merged") return "is:merged";
+            if (op === "is" && value === "closed") return "is:closed";
+            return null;
+        case "isDraft":
+            if (op === "is" && value === true) return "draft:true";
+            if (op === "is" && value === false) return "draft:false";
+            return null;
+        case "mergedWithinDays": {
+            if (op !== "is" && op !== "lte") return null;
+            const days = Number(value);
+            if (!Number.isFinite(days) || days < 0) return null;
+            return `merged:>${formatGitHubSearchDate(daysBeforeToday(days))}`;
+        }
+        case "updatedWithinDays": {
+            if (op !== "is" && op !== "lte") return null;
+            const days = Number(value);
+            if (!Number.isFinite(days) || days < 0) return null;
+            return `updated:>${formatGitHubSearchDate(daysBeforeToday(days))}`;
+        }
+        case "author": {
+            const login = resolvePerson(String(value), viewerLogin);
+            if (op === "is") return `author:${login}`;
+            if (op === "is_not") return `-author:${login}`;
+            return null;
+        }
+        case "reviewRequests": {
+            const login = resolvePerson(String(value), viewerLogin);
+            if (op === "includes") return `review-requested:${login}`;
+            if (op === "does_not_include") return `-review-requested:${login}`;
+            return null;
+        }
+        case "reviewDecision":
+            if (op === "is" && value === "approved") return "review:approved";
+            if (op === "is" && value === "changes-requested") return "review:changes_requested";
+            if (op === "is_not" && value === "approved") return "-review:approved";
+            if (op === "is_not" && value === "changes-requested") return "-review:changes_requested";
+            return null;
+        case "labels":
+            if (op === "includes") return `label:${quoteGitHubSearchValue(String(value))}`;
+            if (op === "does_not_include") return `-label:${quoteGitHubSearchValue(String(value))}`;
+            return null;
+        case "repository":
+            if (op === "is") return `repo:${value}`;
+            return null;
+        case "assignees": {
+            const login = resolvePerson(String(value), viewerLogin);
+            if (op === "includes") return `assignee:${login}`;
+            if (op === "does_not_include") return `-assignee:${login}`;
+            return null;
+        }
+        case "headRefName":
+            if (op === "contains") return `head:${quoteGitHubSearchValue(String(value))}`;
+            return null;
+        case "baseRefName":
+            if (op === "contains") return `base:${quoteGitHubSearchValue(String(value))}`;
+            return null;
+        case "involvement":
+            if (op === "is" && value === "i-have-reviewed") return `reviewed-by:${viewerLogin}`;
+            return null;
+        default:
+            return null;
+    }
+}
+
+/**
+ * Build a GitHub search query for pull requests matching a section filter.
+ * Returns null when the filter uses fields GitHub search cannot express (checks, mergeable, …).
+ */
+export function sectionFilterToSearchQuery(filter: SectionFilter, viewerLogin: string): string | null {
+    if (!viewerLogin || filter.cases.length !== 1) {
+        return null;
+    }
+
+    const conditions = filter.cases[0]!.conditions;
+    if (conditions.length === 0) {
+        return null;
+    }
+
+    const tokens: Array<string> = ["is:pr"];
+
+    for (const condition of conditions) {
+        const token = conditionToSearchToken(condition, viewerLogin);
+        if (token === null) {
+            return null;
+        }
+        if (token.startsWith("repo:")) {
+            continue;
+        }
+        tokens.push(token);
+    }
+
+    return tokens.join(" ");
+}
+
+/** @deprecated Use {@link sectionFilterToSearchQuery}. */
+export const sectionFilterToSearchCountQuery = sectionFilterToSearchQuery;
+
+function parseSearchDateThreshold(token: string): number | null {
+    const match = /^(merged|updated):>(\d{4}-\d{2}-\d{2})$/.exec(token);
+    if (!match?.[2]) {
+        return null;
+    }
+    const parsed = Date.parse(`${match[2]}T00:00:00.000Z`);
+    return Number.isNaN(parsed) ? null : parsed;
+}
+
+/** Test double helper — mirrors {@link sectionFilterToSearchCountQuery} tokens. */
+export function matchesSectionSearchCountQuery(
+    pullRequest: PullRequestSummary,
+    query: string,
+    viewerLogin: string,
+): boolean {
+    const tokens = query.trim().split(/\s+/).filter(Boolean);
+    if (tokens.length === 0) {
+        return false;
+    }
+
+    for (const token of tokens) {
+        if (token === "is:pr") {
+            continue;
+        }
+
+        if (token === "is:open") {
+            if (pullRequest.state !== "open") return false;
+            continue;
+        }
+        if (token === "is:merged") {
+            if (pullRequest.state !== "merged") return false;
+            continue;
+        }
+        if (token === "is:closed") {
+            if (pullRequest.state !== "closed") return false;
+            continue;
+        }
+
+        if (token === "draft:true") {
+            if (!pullRequest.isDraft) return false;
+            continue;
+        }
+        if (token === "draft:false") {
+            if (pullRequest.isDraft) return false;
+            continue;
+        }
+
+        if (token.startsWith("merged:>")) {
+            const threshold = parseSearchDateThreshold(token);
+            if (threshold === null) return false;
+            const mergedAt = Date.parse(pullRequest.mergedAt ?? pullRequest.updatedAt);
+            if (Number.isNaN(mergedAt) || mergedAt <= threshold) return false;
+            continue;
+        }
+
+        if (token.startsWith("updated:>")) {
+            const threshold = parseSearchDateThreshold(token);
+            if (threshold === null) return false;
+            const updatedAt = Date.parse(pullRequest.updatedAt);
+            if (Number.isNaN(updatedAt) || updatedAt <= threshold) return false;
+            continue;
+        }
+
+        if (token.startsWith("author:")) {
+            if (pullRequest.author !== token.slice("author:".length)) return false;
+            continue;
+        }
+        if (token.startsWith("-author:")) {
+            if (pullRequest.author === token.slice("-author:".length)) return false;
+            continue;
+        }
+
+        if (token === "review:approved") {
+            if (pullRequest.reviewDecision !== "approved") return false;
+            continue;
+        }
+        if (token === "review:changes_requested") {
+            if (pullRequest.reviewDecision !== "changes-requested") return false;
+            continue;
+        }
+        if (token === "-review:approved") {
+            if (pullRequest.reviewDecision === "approved") return false;
+            continue;
+        }
+        if (token === "-review:changes_requested") {
+            if (pullRequest.reviewDecision === "changes-requested") return false;
+            continue;
+        }
+        if (token.startsWith("review-requested:")) {
+            const login = token.slice("review-requested:".length);
+            if (!pullRequest.reviewRequests.includes(login)) return false;
+            continue;
+        }
+        if (token.startsWith("-review-requested:")) {
+            const login = token.slice("-review-requested:".length);
+            if (pullRequest.reviewRequests.includes(login)) return false;
+            continue;
+        }
+
+        if (token.startsWith("reviewed-by:")) {
+            const login = token.slice("reviewed-by:".length);
+            if (!pullRequest.reviewers.some((reviewer) => reviewer.login === login)) return false;
+            continue;
+        }
+
+        if (token.startsWith("label:")) {
+            const label = token.slice("label:".length).replaceAll(/^"|"$/g, "");
+            if (!pullRequest.labels.some((entry) => entry.name === label)) return false;
+            continue;
+        }
+        if (token.startsWith("-label:")) {
+            const label = token.slice("-label:".length).replaceAll(/^"|"$/g, "");
+            if (pullRequest.labels.some((entry) => entry.name === label)) return false;
+            continue;
+        }
+
+        if (token.startsWith("assignee:")) {
+            const login = token.slice("assignee:".length);
+            if (!pullRequest.assignees.includes(login)) return false;
+            continue;
+        }
+        if (token.startsWith("-assignee:")) {
+            const login = token.slice("-assignee:".length);
+            if (pullRequest.assignees.includes(login)) return false;
+            continue;
+        }
+
+        if (token.startsWith("head:")) {
+            const branch = token.slice("head:".length).replaceAll(/^"|"$/g, "");
+            if (!pullRequest.headRefName.includes(branch)) return false;
+            continue;
+        }
+        if (token.startsWith("base:")) {
+            const branch = token.slice("base:".length).replaceAll(/^"|"$/g, "");
+            if (!pullRequest.baseRefName.includes(branch)) return false;
+            continue;
+        }
+
+        if (token.startsWith("repo:")) {
+            if (pullRequest.repository !== token.slice("repo:".length)) return false;
+            continue;
+        }
+
+        return false;
+    }
+
+    void viewerLogin;
+    return true;
 }

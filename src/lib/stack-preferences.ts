@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 export type StackPreferences = {
     /** When false, no stack UI or repo index fetches run. */
     enabled: boolean;
-    /** Hide closed pull requests in stack views (inbox badge + PR panel). */
+    /** Hide closed pull requests in the PR stack panel. */
     hideClosed: boolean;
 };
 
@@ -85,6 +85,10 @@ export function useStackPreferences() {
 /** Sync read for session / non-React callers. */
 export function getStackPreferences(): StackPreferences {
     return getPreferences();
+}
+
+export function replaceStackPreferences(preferences: StackPreferences): void {
+    commitPreferences(preferences);
 }
 
 export function areStacksEnabled(): boolean {

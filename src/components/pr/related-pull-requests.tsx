@@ -10,7 +10,6 @@ import { Button } from "#/components/ui/button.tsx";
 import { Card } from "#/components/ui/card.tsx";
 import { useSession } from "#/lib/session/provider.tsx";
 import { RELATED_SIDEBAR_VISIBLE_CAP } from "#/lib/session/related-pull-requests.ts";
-import { cn } from "#/lib/utils.ts";
 
 function RelatedStateIcon({ pullRequest }: { pullRequest: PullRequestSummary }) {
     if (pullRequest.state === "merged") {
@@ -74,7 +73,6 @@ export function RelatedPullRequestsSidebar({
         void session.loadRelatedPullRequests(repository, number);
     }, [session, repository, number, headRefName, baseRefName]);
 
-    const showSearchAll = !related.searchedAllDiscovered;
     const hasItems = related.items.length > 0;
     const visible = expanded ? related.items : related.items.slice(0, RELATED_SIDEBAR_VISIBLE_CAP);
     const hiddenCount = related.items.length - visible.length;
@@ -83,33 +81,12 @@ export function RelatedPullRequestsSidebar({
         return null;
     }
 
-    if (!hasItems && related.status === "error" && !showSearchAll) {
-        return null;
-    }
-
-    if (!hasItems && related.status === "ready" && related.searchedAllDiscovered) {
+    if (!hasItems && related.status === "ready") {
         return null;
     }
 
     if (!hasItems) {
-        return (
-            <div className="pb-3">
-                <button
-                    type="button"
-                    disabled={related.expanding}
-                    className={cn(
-                        "cursor-pointer text-left text-xs text-muted-foreground underline-offset-2 hover:text-foreground hover:underline",
-                        "disabled:cursor-not-allowed disabled:opacity-50",
-                    )}
-                    onClick={() => {
-                        void session.expandRelatedPullRequests(repository, number);
-                    }}
-                >
-                    {related.expanding ? "Searching discovered repos…" : "Search all discovered repos"}
-                </button>
-                {related.error ? <p className="mt-1 text-xs text-destructive">{related.error.message}</p> : null}
-            </div>
-        );
+        return related.error ? <p className="pb-3 text-xs text-destructive">{related.error.message}</p> : null;
     }
 
     return (
@@ -137,22 +114,6 @@ export function RelatedPullRequestsSidebar({
                 >
                     Show {hiddenCount} more
                 </Button>
-            ) : null}
-
-            {showSearchAll ? (
-                <button
-                    type="button"
-                    disabled={related.expanding}
-                    className={cn(
-                        "cursor-pointer text-left text-xs text-muted-foreground underline-offset-2 hover:text-foreground hover:underline",
-                        "disabled:cursor-not-allowed disabled:opacity-50",
-                    )}
-                    onClick={() => {
-                        void session.expandRelatedPullRequests(repository, number);
-                    }}
-                >
-                    {related.expanding ? "Searching discovered repos…" : "Search all discovered repos"}
-                </button>
             ) : null}
 
             {related.error ? <p className="text-xs text-destructive">{related.error.message}</p> : null}

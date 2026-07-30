@@ -266,14 +266,20 @@ describe("listPullRequests", () => {
         const github = createGithubHttpClient(
             respondWith({
                 data: {
-                    repo0: { open: { nodes: [pullRequestNode("acme/api", 1)] }, merged: { nodes: [] } },
+                    repo0: {
+                        open: {
+                            pageInfo: { hasNextPage: false, endCursor: null },
+                            nodes: [pullRequestNode("acme/api", 1)],
+                        },
+                        merged: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] },
+                    },
                     repo1: null,
                 },
                 errors: [{ type: "NOT_FOUND", message: "Could not resolve to a Repository." }],
             }),
         );
 
-        const pullRequests = await github.listPullRequests("token", ["acme/api", "acme/gone"]);
+        const { pullRequests } = await github.listPullRequests("token", ["acme/api", "acme/gone"]);
 
         expect(pullRequests.map((pullRequest) => pullRequest.key)).toEqual(["acme/api#1"]);
     });
@@ -367,6 +373,26 @@ describe("searchPullRequests", () => {
         });
 
         expect(pullRequests.map((pullRequest) => pullRequest.key)).toEqual(["latomate/medical-web#196"]);
+    });
+
+    it("looks up a pasted Graphite pull request URL", async () => {
+        const hit = pullRequestNode("latomate/medical-web", 329);
+        hit.title = "feat: add invoice badge in patient search";
+
+        const github = createGithubHttpClient(
+            respondWith({
+                data: {
+                    repo0: { pullRequest: hit },
+                },
+            }),
+        );
+
+        const pullRequests = await github.searchPullRequests("token", {
+            query: "https://app.graphite.com/github/pr/latomate/medical-web/329/feat-add-invoice-badge-in-patient-search-CU-869e61rq2",
+            repositories: [],
+        });
+
+        expect(pullRequests.map((pullRequest) => pullRequest.key)).toEqual(["latomate/medical-web#329"]);
     });
 
     it("looks up bare PR numbers across selected repositories", async () => {

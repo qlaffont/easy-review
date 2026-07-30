@@ -4,6 +4,7 @@ import type { PullRequestSummary } from "#/lib/session/types.ts";
 
 import {
     isRelatedAgeEligible,
+    isRelatedCreatedEligible,
     isRelatedMatchEligible,
     mergeRelatedPullRequests,
     selectRelatedPullRequests,
@@ -20,7 +21,7 @@ function summary(
         authorAvatarUrl: null,
         state: "open",
         isDraft: false,
-        createdAt: "2026-07-01T00:00:00.000Z",
+        createdAt: "2026-07-20T00:00:00.000Z",
         updatedAt: "2026-07-20T00:00:00.000Z",
         mergedAt: null,
         headRefName: "feature/foo",
@@ -40,7 +41,7 @@ function summary(
     };
 }
 
-const NOW = Date.parse("2026-07-27T00:00:00.000Z");
+const FOCAL_CREATED_AT = "2026-07-27T00:00:00.000Z";
 
 describe("selectRelatedPullRequests", () => {
     it("keeps other-repo matches with the same head and base", () => {
@@ -58,15 +59,15 @@ describe("selectRelatedPullRequests", () => {
             headRefName: "feature/foo",
             baseRefName: "main",
             excludeRepository: "acme/api",
-            nowMs: NOW,
+            focalCreatedAt: FOCAL_CREATED_AT,
         });
 
         expect(items.map((entry) => entry.key)).toEqual(["acme/web#2"]);
     });
 
-    it("keeps open and merged of any age; drops closed", () => {
-        const stale = "2024-06-19T00:00:00.000Z";
-        const fresh = new Date(NOW - 7 * 24 * 60 * 60 * 1000).toISOString();
+    it("keeps open and merged within 7 days of the focal PR; drops closed and stale", () => {
+        const withinWindow = "2026-07-25T00:00:00.000Z";
+        const outsideWindow = "2026-07-09T00:00:00.000Z";
 
         const items = selectRelatedPullRequests({
             pullRequests: [
@@ -75,41 +76,37 @@ describe("selectRelatedPullRequests", () => {
                     repository: "latomate/medical-web",
                     number: 196,
                     state: "merged",
-                    updatedAt: "2024-06-26T00:00:00.000Z",
+                    createdAt: withinWindow,
                 }),
                 summary({
                     key: "latomate/medical-service#115",
                     repository: "latomate/medical-service",
                     number: 115,
                     state: "merged",
-                    updatedAt: "2024-06-19T00:00:00.000Z",
+                    createdAt: outsideWindow,
                 }),
                 summary({
                     key: "acme/web#2",
                     repository: "acme/web",
                     number: 2,
                     state: "closed",
-                    updatedAt: fresh,
+                    createdAt: withinWindow,
                 }),
                 summary({
                     key: "acme/web#3",
                     repository: "acme/web",
                     number: 3,
                     state: "open",
-                    updatedAt: stale,
+                    createdAt: outsideWindow,
                 }),
             ],
             headRefName: "feature/foo",
             baseRefName: "main",
             excludeRepository: "acme/api",
-            nowMs: NOW,
+            focalCreatedAt: FOCAL_CREATED_AT,
         });
 
-        expect(items.map((entry) => entry.key)).toEqual([
-            "acme/web#3",
-            "latomate/medical-web#196",
-            "latomate/medical-service#115",
-        ]);
+        expect(items.map((entry) => entry.key)).toEqual(["latomate/medical-web#196"]);
     });
 });
 
@@ -193,6 +190,28 @@ describe("isRelatedMatchEligible", () => {
         expect(isRelatedMatchEligible({ state: "open" })).toBe(true);
         expect(isRelatedMatchEligible({ state: "merged" })).toBe(true);
         expect(isRelatedMatchEligible({ state: "closed" })).toBe(false);
-        expect(isRelatedAgeEligible({ state: "merged", updatedAt: "2010-01-01T00:00:00.000Z" }, NOW)).toBe(true);
+    });
+});
+
+describe("isRelatedCreatedEligible", () => {
+    it("accepts PRs created within 7 days of the focal PR", () => {
+        expect(isRelatedCreatedEligible({ createdAt: "2026-07-25T00:00:00.000Z" }, FOCAL_CREATED_AT)).toBe(true);
+        expect(isRelatedCreatedEligible({ createdAt: "2026-07-20T00:00:00.000Z" }, FOCAL_CREATED_AT)).toBe(true);
+        expect(isRelatedCreatedEligible({ createdAt: "2026-07-09T00:00:00.000Z" }, FOCAL_CREATED_AT)).toBe(false);
+    });
+
+    it("combines state and created checks via isRelatedAgeEligible", () => {
+        expect(
+            isRelatedAgeEligible(
+                { state: "merged", createdAt: "2026-07-25T00:00:00.000Z", updatedAt: "2026-07-25T00:00:00.000Z" },
+                FOCAL_CREATED_AT,
+            ),
+        ).toBe(true);
+        expect(
+            isRelatedAgeEligible(
+                { state: "closed", createdAt: "2026-07-25T00:00:00.000Z", updatedAt: "2026-07-25T00:00:00.000Z" },
+                FOCAL_CREATED_AT,
+            ),
+        ).toBe(false);
     });
 });

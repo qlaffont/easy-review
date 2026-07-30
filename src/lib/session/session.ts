@@ -11,7 +11,7 @@ import type {
     SectionColorId,
     SectionIconId,
 } from "#/lib/session/inbox-sections.ts";
-import type { GithubClient, GithubViewer, KeyValueStore } from "#/lib/session/ports.ts";
+import type { GithubClient, GithubViewer, InboxPullRequestPageInfo, KeyValueStore } from "#/lib/session/ports.ts";
 import type { SectionFilter, SectionRecipeId } from "#/lib/session/section-filters.ts";
 import type {
     DiffSide,
@@ -36,11 +36,14 @@ import type {
 } from "#/lib/session/types.ts";
 
 import { EasyReviewError, missingToken, toSessionError, unauthorized } from "#/lib/session/errors.ts";
+import { parseGraphiteStackComment, resolveStackFromGraphiteComment } from "#/lib/session/graphite-stack-comments.ts";
 import {
+    allSectionDefinitions,
     defaultExpandedSections,
     defaultLabelForSection,
     defaultSectionLayout,
-    groupIntoSections,
+    INBOX_SECTION_LOAD_SIZE,
+    inboxSectionsFromLoaded,
     INBOX_SETTINGS_VERSION,
     isPresetInboxSectionId,
     newCustomSectionId,
@@ -53,10 +56,11 @@ import {
 import {
     comparePullRequestsByUpdatedAtDesc,
     matchesPullRequestSearchQuery,
-    parseGitHubPullRequestUrl,
+    parsePullRequestUrl,
 } from "#/lib/session/pull-request-search.ts";
 import { resolvePullRequestStack, type ResolvedPullRequestStack } from "#/lib/session/pull-request-stacks.ts";
-import { mergeRelatedPullRequests, selectRelatedPullRequests } from "#/lib/session/related-pull-requests.ts";
+import { selectRelatedPullRequests } from "#/lib/session/related-pull-requests.ts";
+import { sectionFilterToSearchQuery } from "#/lib/session/section-filters.ts";
 import {
     defaultFilterForPreset,
     emptySectionFilter,
@@ -76,6 +80,8 @@ const REPOS_ACCOUNT_KEY = "repos:account";
 const INBOX_CACHE_KEY = "inbox:cache";
 const INBOX_EXPANDED_KEY = "inbox:expanded";
 const INBOX_SECTIONS_KEY = "inbox:sections";
+/** Background tab-focus revalidates skip if the inbox was refreshed more recently than this. */
+const INBOX_BACKGROUND_REVALIDATE_MIN_MS = 90_000;
 /** Index of every persisted draft key so disconnect can wipe them without a store scan. */
 const DRAFT_INDEX_KEY = "review-drafts:index";
 
@@ -113,9 +119,17 @@ export type InboxState = {
     /** Set when the allowlist changed, so the next load goes to the network. */
     stale: boolean;
     pullRequests: Array<PullRequestSummary>;
+    /** Rows loaded per visible section (initially {@link INBOX_SECTION_LOAD_SIZE}). */
+    sectionPullRequests: Record<string, Array<PullRequestSummary>>;
+    /** GitHub search pagination per section. */
+    sectionPagination: Record<string, InboxPullRequestPageInfo>;
+    /** Section currently fetching the next page from GitHub, if any. */
+    loadingMoreSection: InboxSectionId | null;
     expandedSections: Array<InboxSectionId>;
     /** Hide / rename / reorder preferences for the triage board. */
     sectionLayout: Array<InboxSectionLayoutEntry>;
+    /** Exact totals from GitHub search per section. */
+    sectionCounts: Record<string, number>;
     error: SessionError | null;
     lastLoadedAt: string | null;
 };
@@ -179,9 +193,6 @@ export type PullRequestCommitsState = {
 export type RelatedPullRequestsState = {
     status: "idle" | "loading" | "ready" | "error";
     items: Array<PullRequestSummary>;
-    /** True after the user asked to search every discovered repo (not just the allowlist). */
-    searchedAllDiscovered: boolean;
-    expanding: boolean;
     headRefName: string | null;
     baseRefName: string | null;
     error: SessionError | null;
@@ -226,6 +237,8 @@ export type SessionState = {
     relatedPullRequests: Record<string, RelatedPullRequestsState>;
     /** Same-repo pull requests for stack inference, keyed by `owner/repo`. */
     repoStackIndices: Record<string, RepoStackIndexState>;
+    /** Branch-less stacks (e.g. Graphite comments), keyed by `owner/repo#number`. */
+    pullRequestStackOverrides: Record<string, PullRequestStackState>;
     /** Assignable users + labels keyed by `owner/repo`. */
     repositoryMetadata: Record<string, RepositoryMetadataState>;
 };
@@ -267,11 +280,66 @@ const initialInboxState: InboxState = {
     refreshing: false,
     stale: false,
     pullRequests: [],
+    sectionPullRequests: {},
+    sectionPagination: {},
+    loadingMoreSection: null,
     expandedSections: DEFAULT_EXPANDED_SECTIONS,
     sectionLayout: defaultSectionLayout(),
+    sectionCounts: {},
     error: null,
     lastLoadedAt: null,
 };
+
+function mergePullRequestSummaries(
+    existing: ReadonlyArray<PullRequestSummary>,
+    incoming: ReadonlyArray<PullRequestSummary>,
+): Array<PullRequestSummary> {
+    const byKey = new Map(existing.map((pullRequest) => [pullRequest.key, pullRequest]));
+    for (const pullRequest of incoming) {
+        const previous = byKey.get(pullRequest.key);
+        byKey.set(pullRequest.key, previous ? mergePullRequestSummary(previous, pullRequest) : pullRequest);
+    }
+    return [...byKey.values()];
+}
+
+function pullRequestSummaryNeedsHydration(pullRequest: PullRequestSummary): boolean {
+    return (
+        pullRequest.reviewers.length === 0 &&
+        pullRequest.reviewRequests.length === 0 &&
+        pullRequest.checks === "none" &&
+        pullRequest.commentCount === 0 &&
+        pullRequest.reviewDecision === null &&
+        pullRequest.mergeable === "unknown"
+    );
+}
+
+function mergePullRequestSummary(previous: PullRequestSummary, incoming: PullRequestSummary): PullRequestSummary {
+    if (!pullRequestSummaryNeedsHydration(incoming) && !pullRequestSummaryNeedsHydration(previous)) {
+        return Date.parse(incoming.updatedAt) >= Date.parse(previous.updatedAt) ? incoming : previous;
+    }
+
+    if (!pullRequestSummaryNeedsHydration(incoming)) {
+        return incoming;
+    }
+
+    return {
+        ...incoming,
+        reviewers: previous.reviewers.length > 0 ? previous.reviewers : incoming.reviewers,
+        reviewRequests: previous.reviewRequests.length > 0 ? previous.reviewRequests : incoming.reviewRequests,
+        checks: previous.checks !== "none" ? previous.checks : incoming.checks,
+        commentCount: previous.commentCount > 0 ? previous.commentCount : incoming.commentCount,
+        reviewDecision: previous.reviewDecision ?? incoming.reviewDecision,
+        mergeable: previous.mergeable !== "unknown" ? previous.mergeable : incoming.mergeable,
+        assignees: previous.assignees.length > 0 ? previous.assignees : incoming.assignees,
+        labels: previous.labels.length > 0 ? previous.labels : incoming.labels,
+    };
+}
+
+function isRateLimitedError(error: unknown): boolean {
+    return error instanceof EasyReviewError
+        ? error.kind === "rate-limited"
+        : toSessionError(error).kind === "rate-limited";
+}
 
 const initialFilesListState: FilesListState = {
     status: "idle",
@@ -305,6 +373,8 @@ type RepositoriesCache = {
 
 type InboxCache = {
     pullRequests: Array<PullRequestSummary>;
+    sectionPullRequests?: Record<string, Array<PullRequestSummary>>;
+    sectionCounts?: Record<string, number>;
     lastLoadedAt: string | null;
 };
 
@@ -319,8 +389,6 @@ export function createEasyReviewSession({ github, store, oauth }: EasyReviewSess
     const initialRelatedState: RelatedPullRequestsState = {
         status: "idle",
         items: [],
-        searchedAllDiscovered: false,
-        expanding: false,
         headRefName: null,
         baseRefName: null,
         error: null,
@@ -350,6 +418,7 @@ export function createEasyReviewSession({ github, store, oauth }: EasyReviewSess
         pullRequestCommits: {},
         relatedPullRequests: {},
         repoStackIndices: {},
+        pullRequestStackOverrides: {},
         repositoryMetadata: {},
     });
 
@@ -372,6 +441,7 @@ export function createEasyReviewSession({ github, store, oauth }: EasyReviewSess
     const latestPullRequestCommitLoads = new Map<string, number>();
     const latestRelatedPullRequestLoads = new Map<string, number>();
     const latestRepoStackIndexLoads = new Map<string, number>();
+    const latestGraphiteStackLoads = new Map<string, number>();
     const latestRepositoryMetadataLoads = new Map<string, number>();
     /** Last-write-wins for summary typing so overlapping persists cannot drop characters. */
     const latestDraftBodyWrites = new Map<string, number>();
@@ -491,6 +561,7 @@ export function createEasyReviewSession({ github, store, oauth }: EasyReviewSess
             pullRequestCommits: {},
             relatedPullRequests: {},
             repoStackIndices: {},
+            pullRequestStackOverrides: {},
             repositoryMetadata: {},
         }));
     }
@@ -543,6 +614,8 @@ export function createEasyReviewSession({ github, store, oauth }: EasyReviewSess
 
         setInbox({
             pullRequests: inbox?.pullRequests ?? [],
+            sectionPullRequests: inbox?.sectionPullRequests ?? {},
+            sectionCounts: inbox?.sectionCounts ?? {},
             lastLoadedAt: inbox?.lastLoadedAt ?? null,
             status: inbox?.pullRequests.length ? "ready" : "idle",
             // Force a GitHub refresh after sign-in / session restore (cache is only for instant paint).
@@ -741,14 +814,158 @@ export function createEasyReviewSession({ github, store, oauth }: EasyReviewSess
         return selected.map((nameWithOwner) => byName.get(nameWithOwner) ?? placeholderRepository(nameWithOwner));
     }
 
-    /** Ask GitHub for the open and recently merged pull requests of the allowlisted repos. */
+    /** Load the first page of pull requests and total count for each section. */
+    async function loadInboxSections(
+        sectionIds?: ReadonlyArray<InboxSectionId>,
+        attempt?: number,
+    ): Promise<{ successes: number; failure: SessionError | null }> {
+        const { repos, auth, inbox } = state.state;
+        const viewerLogin = auth.viewer?.login;
+        const selected = repos.selected;
+
+        if (!viewerLogin || selected.length === 0) {
+            if (attempt === undefined || attempt === latestInboxLoad) {
+                setInbox({
+                    pullRequests: [],
+                    sectionPullRequests: {},
+                    sectionCounts: {},
+                    sectionPagination: {},
+                });
+            }
+            return { successes: 0, failure: null };
+        }
+
+        const selectedSet = new Set(selected);
+        const definitions = sectionIds
+            ? allSectionDefinitions(inbox.sectionLayout).filter((definition) => sectionIds.includes(definition.id))
+            : visibleSectionDefinitions(inbox.sectionLayout);
+
+        let failure: SessionError | null = null;
+        let successes = 0;
+        let stopFetching = false;
+        const results: Array<{
+            id: InboxSectionId;
+            pullRequests: Array<PullRequestSummary>;
+            totalCount: number;
+            pageInfo: InboxPullRequestPageInfo;
+        } | null> = [];
+
+        for (const definition of definitions) {
+            if (stopFetching) {
+                break;
+            }
+
+            if (attempt !== undefined && attempt !== latestInboxLoad) {
+                return { successes, failure };
+            }
+
+            const query = sectionFilterToSearchQuery(definition.filter, viewerLogin);
+
+            try {
+                if (query) {
+                    const page = await github.fetchSectionPullRequests(requireToken(), {
+                        query,
+                        repositories: selected,
+                        limit: INBOX_SECTION_LOAD_SIZE,
+                    });
+                    successes += 1;
+                    results.push({ id: definition.id, ...page });
+                    continue;
+                }
+
+                const matched = inbox.pullRequests
+                    .filter(
+                        (pullRequest) =>
+                            selectedSet.has(pullRequest.repository) &&
+                            matchSectionFilter(pullRequest, definition.filter, viewerLogin),
+                    )
+                    .sort(comparePullRequestsByUpdatedAtDesc);
+                const pullRequests = matched.slice(0, INBOX_SECTION_LOAD_SIZE);
+                successes += 1;
+                results.push({
+                    id: definition.id,
+                    pullRequests,
+                    totalCount: matched.length,
+                    pageInfo: {
+                        hasNextPage: matched.length > pullRequests.length,
+                        endCursor: null,
+                    },
+                });
+            } catch (error) {
+                failure ??= toSessionError(error);
+                results.push(null);
+                if (isRateLimitedError(error)) {
+                    stopFetching = true;
+                }
+            }
+        }
+
+        if (attempt !== undefined && attempt !== latestInboxLoad) {
+            return { successes, failure };
+        }
+
+        if (successes === 0) {
+            return { successes, failure };
+        }
+
+        const sectionPullRequests = sectionIds ? { ...inbox.sectionPullRequests } : {};
+        const sectionCounts = sectionIds ? { ...inbox.sectionCounts } : {};
+        const sectionPagination = sectionIds ? { ...inbox.sectionPagination } : {};
+        let mergedPool = sectionIds ? [...inbox.pullRequests] : [];
+
+        for (const result of results) {
+            if (!result) {
+                continue;
+            }
+
+            sectionPullRequests[result.id] = result.pullRequests;
+            sectionCounts[result.id] = result.totalCount;
+            sectionPagination[result.id] = result.pageInfo;
+            mergedPool = mergePullRequestSummaries(mergedPool, result.pullRequests);
+        }
+
+        setInbox({
+            pullRequests: mergedPool,
+            sectionPullRequests,
+            sectionCounts,
+            sectionPagination,
+            error: failure && Object.keys(sectionPullRequests).length > 0 ? failure : inbox.error,
+        });
+
+        return { successes, failure };
+    }
+
+    async function ensureInboxSectionLoaded(sectionId: InboxSectionId): Promise<void> {
+        const { inbox } = state.state;
+        const pullRequests = inbox.sectionPullRequests[sectionId] ?? [];
+
+        if (inbox.refreshing) {
+            return;
+        }
+
+        if (!(sectionId in inbox.sectionCounts) || pullRequests.some(pullRequestSummaryNeedsHydration)) {
+            await loadInboxSections([sectionId]);
+        }
+    }
+
+    /** Refresh every section from GitHub ({@link INBOX_SECTION_LOAD_SIZE} rows + total count each). */
     async function refreshInbox(): Promise<void> {
         const attempt = ++latestInboxLoad;
         const { selected } = state.state.repos;
         const cached = state.state.inbox.pullRequests;
 
         if (selected.length === 0) {
-            setInbox({ status: "ready", refreshing: false, stale: false, pullRequests: [], error: null });
+            setInbox({
+                status: "ready",
+                refreshing: false,
+                stale: false,
+                pullRequests: [],
+                sectionPullRequests: {},
+                sectionCounts: {},
+                sectionPagination: {},
+                loadingMoreSection: null,
+                error: null,
+            });
             return;
         }
 
@@ -757,20 +974,32 @@ export function createEasyReviewSession({ github, store, oauth }: EasyReviewSess
         setInbox({ refreshing: true, status: keepPainted ? "ready" : "loading", error: null });
 
         try {
-            const pullRequests = await github.listPullRequests(requireToken(), selected);
+            const { successes, failure } = await loadInboxSections(undefined, attempt);
             if (attempt !== latestInboxLoad) return;
 
+            if (successes === 0 && failure) {
+                throw new EasyReviewError(failure.kind, failure.message, { retryAt: failure.retryAt });
+            }
+
+            const { pullRequests, sectionPullRequests, sectionCounts } = state.state.inbox;
             const lastLoadedAt = new Date().toISOString();
-            await store.set(INBOX_CACHE_KEY, JSON.stringify({ pullRequests, lastLoadedAt } satisfies InboxCache));
+            await store.set(
+                INBOX_CACHE_KEY,
+                JSON.stringify({
+                    pullRequests,
+                    sectionPullRequests,
+                    sectionCounts,
+                    lastLoadedAt,
+                } satisfies InboxCache),
+            );
             setInbox({
                 status: "ready",
                 refreshing: false,
                 stale: false,
-                pullRequests,
+                loadingMoreSection: null,
                 lastLoadedAt,
-                error: null,
+                error: failure && cached.length > 0 ? failure : null,
             });
-            void prefetchRepoStackIndices([...new Set(pullRequests.map((pullRequest) => pullRequest.repository))]);
         } catch (error) {
             if (attempt !== latestInboxLoad) return;
             setInbox({
@@ -798,12 +1027,20 @@ export function createEasyReviewSession({ github, store, oauth }: EasyReviewSess
     }
 
     /**
-     * Called on tab focus, when a section is opened, and on the quiet 3-minute interval.
+     * Called on tab focus and on the quiet 3-minute interval.
+     * Pass `{ background: true }` to skip when the inbox was refreshed recently.
      * Never runs while a refresh is already in flight.
      */
-    async function revalidateInbox(): Promise<void> {
+    async function revalidateInbox(options?: { background?: boolean }): Promise<void> {
         if (state.state.inbox.refreshing) {
             return;
+        }
+
+        if (options?.background) {
+            const { lastLoadedAt } = state.state.inbox;
+            if (lastLoadedAt && Date.now() - Date.parse(lastLoadedAt) < INBOX_BACKGROUND_REVALIDATE_MIN_MS) {
+                return;
+            }
         }
 
         await refreshInbox();
@@ -812,6 +1049,72 @@ export function createEasyReviewSession({ github, store, oauth }: EasyReviewSess
     /** Mark the inbox dirty so the next Inbox visit / loadInbox picks up a fresh GitHub fetch. */
     function invalidateInbox(): void {
         setInbox({ stale: true });
+    }
+
+    async function persistInboxPullRequests(pullRequests: Array<PullRequestSummary>): Promise<void> {
+        const lastLoadedAt = new Date().toISOString();
+        await store.set(INBOX_CACHE_KEY, JSON.stringify({ pullRequests, lastLoadedAt } satisfies InboxCache));
+        setInbox({ pullRequests, lastLoadedAt });
+    }
+
+    function sectionLayoutEntry(id: InboxSectionId): InboxSectionLayoutEntry | undefined {
+        return state.state.inbox.sectionLayout.find((entry) => entry.id === id);
+    }
+
+    function canLoadMoreInboxSection(sectionId: InboxSectionId): boolean {
+        const { inbox } = state.state;
+        const loaded = inbox.sectionPullRequests[sectionId]?.length ?? 0;
+        const total = inbox.sectionCounts[sectionId] ?? loaded;
+        const pagination = inbox.sectionPagination[sectionId];
+
+        return loaded < total || pagination?.hasNextPage === true;
+    }
+
+    /** Fetch the next page of pull requests for one section. */
+    async function loadMoreInboxSection(sectionId: InboxSectionId): Promise<void> {
+        const entry = sectionLayoutEntry(sectionId);
+        const viewerLogin = state.state.auth.viewer?.login;
+        const { selected } = state.state.repos;
+        const { inbox } = state.state;
+
+        if (!entry || !viewerLogin || inbox.loadingMoreSection !== null || !canLoadMoreInboxSection(sectionId)) {
+            return;
+        }
+
+        const query = sectionFilterToSearchQuery(entry.filter, viewerLogin);
+        if (!query) {
+            return;
+        }
+
+        setInbox({ loadingMoreSection: sectionId, error: null });
+
+        try {
+            const loaded = state.state.inbox.sectionPullRequests[sectionId] ?? [];
+            const page = await github.fetchSectionPullRequests(requireToken(), {
+                query,
+                repositories: selected,
+                limit: INBOX_SECTION_LOAD_SIZE,
+                after: state.state.inbox.sectionPagination[sectionId]?.endCursor,
+            });
+
+            const pullRequests = mergePullRequestSummaries(loaded, page.pullRequests);
+            const mergedPool = mergePullRequestSummaries(state.state.inbox.pullRequests, page.pullRequests);
+
+            setInbox({
+                sectionPullRequests: { ...state.state.inbox.sectionPullRequests, [sectionId]: pullRequests },
+                sectionCounts: { ...state.state.inbox.sectionCounts, [sectionId]: page.totalCount },
+                sectionPagination: { ...state.state.inbox.sectionPagination, [sectionId]: page.pageInfo },
+                pullRequests: mergedPool,
+                loadingMoreSection: null,
+                error: null,
+            });
+            await persistInboxPullRequests(mergedPool);
+        } catch (error) {
+            setInbox({
+                loadingMoreSection: null,
+                error: toSessionError(error),
+            });
+        }
     }
 
     async function toggleSection(id: InboxSectionId): Promise<void> {
@@ -823,7 +1126,7 @@ export function createEasyReviewSession({ github, store, oauth }: EasyReviewSess
         setInbox({ expandedSections: next });
 
         if (!isExpanded) {
-            await revalidateInbox();
+            await ensureInboxSectionLoaded(id);
         }
     }
 
@@ -841,6 +1144,10 @@ export function createEasyReviewSession({ github, store, oauth }: EasyReviewSess
         await persistSectionLayout(
             state.state.inbox.sectionLayout.map((entry) => (entry.id === id ? { ...entry, hidden } : entry)),
         );
+
+        if (!hidden) {
+            await ensureInboxSectionLoaded(id);
+        }
     }
 
     async function setSectionLabel(id: InboxSectionId, label: string): Promise<void> {
@@ -938,6 +1245,7 @@ export function createEasyReviewSession({ github, store, oauth }: EasyReviewSess
                 entry.id === id ? { ...entry, filter: normalizeSectionFilter(filter, entry.filter) } : entry,
             ),
         );
+        await loadInboxSections([id]);
     }
 
     async function resetSectionFilter(id: InboxSectionId): Promise<void> {
@@ -1706,20 +2014,37 @@ export function createEasyReviewSession({ github, store, oauth }: EasyReviewSess
         return state.state.pullRequestCommits[pullRequestKey(repository, number)] ?? initialCommitsState;
     }
 
-    function relatedRefsFor(repository: string, number: number): { headRefName: string; baseRefName: string } | null {
+    function relatedContextFor(
+        repository: string,
+        number: number,
+    ): { headRefName: string; baseRefName: string; createdAt: string } | null {
         const page = getPullRequestPage(repository, number);
         const source = page.detail ?? page.summary;
         if (!source) {
             return null;
         }
 
-        return { headRefName: source.headRefName, baseRefName: source.baseRefName };
+        return {
+            headRefName: source.headRefName,
+            baseRefName: source.baseRefName,
+            createdAt: source.createdAt,
+        };
+    }
+
+    async function repositoriesForRelatedSearch(repository: string): Promise<Array<string>> {
+        if (state.state.repos.status !== "ready" && state.state.repos.available.length === 0) {
+            await refreshRepositories();
+        }
+
+        return state.state.repos.available
+            .map((entry) => entry.nameWithOwner)
+            .filter((nameWithOwner) => nameWithOwner !== repository);
     }
 
     async function loadRelatedPullRequests(repository: string, number: number): Promise<void> {
         const key = pullRequestKey(repository, number);
-        const refs = relatedRefsFor(repository, number);
-        if (!refs) {
+        const context = relatedContextFor(repository, number);
+        if (!context) {
             return;
         }
 
@@ -1727,16 +2052,14 @@ export function createEasyReviewSession({ github, store, oauth }: EasyReviewSess
         if (
             current &&
             (current.status === "loading" || current.status === "ready") &&
-            current.headRefName === refs.headRefName &&
-            current.baseRefName === refs.baseRefName
+            current.headRefName === context.headRefName &&
+            current.baseRefName === context.baseRefName
         ) {
             return;
         }
 
         const attempt = (latestRelatedPullRequestLoads.get(key) ?? 0) + 1;
         latestRelatedPullRequestLoads.set(key, attempt);
-
-        const repositories = state.state.repos.selected.filter((nameWithOwner) => nameWithOwner !== repository);
 
         state.setState((prev) => ({
             ...prev,
@@ -1745,23 +2068,27 @@ export function createEasyReviewSession({ github, store, oauth }: EasyReviewSess
                 [key]: {
                     status: "loading",
                     items: prev.relatedPullRequests[key]?.items ?? [],
-                    searchedAllDiscovered: false,
-                    expanding: false,
-                    headRefName: refs.headRefName,
-                    baseRefName: refs.baseRefName,
+                    headRefName: context.headRefName,
+                    baseRefName: context.baseRefName,
                     error: null,
                 },
             },
         }));
 
         try {
+            const repositories = await repositoriesForRelatedSearch(repository);
+
+            if (attempt !== latestRelatedPullRequestLoads.get(key)) {
+                return;
+            }
+
             const fetched =
                 repositories.length === 0
                     ? []
                     : await github.listRelatedPullRequests(requireToken(), {
                           repositories,
-                          headRefName: refs.headRefName,
-                          baseRefName: refs.baseRefName,
+                          headRefName: context.headRefName,
+                          baseRefName: context.baseRefName,
                       });
 
             if (attempt !== latestRelatedPullRequestLoads.get(key)) {
@@ -1770,9 +2097,10 @@ export function createEasyReviewSession({ github, store, oauth }: EasyReviewSess
 
             const items = selectRelatedPullRequests({
                 pullRequests: fetched,
-                headRefName: refs.headRefName,
-                baseRefName: refs.baseRefName,
+                headRefName: context.headRefName,
+                baseRefName: context.baseRefName,
                 excludeRepository: repository,
+                focalCreatedAt: context.createdAt,
             });
 
             state.setState((prev) => ({
@@ -1782,10 +2110,8 @@ export function createEasyReviewSession({ github, store, oauth }: EasyReviewSess
                     [key]: {
                         status: "ready",
                         items,
-                        searchedAllDiscovered: false,
-                        expanding: false,
-                        headRefName: refs.headRefName,
-                        baseRefName: refs.baseRefName,
+                        headRefName: context.headRefName,
+                        baseRefName: context.baseRefName,
                         error: null,
                     },
                 },
@@ -1802,116 +2128,8 @@ export function createEasyReviewSession({ github, store, oauth }: EasyReviewSess
                     [key]: {
                         status: "error",
                         items: prev.relatedPullRequests[key]?.items ?? [],
-                        searchedAllDiscovered: prev.relatedPullRequests[key]?.searchedAllDiscovered ?? false,
-                        expanding: false,
-                        headRefName: refs.headRefName,
-                        baseRefName: refs.baseRefName,
-                        error: toSessionError(error),
-                    },
-                },
-            }));
-        }
-    }
-
-    async function expandRelatedPullRequests(repository: string, number: number): Promise<void> {
-        const key = pullRequestKey(repository, number);
-        const refs = relatedRefsFor(repository, number);
-        if (!refs) {
-            return;
-        }
-
-        const current = state.state.relatedPullRequests[key];
-        if (current?.expanding || current?.searchedAllDiscovered) {
-            return;
-        }
-
-        const attempt = (latestRelatedPullRequestLoads.get(key) ?? 0) + 1;
-        latestRelatedPullRequestLoads.set(key, attempt);
-
-        state.setState((prev) => ({
-            ...prev,
-            relatedPullRequests: {
-                ...prev.relatedPullRequests,
-                [key]: {
-                    status: prev.relatedPullRequests[key]?.status === "ready" ? "ready" : "loading",
-                    items: prev.relatedPullRequests[key]?.items ?? [],
-                    searchedAllDiscovered: false,
-                    expanding: true,
-                    headRefName: refs.headRefName,
-                    baseRefName: refs.baseRefName,
-                    error: null,
-                },
-            },
-        }));
-
-        try {
-            if (state.state.repos.status !== "ready" && state.state.repos.available.length === 0) {
-                await refreshRepositories();
-            }
-
-            if (attempt !== latestRelatedPullRequestLoads.get(key)) {
-                return;
-            }
-
-            const allowlist = new Set(state.state.repos.selected);
-            const repositories = state.state.repos.available
-                .map((entry) => entry.nameWithOwner)
-                .filter((nameWithOwner) => nameWithOwner !== repository && !allowlist.has(nameWithOwner));
-
-            const fetched =
-                repositories.length === 0
-                    ? []
-                    : await github.listRelatedPullRequests(requireToken(), {
-                          repositories,
-                          headRefName: refs.headRefName,
-                          baseRefName: refs.baseRefName,
-                      });
-
-            if (attempt !== latestRelatedPullRequestLoads.get(key)) {
-                return;
-            }
-
-            const incoming = selectRelatedPullRequests({
-                pullRequests: fetched,
-                headRefName: refs.headRefName,
-                baseRefName: refs.baseRefName,
-                excludeRepository: repository,
-            });
-
-            state.setState((prev) => {
-                const previous = prev.relatedPullRequests[key];
-                return {
-                    ...prev,
-                    relatedPullRequests: {
-                        ...prev.relatedPullRequests,
-                        [key]: {
-                            status: "ready",
-                            items: mergeRelatedPullRequests(previous?.items ?? [], incoming),
-                            searchedAllDiscovered: true,
-                            expanding: false,
-                            headRefName: refs.headRefName,
-                            baseRefName: refs.baseRefName,
-                            error: null,
-                        },
-                    },
-                };
-            });
-        } catch (error) {
-            if (attempt !== latestRelatedPullRequestLoads.get(key)) {
-                return;
-            }
-
-            state.setState((prev) => ({
-                ...prev,
-                relatedPullRequests: {
-                    ...prev.relatedPullRequests,
-                    [key]: {
-                        status: prev.relatedPullRequests[key]?.items.length ? "ready" : "error",
-                        items: prev.relatedPullRequests[key]?.items ?? [],
-                        searchedAllDiscovered: prev.relatedPullRequests[key]?.searchedAllDiscovered ?? false,
-                        expanding: false,
-                        headRefName: refs.headRefName,
-                        baseRefName: refs.baseRefName,
+                        headRefName: context.headRefName,
+                        baseRefName: context.baseRefName,
                         error: toSessionError(error),
                     },
                 },
@@ -1936,6 +2154,38 @@ export function createEasyReviewSession({ github, store, oauth }: EasyReviewSess
         }));
     }
 
+    function loadedPullRequestSummariesForRepository(repository: string): Array<PullRequestSummary> {
+        return Object.values(state.state.pullRequests).flatMap((view) =>
+            view.detail?.repository === repository ? [view.detail] : [],
+        );
+    }
+
+    function pullRequestsForStackResolution(repository: string): Array<PullRequestSummary> {
+        const index = state.state.repoStackIndices[repository] ?? initialRepoStackIndexState;
+        const loaded = loadedPullRequestSummariesForRepository(repository);
+
+        if (index.status !== "ready") {
+            return loaded;
+        }
+
+        const inboxForRepo = state.state.inbox.pullRequests.filter(
+            (pullRequest) => pullRequest.repository === repository,
+        );
+
+        return mergePullRequestSummaries(mergePullRequestSummaries(index.pullRequests, inboxForRepo), loaded);
+    }
+
+    function withFreshStackSummaries(stack: ResolvedPullRequestStack, repository: string): ResolvedPullRequestStack {
+        const byNumber = new Map(
+            pullRequestsForStackResolution(repository).map((pullRequest) => [pullRequest.number, pullRequest]),
+        );
+
+        return {
+            ...stack,
+            pullRequests: stack.pullRequests.map((pullRequest) => byNumber.get(pullRequest.number) ?? pullRequest),
+        };
+    }
+
     function resolveStackFor(repository: string, number: number): ResolvedPullRequestStack | null {
         if (!areStacksEnabled()) {
             return null;
@@ -1947,7 +2197,7 @@ export function createEasyReviewSession({ github, store, oauth }: EasyReviewSess
         return resolvePullRequestStack({
             repository,
             number,
-            pullRequests: index.pullRequests,
+            pullRequests: pullRequestsForStackResolution(repository),
             defaultBranch: index.defaultBranch,
             hideClosed,
         });
@@ -1978,7 +2228,10 @@ export function createEasyReviewSession({ github, store, oauth }: EasyReviewSess
 
             setRepoStackIndex(repository, {
                 status: "ready",
-                pullRequests: index.pullRequests,
+                pullRequests: mergePullRequestSummaries(
+                    index.pullRequests,
+                    state.state.inbox.pullRequests.filter((pullRequest) => pullRequest.repository === repository),
+                ),
                 defaultBranch: index.defaultBranch,
                 error: null,
                 lastLoadedAt: new Date().toISOString(),
@@ -1995,17 +2248,101 @@ export function createEasyReviewSession({ github, store, oauth }: EasyReviewSess
         }
     }
 
-    function prefetchRepoStackIndices(repositories: ReadonlyArray<string>): void {
-        if (!areStacksEnabled()) {
+    async function loadGraphiteStack(repository: string, number: number): Promise<void> {
+        if (!areStacksEnabled() || resolveStackFor(repository, number)) {
             return;
         }
 
-        for (const repository of repositories) {
-            const current = state.state.repoStackIndices[repository];
-            if (current?.status === "loading" || current?.status === "ready") {
-                continue;
+        const key = pullRequestKey(repository, number);
+        const current = state.state.pullRequestStackOverrides[key];
+        if (current?.status === "loading" || current?.status === "ready") {
+            return;
+        }
+
+        const attempt = (latestGraphiteStackLoads.get(key) ?? 0) + 1;
+        latestGraphiteStackLoads.set(key, attempt);
+
+        state.setState((prev) => ({
+            ...prev,
+            pullRequestStackOverrides: {
+                ...prev.pullRequestStackOverrides,
+                [key]: { status: "loading", stack: null, error: null },
+            },
+        }));
+
+        try {
+            const comments = await github.listPullRequestComments(requireToken(), repository, number);
+            if (attempt !== latestGraphiteStackLoads.get(key)) {
+                return;
             }
-            void loadRepoStackIndex(repository);
+
+            const parsed = comments
+                .map((comment) => parseGraphiteStackComment(comment.body))
+                .find((comment) => comment != null);
+            if (!parsed) {
+                state.setState((prev) => ({
+                    ...prev,
+                    pullRequestStackOverrides: {
+                        ...prev.pullRequestStackOverrides,
+                        [key]: { status: "ready", stack: null, error: null },
+                    },
+                }));
+                return;
+            }
+
+            const summaries = (
+                await Promise.all(
+                    parsed.numbersTopToBottom.map(async (pullRequestNumber) => {
+                        const cached = pullRequestsForStackResolution(repository).find(
+                            (pullRequest) => pullRequest.number === pullRequestNumber,
+                        );
+                        if (cached) {
+                            return cached;
+                        }
+
+                        const results = await github.searchPullRequests(requireToken(), {
+                            query: `https://github.com/${repository}/pull/${pullRequestNumber}`,
+                            repositories: [repository],
+                            limit: 1,
+                        });
+                        return results[0] ?? null;
+                    }),
+                )
+            ).flatMap((pullRequest) => (pullRequest ? [pullRequest] : []));
+
+            if (attempt !== latestGraphiteStackLoads.get(key)) {
+                return;
+            }
+
+            const index = state.state.repoStackIndices[repository] ?? initialRepoStackIndexState;
+            const stack = resolveStackFromGraphiteComment({
+                repository,
+                number,
+                comment: parsed,
+                pullRequests: summaries,
+                defaultBranch: index.defaultBranch,
+                hideClosed: getStackPreferences().hideClosed,
+            });
+
+            state.setState((prev) => ({
+                ...prev,
+                pullRequestStackOverrides: {
+                    ...prev.pullRequestStackOverrides,
+                    [key]: { status: "ready", stack, error: null },
+                },
+            }));
+        } catch (error) {
+            if (attempt !== latestGraphiteStackLoads.get(key)) {
+                return;
+            }
+
+            state.setState((prev) => ({
+                ...prev,
+                pullRequestStackOverrides: {
+                    ...prev.pullRequestStackOverrides,
+                    [key]: { status: "error", stack: null, error: toSessionError(error) },
+                },
+            }));
         }
     }
 
@@ -2019,13 +2356,31 @@ export function createEasyReviewSession({ github, store, oauth }: EasyReviewSess
         }
 
         const index = getRepoStackIndex(repository);
-        const stack = resolveStackFor(repository, number);
+        const key = pullRequestKey(repository, number);
+        const override = state.state.pullRequestStackOverrides[key];
 
-        return {
-            status: index.status,
-            stack,
-            error: index.error,
-        };
+        if (index.status !== "ready" && index.status !== "error") {
+            return { status: "loading", stack: null, error: null };
+        }
+
+        const branchStack = resolveStackFor(repository, number);
+        if (branchStack) {
+            return { status: "ready", stack: branchStack, error: null };
+        }
+
+        if (override?.status === "loading") {
+            return { status: "loading", stack: null, error: null };
+        }
+
+        if (override?.stack) {
+            return { ...override, stack: withFreshStackSummaries(override.stack, repository) };
+        }
+
+        if (override) {
+            return override;
+        }
+
+        return { status: "loading", stack: null, error: null };
     }
 
     async function addPullRequestComment(
@@ -2560,11 +2915,20 @@ export function createEasyReviewSession({ github, store, oauth }: EasyReviewSess
 
     /** Visible sections in the user's layout order, empty ones included when not hidden. */
     function getInboxSections(): Array<InboxSection> {
-        const { inbox, repos, auth } = state.state;
+        const { inbox, repos } = state.state;
         const selected = new Set(repos.selected);
-        const visible = inbox.pullRequests.filter((pullRequest) => selected.has(pullRequest.repository));
+        const sectionPullRequests = Object.fromEntries(
+            Object.entries(inbox.sectionPullRequests).map(([sectionId, pullRequests]) => [
+                sectionId,
+                pullRequests.filter((pullRequest) => selected.has(pullRequest.repository)),
+            ]),
+        );
 
-        return groupIntoSections(visible, auth.viewer?.login ?? "", visibleSectionDefinitions(inbox.sectionLayout));
+        return inboxSectionsFromLoaded(
+            visibleSectionDefinitions(inbox.sectionLayout),
+            sectionPullRequests,
+            inbox.sectionCounts,
+        );
     }
 
     /**
@@ -2577,7 +2941,7 @@ export function createEasyReviewSession({ github, store, oauth }: EasyReviewSess
             return [];
         }
 
-        const link = parseGitHubPullRequestUrl(trimmed);
+        const link = parsePullRequestUrl(trimmed);
         const selected = state.state.repos.selected;
         const selectedSet = new Set(selected);
         const byKey = new Map<string, PullRequestSummary>();
@@ -2648,6 +3012,8 @@ export function createEasyReviewSession({ github, store, oauth }: EasyReviewSess
         refreshInbox,
         revalidateInbox,
         invalidateInbox,
+        canLoadMoreInboxSection,
+        loadMoreInboxSection,
         toggleSection,
         getSectionLayout,
         setSectionHidden,
@@ -2699,9 +3065,9 @@ export function createEasyReviewSession({ github, store, oauth }: EasyReviewSess
         loadPullRequestCommits,
         getPullRequestCommits,
         loadRelatedPullRequests,
-        expandRelatedPullRequests,
         getRelatedPullRequests,
         loadRepoStackIndex,
+        loadGraphiteStack,
         getRepoStackIndex,
         getPullRequestStack,
         addPullRequestComment,

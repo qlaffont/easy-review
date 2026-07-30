@@ -1,4 +1,11 @@
-import type { GithubClient, GithubViewer, GetFileDiffOptions } from "#/lib/session/ports.ts";
+import type {
+    GithubClient,
+    GithubViewer,
+    GetFileDiffOptions,
+    InboxPullRequestPagination,
+    ListPullRequestsOptions,
+    ListPullRequestsResult,
+} from "#/lib/session/ports.ts";
 import type {
     FileDiff,
     Label,
@@ -19,15 +26,21 @@ import type {
     ReviewThreadComment,
 } from "#/lib/session/types.ts";
 
+import {
+    MERGED_PULL_REQUESTS_PER_REPOSITORY,
+    OPEN_PULL_REQUESTS_PER_REPOSITORY,
+} from "#/lib/session/adapters/github-http-client.ts";
 import { applySuggestionsToFile } from "#/lib/session/apply-suggestion.ts";
 import { buildFileDiff } from "#/lib/session/build-file-diff.ts";
 import { stubForPath } from "#/lib/session/diff-policy.ts";
 import { EasyReviewError, unauthorized } from "#/lib/session/errors.ts";
 import {
+    buildScopedSearchQueryBatches,
     comparePullRequestsByUpdatedAtDesc,
     matchesPullRequestSearchQuery,
 } from "#/lib/session/pull-request-search.ts";
 import { matchesRelatedRefs } from "#/lib/session/related-pull-requests.ts";
+import { matchesSectionSearchCountQuery } from "#/lib/session/section-filters.ts";
 
 export type FakeGithub = GithubClient & {
     /** Register a token GitHub will accept, together with the account behind it. */
@@ -46,6 +59,8 @@ export type FakeGithub = GithubClient & {
     setPullRequestFiles(token: string, repository: string, number: number, files: Array<FakeFileInput>): void;
     /** Repository sets asked for, one entry per `listPullRequests` call. */
     pullRequestQueries: Array<ReadonlyArray<string>>;
+    /** Options passed to each `listPullRequests` call, in order. */
+    pullRequestQueryOptions: Array<ListPullRequestsOptions | undefined>;
     /** Related-PR scans, one entry per `listRelatedPullRequests` call. */
     relatedPullRequestQueries: Array<{
         repositories: ReadonlyArray<string>;
@@ -73,10 +88,21 @@ export type FakeGithub = GithubClient & {
     addTimelineItem(token: string, repository: string, number: number, item: PullRequestTimelineItem): void;
     /** Move the head SHA so draft invalidation can be exercised. */
     setPullRequestHead(token: string, repository: string, number: number, headSha: string): void;
+    /** Patch stored pull request fields (title, refs, timestamps, …). */
+    patchPullRequest(
+        token: string,
+        repository: string,
+        number: number,
+        patch: Partial<PullRequestDetail>,
+    ): PullRequestDetail;
     /** Revoke a token so the next call with it fails as unauthorized. */
     revokeAccount(token: string): void;
     /** Make the next call fail, whatever the token. */
     failNextWith(error: EasyReviewError): void;
+    /** Make every call fail until {@link clearFailures} is called. */
+    failAllWith(error: EasyReviewError): void;
+    /** Clear {@link failAllWith}. */
+    clearFailures(): void;
     /** Hold the next call in flight until the returned function is called. */
     deferNext(): () => void;
     /** Names of the client methods called so far, in order. */
@@ -223,12 +249,14 @@ export function createFakeGithub(): FakeGithub {
     const labelsByRepository = new Map<string, Array<RepositoryLabel>>();
     const defaultBranchByRepository = new Map<string, string>();
     const pullRequestQueries: Array<ReadonlyArray<string>> = [];
+    const pullRequestQueryOptions: Array<ListPullRequestsOptions | undefined> = [];
     const relatedPullRequestQueries: FakeGithub["relatedPullRequestQueries"] = [];
     const stackIndexQueries: FakeGithub["stackIndexQueries"] = [];
     const fileDiffQueries: Array<string> = [];
     const submittedReviews: FakeGithub["submittedReviews"] = [];
     const calls: Array<string> = [];
     let forcedError: EasyReviewError | null = null;
+    let forcedErrorAll: EasyReviewError | null = null;
     let gate: Promise<void> | null = null;
     let replyCounter = 0;
     let conversationCommentCounter = 0;
@@ -302,6 +330,10 @@ export function createFakeGithub(): FakeGithub {
     }
 
     function authenticate(token: string): GithubViewer {
+        if (forcedErrorAll) {
+            throw forcedErrorAll;
+        }
+
         if (forcedError) {
             const error = forcedError;
             forcedError = null;
@@ -368,9 +400,37 @@ export function createFakeGithub(): FakeGithub {
         }
     }
 
+    function parseInboxCursor(cursor: string | undefined): number {
+        if (!cursor) {
+            return 0;
+        }
+
+        const parsed = Number.parseInt(cursor, 10);
+        return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
+    }
+
+    function paginatePullRequests(
+        pullRequests: Array<PullRequestSummary>,
+        pageSize: number,
+        cursor: string | undefined,
+    ) {
+        const offset = parseInboxCursor(cursor);
+        const nodes = pullRequests.slice(offset, offset + pageSize);
+        const nextOffset = offset + pageSize;
+
+        return {
+            nodes,
+            pageInfo: {
+                hasNextPage: nextOffset < pullRequests.length,
+                endCursor: nextOffset < pullRequests.length ? String(nextOffset) : null,
+            },
+        };
+    }
+
     return {
         calls,
         pullRequestQueries,
+        pullRequestQueryOptions,
         relatedPullRequestQueries,
         stackIndexQueries,
         fileDiffQueries,
@@ -487,6 +547,9 @@ export function createFakeGithub(): FakeGithub {
                 ),
             );
         },
+        patchPullRequest(token, repository, number, patch) {
+            return patchPullRequest(token, repository, number, patch);
+        },
         setPullRequestFiles(token, repository, number, files) {
             filesByPullRequest.set(
                 filesKey(token, repository, number),
@@ -536,6 +599,13 @@ export function createFakeGithub(): FakeGithub {
         failNextWith(error) {
             forcedError = error;
         },
+        failAllWith(error) {
+            forcedErrorAll = error;
+        },
+        clearFailures() {
+            forcedErrorAll = null;
+            forcedError = null;
+        },
         deferNext() {
             let release!: () => void;
             const held = new Promise<void>((resolve) => {
@@ -559,15 +629,55 @@ export function createFakeGithub(): FakeGithub {
                 return repositoriesByToken.get(token) ?? [];
             });
         },
-        listPullRequests(token, repositories) {
+        listPullRequests(token, repositories, options) {
             pullRequestQueries.push(repositories);
+            pullRequestQueryOptions.push(options);
 
-            return respond("listPullRequests", () => {
+            return respond("listPullRequests", (): ListPullRequestsResult => {
                 authenticate(token);
-                const wanted = new Set(repositories);
-                return (pullRequestsByToken.get(token) ?? [])
-                    .filter((pullRequest) => wanted.has(pullRequest.repository))
-                    .map(toSummary);
+                const fetchOpen = !options?.states || options.states.includes("open");
+                const fetchMerged = !options?.states || options.states.includes("merged");
+                const pullRequests: Array<PullRequestSummary> = [];
+                const pagination: Record<string, Partial<InboxPullRequestPagination>> = {};
+
+                for (const repository of repositories) {
+                    const inRepository = (pullRequestsByToken.get(token) ?? []).filter(
+                        (pullRequest) => pullRequest.repository === repository,
+                    );
+                    const repoPagination: Partial<InboxPullRequestPagination> = {};
+
+                    if (fetchOpen) {
+                        const openPullRequests = inRepository
+                            .filter((pullRequest) => pullRequest.state === "open")
+                            .sort(comparePullRequestsByUpdatedAtDesc)
+                            .map(toSummary);
+                        const page = paginatePullRequests(
+                            openPullRequests,
+                            OPEN_PULL_REQUESTS_PER_REPOSITORY,
+                            options?.cursors?.[repository]?.open,
+                        );
+                        pullRequests.push(...page.nodes);
+                        repoPagination.open = page.pageInfo;
+                    }
+
+                    if (fetchMerged) {
+                        const mergedPullRequests = inRepository
+                            .filter((pullRequest) => pullRequest.state === "merged")
+                            .sort(comparePullRequestsByUpdatedAtDesc)
+                            .map(toSummary);
+                        const page = paginatePullRequests(
+                            mergedPullRequests,
+                            MERGED_PULL_REQUESTS_PER_REPOSITORY,
+                            options?.cursors?.[repository]?.merged,
+                        );
+                        pullRequests.push(...page.nodes);
+                        repoPagination.merged = page.pageInfo;
+                    }
+
+                    pagination[repository] = repoPagination;
+                }
+
+                return { pullRequests, pagination };
             });
         },
         searchPullRequests(token, input) {
@@ -587,6 +697,74 @@ export function createFakeGithub(): FakeGithub {
                     .sort(comparePullRequestsByUpdatedAtDesc)
                     .slice(0, limit)
                     .map(toSummary);
+            });
+        },
+        countPullRequests(token, input) {
+            return respond("countPullRequests", () => {
+                authenticate(token);
+                const query = input.query.trim();
+                if (!query || input.repositories.length === 0) {
+                    return 0;
+                }
+
+                const viewerLogin = accounts.get(token)?.login ?? "";
+                const batches = buildScopedSearchQueryBatches(query, input.repositories);
+                let total = 0;
+
+                for (const batchQuery of batches) {
+                    const reposInBatch = new Set(
+                        [...batchQuery.matchAll(/\srepo:([^\s]+)/g)].map((match) => match[1]!),
+                    );
+                    const baseQuery = batchQuery.replace(/\srepo:[^\s]+/g, "").trim();
+
+                    total += (pullRequestsByToken.get(token) ?? []).filter(
+                        (pullRequest) =>
+                            reposInBatch.has(pullRequest.repository) &&
+                            matchesSectionSearchCountQuery(toSummary(pullRequest), baseQuery, viewerLogin),
+                    ).length;
+                }
+
+                return total;
+            });
+        },
+        fetchSectionPullRequests(token, input) {
+            return respond("fetchSectionPullRequests", () => {
+                authenticate(token);
+                const query = input.query.trim();
+                if (!query || input.repositories.length === 0) {
+                    return {
+                        pullRequests: [],
+                        totalCount: 0,
+                        pageInfo: { hasNextPage: false, endCursor: null },
+                    };
+                }
+
+                const viewerLogin = accounts.get(token)?.login ?? "";
+                const wanted = new Set(input.repositories);
+                const baseQuery = query.replace(/\ssort:updated-desc$/, "").trim();
+                const limit = Math.min(Math.max(input.limit ?? 10, 1), 50);
+                const offset = input.after ? Number(input.after) : 0;
+
+                const matching = (pullRequestsByToken.get(token) ?? [])
+                    .filter(
+                        (pullRequest) =>
+                            wanted.has(pullRequest.repository) &&
+                            matchesSectionSearchCountQuery(toSummary(pullRequest), baseQuery, viewerLogin),
+                    )
+                    .sort(comparePullRequestsByUpdatedAtDesc);
+
+                const pullRequests = matching.slice(offset, offset + limit).map(toSummary);
+                const totalCount = matching.length;
+                const nextOffset = offset + pullRequests.length;
+
+                return {
+                    pullRequests,
+                    totalCount,
+                    pageInfo: {
+                        hasNextPage: nextOffset < totalCount,
+                        endCursor: nextOffset < totalCount ? String(nextOffset) : null,
+                    },
+                };
             });
         },
         listRelatedPullRequests(token, input) {

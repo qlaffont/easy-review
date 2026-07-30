@@ -1,5 +1,8 @@
 import type { PullRequestState, PullRequestSummary } from "#/lib/session/types.ts";
 
+/** Related PRs must be created within this many days of the focal PR's creation. */
+export const RELATED_CREATED_WINDOW_DAYS = 7;
+
 /** @deprecated Related matches no longer age-filter merged PRs. Kept for older imports. */
 export const RELATED_CLOSED_MERGED_MAX_AGE_MS = 90 * 24 * 60 * 60 * 1000;
 
@@ -34,12 +37,26 @@ export function isRelatedMatchEligible(pullRequest: Pick<PullRequestSummary, "st
     return pullRequest.state !== "closed";
 }
 
-/** @deprecated Use {@link isRelatedMatchEligible}. */
-export function isRelatedAgeEligible(
-    pullRequest: Pick<PullRequestSummary, "state" | "updatedAt">,
-    _nowMs: number = Date.now(),
+export function isRelatedCreatedEligible(
+    pullRequest: Pick<PullRequestSummary, "createdAt">,
+    focalCreatedAt: string,
 ): boolean {
-    return isRelatedMatchEligible(pullRequest);
+    const focalMs = Date.parse(focalCreatedAt);
+    const createdMs = Date.parse(pullRequest.createdAt);
+    if (Number.isNaN(focalMs) || Number.isNaN(createdMs)) {
+        return true;
+    }
+
+    const windowMs = RELATED_CREATED_WINDOW_DAYS * 24 * 60 * 60 * 1000;
+    return Math.abs(createdMs - focalMs) <= windowMs;
+}
+
+/** @deprecated Use {@link isRelatedCreatedEligible}. */
+export function isRelatedAgeEligible(
+    pullRequest: Pick<PullRequestSummary, "state" | "createdAt" | "updatedAt">,
+    focalCreatedAt: string,
+): boolean {
+    return isRelatedMatchEligible(pullRequest) && isRelatedCreatedEligible(pullRequest, focalCreatedAt);
 }
 
 export function sortRelatedPullRequests(pullRequests: ReadonlyArray<PullRequestSummary>): Array<PullRequestSummary> {
@@ -74,11 +91,12 @@ export function selectRelatedPullRequests(input: {
     headRefName: string;
     baseRefName: string;
     excludeRepository: string;
-    nowMs?: number;
+    focalCreatedAt: string;
 }): Array<PullRequestSummary> {
     const matched = input.pullRequests.filter(
         (pullRequest) =>
             isRelatedMatchEligible(pullRequest) &&
+            isRelatedCreatedEligible(pullRequest, input.focalCreatedAt) &&
             pullRequest.repository !== input.excludeRepository &&
             matchesRelatedRefs(pullRequest, input.headRefName, input.baseRefName),
     );
