@@ -15,8 +15,9 @@ import {
 import { useEffect, useState } from "react";
 
 import type { PullRequestStackState } from "#/lib/session/session.ts";
-import type { PullRequestSummary } from "#/lib/session/types.ts";
+import type { PullRequestSummary, ReviewDecision } from "#/lib/session/types.ts";
 
+import { ChecksDot } from "#/components/pr/checks-dot.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import {
     DropdownMenu,
@@ -69,6 +70,33 @@ function stackStatusLabel(pullRequest: PullRequestSummary): string {
     return "Open";
 }
 
+const REVIEW_DECISION_LABEL: Record<NonNullable<ReviewDecision>, string> = {
+    approved: "Approved",
+    "changes-requested": "Changes requested",
+    "review-required": "Review required",
+};
+
+const REVIEW_DECISION_CLASS: Record<NonNullable<ReviewDecision>, string> = {
+    approved: "text-emerald-700 dark:text-emerald-400",
+    "changes-requested": "text-rose-700 dark:text-rose-400",
+    "review-required": "text-amber-700 dark:text-amber-400",
+};
+
+function stackReviewStatus(pullRequest: PullRequestSummary): { label: string; className: string } | null {
+    if (pullRequest.state !== "open" || pullRequest.isDraft) {
+        return null;
+    }
+
+    if (!pullRequest.reviewDecision) {
+        return { label: "No review", className: "text-muted-foreground" };
+    }
+
+    return {
+        label: REVIEW_DECISION_LABEL[pullRequest.reviewDecision],
+        className: REVIEW_DECISION_CLASS[pullRequest.reviewDecision],
+    };
+}
+
 async function copyText(label: string, value: string): Promise<void> {
     await navigator.clipboard.writeText(value);
     notifyCopied(label);
@@ -85,6 +113,7 @@ function usePullRequestStackState(repository: string, number: number): PullReque
         (storeState) => storeState.pullRequestStackOverrides[`${repository}#${number}`],
     );
 
+    // Branch-name resolution needs the repo-wide index; load it as soon as stacks are enabled.
     useEffect(() => {
         if (!stackPreferences.enabled) {
             return;
@@ -100,6 +129,7 @@ function usePullRequestStackState(repository: string, number: number): PullReque
         return session.getPullRequestStack(repository, number);
     });
 
+    // Graphite comments are a fallback — only fetch after branch resolution finishes without a match.
     useEffect(() => {
         if (!stackPreferences.enabled || stackState.stack) {
             return;
@@ -107,9 +137,13 @@ function usePullRequestStackState(repository: string, number: number): PullReque
 
         const indexStatus = indexState?.status ?? "idle";
         const overrideStatus = overrideState?.status ?? "idle";
+
+        // Wait for the repo index; branch names are tried before Graphite comments.
         if (indexStatus === "idle" || indexStatus === "loading") {
             return;
         }
+
+        // Skip if this PR's Graphite override is already loading or settled.
         if (overrideStatus === "loading" || overrideStatus === "ready") {
             return;
         }
@@ -281,6 +315,9 @@ function StackPanelLoading() {
 }
 
 function StackRowContent({ pullRequest }: { pullRequest: PullRequestSummary }) {
+    const reviewStatus = stackReviewStatus(pullRequest);
+    const showChecks = pullRequest.state === "open" && !pullRequest.isDraft;
+
     return (
         <div className="flex min-w-0 flex-col gap-1">
             <span className="flex min-w-0 items-center gap-2">
@@ -289,7 +326,14 @@ function StackRowContent({ pullRequest }: { pullRequest: PullRequestSummary }) {
                 <span className="shrink-0 text-xs text-muted-foreground tabular-nums">#{pullRequest.number}</span>
             </span>
             <span className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                {showChecks ? <ChecksDot state={pullRequest.checks} /> : null}
                 <span>{stackStatusLabel(pullRequest)}</span>
+                {reviewStatus ? (
+                    <>
+                        <span aria-hidden="true">·</span>
+                        <span className={reviewStatus.className}>{reviewStatus.label}</span>
+                    </>
+                ) : null}
                 <span aria-hidden="true">·</span>
                 <RelativeTime iso={pullRequest.updatedAt} createdAt={pullRequest.createdAt} />
             </span>

@@ -199,6 +199,16 @@ function authorizationHeaders(token: string): HeadersInit {
     return { authorization: `Bearer ${token}` };
 }
 
+/** Numeric offset cursor used when merging multi-repo section search batches. */
+function parseSectionSearchOffset(cursor: string | null | undefined): number {
+    if (!cursor) {
+        return 0;
+    }
+
+    const parsed = Number.parseInt(cursor, 10);
+    return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
+}
+
 export function createGithubHttpClient(
     fetchImpl: typeof fetch = globalThis.fetch,
     options: GithubHttpClientOptions = {},
@@ -509,11 +519,13 @@ export function createGithubHttpClient(
                 };
             }
 
+            const offset = parseSectionSearchOffset(input.after);
+            const fetchSize = Math.min(offset + limit, 100);
             const pages = await Promise.all(
                 batches.map((query) =>
                     graphql<SectionSearchPullRequestsQuery>(token, SECTION_SEARCH_PULL_REQUESTS_QUERY, {
                         query,
-                        first: limit,
+                        first: fetchSize,
                     }),
                 ),
             );
@@ -527,14 +539,20 @@ export function createGithubHttpClient(
                 }
             }
 
-            const pullRequests = [...byKey.values()].sort(comparePullRequestsByUpdatedAtDesc).slice(0, limit);
+            const merged = [...byKey.values()].sort(comparePullRequestsByUpdatedAtDesc);
+            const pullRequests = merged.slice(offset, offset + limit);
+            const nextOffset = offset + pullRequests.length;
             const hasNextPage =
-                totalCount > pullRequests.length || pages.some((page) => page.search.pageInfo.hasNextPage);
+                nextOffset < totalCount &&
+                (nextOffset < merged.length || pages.some((page) => page.search.pageInfo.hasNextPage));
 
             return {
                 pullRequests,
                 totalCount,
-                pageInfo: { hasNextPage, endCursor: null },
+                pageInfo: {
+                    hasNextPage,
+                    endCursor: hasNextPage ? String(nextOffset) : null,
+                },
             };
         },
 

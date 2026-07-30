@@ -39,12 +39,13 @@ export function useRegisterCopyMenu(controls: CopyMenuControls) {
 
 /**
  * Graphite-style clipboard chords. `C` opens the copy dropdown when mounted;
- * `C` then L/T/G/B/C runs the matching copy action.
+ * `C` then L/T/G/B/C runs the matching copy action without opening the menu.
  */
 export function ClipboardHotkeys({ children }: { children?: React.ReactNode }) {
     const bridge = useActionsBridge();
     const enabled = bridge.target !== null;
     const menuRef = useRef<CopyMenuControls | null>(null);
+    const pendingMenuOpenRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
     const [copyMenuBridge] = useState<CopyMenuBridge>(() => ({
         register(controls) {
@@ -52,8 +53,16 @@ export function ClipboardHotkeys({ children }: { children?: React.ReactNode }) {
         },
     }));
 
+    const cancelPendingMenuOpen = useCallback(() => {
+        if (pendingMenuOpenRef.current !== null) {
+            clearTimeout(pendingMenuOpenRef.current);
+            pendingMenuOpenRef.current = null;
+        }
+    }, []);
+
     const run = useCallback(
         (actionId: string) => {
+            cancelPendingMenuOpen();
             const action = findAction(actionId);
             if (!action) {
                 return;
@@ -65,13 +74,23 @@ export function ClipboardHotkeys({ children }: { children?: React.ReactNode }) {
             void action.run(context);
             menuRef.current?.close();
         },
-        [bridge],
+        [bridge, cancelPendingMenuOpen],
     );
+
+    useEffect(() => {
+        return () => {
+            cancelPendingMenuOpen();
+        };
+    }, [cancelPendingMenuOpen]);
 
     useHotkey(
         "C",
         () => {
-            menuRef.current?.open();
+            cancelPendingMenuOpen();
+            pendingMenuOpenRef.current = setTimeout(() => {
+                pendingMenuOpenRef.current = null;
+                menuRef.current?.open();
+            }, 350);
         },
         { enabled, preventDefault: true, ignoreInputs: true },
     );

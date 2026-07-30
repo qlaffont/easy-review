@@ -888,7 +888,7 @@ export function createEasyReviewSession({ github, store, oauth }: EasyReviewSess
                     totalCount: matched.length,
                     pageInfo: {
                         hasNextPage: matched.length > pullRequests.length,
-                        endCursor: null,
+                        endCursor: matched.length > pullRequests.length ? String(pullRequests.length) : null,
                     },
                 });
             } catch (error) {
@@ -1082,14 +1082,41 @@ export function createEasyReviewSession({ github, store, oauth }: EasyReviewSess
         }
 
         const query = sectionFilterToSearchQuery(entry.filter, viewerLogin);
-        if (!query) {
-            return;
-        }
 
         setInbox({ loadingMoreSection: sectionId, error: null });
 
         try {
             const loaded = state.state.inbox.sectionPullRequests[sectionId] ?? [];
+
+            if (!query) {
+                const selectedSet = new Set(selected);
+                const matched = state.state.inbox.pullRequests
+                    .filter(
+                        (pullRequest) =>
+                            selectedSet.has(pullRequest.repository) &&
+                            matchSectionFilter(pullRequest, entry.filter, viewerLogin),
+                    )
+                    .sort(comparePullRequestsByUpdatedAtDesc);
+                const offset = loaded.length;
+                const nextOffset = Math.min(matched.length, offset + INBOX_SECTION_LOAD_SIZE);
+                const pullRequests = matched.slice(0, nextOffset);
+
+                setInbox({
+                    sectionPullRequests: { ...state.state.inbox.sectionPullRequests, [sectionId]: pullRequests },
+                    sectionCounts: { ...state.state.inbox.sectionCounts, [sectionId]: matched.length },
+                    sectionPagination: {
+                        ...state.state.inbox.sectionPagination,
+                        [sectionId]: {
+                            hasNextPage: nextOffset < matched.length,
+                            endCursor: nextOffset < matched.length ? String(nextOffset) : null,
+                        },
+                    },
+                    loadingMoreSection: null,
+                    error: null,
+                });
+                return;
+            }
+
             const page = await github.fetchSectionPullRequests(requireToken(), {
                 query,
                 repositories: selected,
@@ -2249,6 +2276,7 @@ export function createEasyReviewSession({ github, store, oauth }: EasyReviewSess
     }
 
     async function loadGraphiteStack(repository: string, number: number): Promise<void> {
+        // Branch-name stacks take precedence; Graphite comments are only a fallback.
         if (!areStacksEnabled() || resolveStackFor(repository, number)) {
             return;
         }

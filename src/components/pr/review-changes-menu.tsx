@@ -12,7 +12,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "#/components/ui/popover
 import { mentionCandidatesFromPullRequest } from "#/lib/composer-commands.ts";
 import { useDiffPreferences } from "#/lib/diff-preferences.ts";
 import { useSession } from "#/lib/session/provider.tsx";
-import { notifyAction, notifySuccess } from "#/lib/toast.ts";
+import { notifyAction, notifyActionWithInboxPrompt, notifySuccess } from "#/lib/toast.ts";
 import { cn } from "#/lib/utils.ts";
 
 const EVENTS: Array<{ value: ReviewEvent; label: string; hint: string }> = [
@@ -72,15 +72,21 @@ export function ReviewChangesMenu({ repository, number }: { repository: string; 
         setError(null);
 
         try {
-            await notifyAction(() => session.submitReview(repository, number), {
-                loading: "Submitting review…",
-                success: "Review submitted",
-                error: "Could not submit the review.",
-            });
+            await notifyActionWithInboxPrompt(
+                () => session.submitReview(repository, number),
+                {
+                    loading: "Submitting review…",
+                    success: "Review submitted",
+                    error: "Could not submit the review.",
+                },
+                {
+                    returnToInbox: preferences.returnToInboxAfterReviewOrMerge,
+                    onGoToInbox: () => {
+                        void navigate({ to: "/" });
+                    },
+                },
+            );
             setOpen(false);
-            if (preferences.returnToInboxAfterReviewOrMerge) {
-                void navigate({ to: "/" });
-            }
         } catch (cause) {
             setError(cause instanceof Error ? cause.message : "Could not submit the review.");
         } finally {

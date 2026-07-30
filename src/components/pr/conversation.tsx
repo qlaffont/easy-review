@@ -486,9 +486,12 @@ function TimelineReviewThread({
                         {thread.diffHunk ? (
                             <DiffHunkPreview hunk={thread.diffHunk} focusLine={thread.line} side={thread.side} />
                         ) : null}
-                        <div className="flex flex-col gap-3 px-3 py-3">
-                            {thread.comments.map((comment) => (
-                                <div key={comment.id} className="min-w-0">
+                        <div className="px-3 pb-3">
+                            {thread.comments.map((comment, index) => (
+                                <div
+                                    key={comment.id}
+                                    className={cn("min-w-0 py-3", index > 0 && "border-t border-border")}
+                                >
                                     <header className="mb-1.5 flex flex-wrap items-center gap-2 text-xs">
                                         <AvatarTiny login={comment.author} avatarUrl={comment.authorAvatarUrl} />
                                         <span className="font-semibold text-foreground">{comment.author}</span>

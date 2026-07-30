@@ -265,11 +265,11 @@ function ThreadCommentCard({
                 </span>
             </button>
             {open ? (
-                <div className="flex flex-col gap-3 px-3 py-2">
-                    {thread.comments.map((comment) => {
+                <div className="px-3 pb-2">
+                    {thread.comments.map((comment, index) => {
                         const isAuthor = viewerLogin !== null && comment.author === viewerLogin;
                         return (
-                            <div key={comment.id}>
+                            <div key={comment.id} className={cn("py-3", index > 0 && "border-t border-border")}>
                                 <header className="mb-1.5 flex flex-wrap items-start justify-between gap-2">
                                     <div className="flex min-w-0 items-center gap-2">
                                         <AvatarTiny login={comment.author} avatarUrl={comment.authorAvatarUrl} />

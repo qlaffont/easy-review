@@ -35,7 +35,7 @@ import {
 } from "#/components/ui/dropdown-menu.tsx";
 import { useDiffPreferences } from "#/lib/diff-preferences.ts";
 import { useSession } from "#/lib/session/provider.tsx";
-import { notifyAction } from "#/lib/toast.ts";
+import { notifyAction, notifyActionWithInboxPrompt } from "#/lib/toast.ts";
 import { cn } from "#/lib/utils.ts";
 
 const MERGE_METHOD_ORDER: Array<MergeMethod> = ["merge", "squash", "rebase"];
@@ -110,18 +110,35 @@ export function PullRequestControls({ detail }: { detail: PullRequestDetail }) {
     }
 
     async function mergePullRequest(method: MergeMethod) {
-        const ok = await run(
-            async () => {
-                await session.mergePullRequest(detail.repository, detail.number, method);
-            },
-            {
-                loading: "Merging pull request…",
-                success: "Pull request merged",
-                error: "Could not merge the pull request.",
-            },
-        );
-        if (ok && preferences.returnToInboxAfterReviewOrMerge) {
-            void navigate({ to: "/" });
+        if (busyRef.current) {
+            return;
+        }
+
+        busyRef.current = true;
+        setBusy(true);
+        setError(null);
+        try {
+            await notifyActionWithInboxPrompt(
+                async () => {
+                    await session.mergePullRequest(detail.repository, detail.number, method);
+                },
+                {
+                    loading: "Merging pull request…",
+                    success: "Pull request merged",
+                    error: "Could not merge the pull request.",
+                },
+                {
+                    returnToInbox: preferences.returnToInboxAfterReviewOrMerge,
+                    onGoToInbox: () => {
+                        void navigate({ to: "/" });
+                    },
+                },
+            );
+        } catch (cause) {
+            setError(cause instanceof Error ? cause.message : "That action failed.");
+        } finally {
+            busyRef.current = false;
+            setBusy(false);
         }
     }
 

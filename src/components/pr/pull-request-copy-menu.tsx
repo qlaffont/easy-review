@@ -62,7 +62,13 @@ export function PullRequestCopyMenu({
     const checkout = `gh pr checkout ${number} --repo ${owner}/${repo}`;
 
     useRegisterCopyMenu({
-        open: () => setOpen(true),
+        open: () => {
+            const scrollY = window.scrollY;
+            setOpen(true);
+            requestAnimationFrame(() => {
+                window.scrollTo({ top: scrollY });
+            });
+        },
         close: () => setOpen(false),
     });
 
@@ -81,7 +87,7 @@ export function PullRequestCopyMenu({
                     </Button>
                 </DropdownMenuTrigger>
             </HelpTooltip>
-            <DropdownMenuContent align="end" className="min-w-64">
+            <DropdownMenuContent align="end" className="min-w-64" onCloseAutoFocus={(event) => event.preventDefault()}>
                 <DropdownMenuItem
                     className="cursor-pointer"
                     onSelect={() => {

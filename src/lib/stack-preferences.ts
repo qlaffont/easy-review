@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 export type StackPreferences = {
     /** When false, no stack UI or repo index fetches run. */
     enabled: boolean;
+
     /** Hide closed pull requests in the PR stack panel. */
     hideClosed: boolean;
 };
@@ -37,6 +38,7 @@ function readPreferences(): StackPreferences {
 
 type PreferencesListener = (preferences: StackPreferences) => void;
 
+/** Shared in-memory cache so React hooks and session code read the same prefs. */
 let cachedPreferences: StackPreferences | null = null;
 const preferencesListeners = new Set<PreferencesListener>();
 

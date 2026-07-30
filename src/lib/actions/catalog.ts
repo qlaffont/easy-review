@@ -2,7 +2,7 @@ import type { EasyReviewSession } from "#/lib/session/session.ts";
 import type { PullRequestState } from "#/lib/session/types.ts";
 
 import { shouldReturnToInboxAfterReviewOrMerge } from "#/lib/diff-preferences.ts";
-import { notifyAction } from "#/lib/toast.ts";
+import { notifyAction, notifyActionWithInboxPrompt } from "#/lib/toast.ts";
 
 /**
  * The pull request the keyboard selection or the open page is focused on. Copy and lifecycle
@@ -270,17 +270,18 @@ export const APP_ACTIONS: ReadonlyArray<AppAction> = [
             if (!context.confirm(`Squash-merge ${context.target.repository}#${context.target.number}?`)) {
                 return;
             }
-            await notifyAction(
+            await notifyActionWithInboxPrompt(
                 () => context.session.mergePullRequest(context.target!.repository, context.target!.number, "squash"),
                 {
                     loading: "Merging pull request…",
                     success: "Pull request merged",
                     error: "Could not merge the pull request.",
                 },
+                {
+                    returnToInbox: shouldReturnToInboxAfterReviewOrMerge(),
+                    onGoToInbox: context.goToInbox,
+                },
             );
-            if (shouldReturnToInboxAfterReviewOrMerge()) {
-                context.goToInbox();
-            }
         },
     },
     {
@@ -290,7 +291,7 @@ export const APP_ACTIONS: ReadonlyArray<AppAction> = [
         when: (context) => onPullRequest(context) && hasOpenTarget(context),
         run: async (context) => {
             if (!context.target) return;
-            await notifyAction(
+            await notifyActionWithInboxPrompt(
                 async () => {
                     await context.session.setReviewEvent(context.target!.repository, context.target!.number, "comment");
                     await context.session.submitReview(context.target!.repository, context.target!.number);
@@ -300,10 +301,11 @@ export const APP_ACTIONS: ReadonlyArray<AppAction> = [
                     success: "Review submitted",
                     error: "Could not submit the review.",
                 },
+                {
+                    returnToInbox: shouldReturnToInboxAfterReviewOrMerge(),
+                    onGoToInbox: context.goToInbox,
+                },
             );
-            if (shouldReturnToInboxAfterReviewOrMerge()) {
-                context.goToInbox();
-            }
         },
     },
 ];

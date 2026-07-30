@@ -2,6 +2,7 @@ import { useSelector } from "@tanstack/react-store";
 import {
     ChevronDown,
     ChevronRight,
+    CheckCircle2,
     FileCode2,
     FileDiff,
     FileMinus2,
@@ -72,6 +73,8 @@ export function ReviewChanges({
     const commits = useSelector(session.state, () => session.getPullRequestCommits(repository, number));
     const viewer = useSelector(session.state, (state) => state.auth.viewer);
     const [selectedPath, setSelectedPath] = useState<string | null>(initialPath ?? null);
+    const [browsingViewedFile, setBrowsingViewedFile] = useState(Boolean(initialPath));
+    const allViewedRef = useRef(false);
     const selectedDiff = useSelector(session.state, () =>
         selectedPath ? session.getFileDiff(repository, number, selectedPath) : null,
     );
@@ -103,6 +106,11 @@ export function ReviewChanges({
     const filesEpoch = isolatingRange
         ? `${commitRange.baseOid}:${commitRange.headOid}:${rangeFilesStatus}`
         : page.files.lastLoadedAt;
+
+    const viewedCount = filesItems.filter((file) => fileViewState(viewedMarks, file.path, headSha) === "viewed").length;
+    const allViewed = filesStatus === "ready" && filesItems.length > 0 && viewedCount === filesItems.length;
+    const showFileDiff = selectedPath !== null && (!allViewed || browsingViewedFile);
+    const fileListSelectedPath = showFileDiff ? selectedPath : null;
 
     useEffect(() => {
         void session.loadPullRequestFiles(repository, number);
@@ -154,16 +162,29 @@ export function ReviewChanges({
     useEffect(() => {
         if (initialPath) {
             setSelectedPath(initialPath);
+            setBrowsingViewedFile(true);
             return;
         }
 
-        if (!selectedPath && filesItems[0]) {
+        if (!selectedPath && filesItems[0] && !allViewed) {
             setSelectedPath(filesItems[0].path);
         }
-    }, [filesItems, selectedPath, initialPath]);
+    }, [filesItems, selectedPath, initialPath, allViewed]);
 
     useEffect(() => {
-        if (!selectedPath) {
+        if (allViewed && !allViewedRef.current) {
+            setBrowsingViewedFile(false);
+        }
+        allViewedRef.current = allViewed;
+    }, [allViewed]);
+
+    function selectFile(path: string) {
+        setSelectedPath(path);
+        setBrowsingViewedFile(true);
+    }
+
+    useEffect(() => {
+        if (!selectedPath || !showFileDiff) {
             return;
         }
 
@@ -199,12 +220,11 @@ export function ReviewChanges({
                 setRangeDiffStatus("error");
                 setRangeDiffError(cause instanceof Error ? cause.message : "Could not load the file.");
             });
-    }, [session, repository, number, selectedPath, filesEpoch, commitRange, filesItems]);
+    }, [session, repository, number, selectedPath, filesEpoch, commitRange, filesItems, showFileDiff]);
 
     const pendingOnFile = draft.comments.filter((comment) => comment.path === selectedPath);
     const threadsOnFile = selectedPath ? threads.items.filter((thread) => thread.path === selectedPath) : [];
     const fileCount = filesStatus === "ready" ? filesItems.length : null;
-    const viewedCount = filesItems.filter((file) => fileViewState(viewedMarks, file.path, headSha) === "viewed").length;
     const selectedFile = filesItems.find((file) => file.path === selectedPath) ?? null;
     const activeDiff = isolatingRange ? rangeDiff : (selectedDiff?.diff ?? null);
     const diffPending = isolatingRange
@@ -265,6 +285,7 @@ export function ReviewChanges({
                 orderedPaths.slice(0, index).find((candidate) => !isViewed(candidate));
             if (nextPath) {
                 setSelectedPath(nextPath);
+                setBrowsingViewedFile(true);
             }
         }
     }
@@ -454,13 +475,13 @@ export function ReviewChanges({
                             <FileList
                                 files={filesItems}
                                 status={filesStatus}
-                                selectedPath={selectedPath}
+                                selectedPath={fileListSelectedPath}
                                 viewedMarks={viewedMarks}
                                 headSha={headSha}
                                 pendingPaths={new Set(draft.comments.map((comment) => comment.path))}
                                 layout={preferences.fileListLayout}
                                 onLayoutChange={(fileListLayout) => setPreferences({ fileListLayout })}
-                                onSelect={setSelectedPath}
+                                onSelect={selectFile}
                             />
                         </div>
                         {preferences.showFileList ? (
@@ -472,7 +493,7 @@ export function ReviewChanges({
                         ) : null}
                     </aside>
                     <div className="flex min-h-0 min-w-0 flex-1 flex-col p-2 transition-[padding] duration-300 ease-out motion-reduce:transition-none">
-                        {selectedPath ? (
+                        {showFileDiff && selectedPath ? (
                             <Suspense fallback={<DiffLoadingSkeleton path={selectedPath} />}>
                                 <FileDiffViewer
                                     path={selectedPath}
@@ -547,6 +568,8 @@ export function ReviewChanges({
                                     }}
                                 />
                             </Suspense>
+                        ) : allViewed ? (
+                            <AllFilesViewedPanel />
                         ) : (
                             <p className="p-6 text-sm text-muted-foreground">Select a file to review its diff.</p>
                         )}
@@ -563,6 +586,31 @@ export function ReviewChanges({
                     </div>
                 ) : null}
             </section>
+        </div>
+    );
+}
+
+function AllFilesViewedPanel() {
+    return (
+        <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-5 p-8 text-center">
+            <div
+                role="status"
+                aria-label="All files viewed"
+                className="relative grid size-20 place-items-center rounded-2xl border border-emerald-500/25 bg-gradient-to-b from-emerald-500/15 to-emerald-500/5 text-emerald-600 shadow-sm motion-safe:animate-in motion-safe:fade-in motion-safe:zoom-in-95 motion-safe:duration-500 dark:text-emerald-400"
+            >
+                <CheckCircle2 className="size-10 stroke-[1.5]" aria-hidden="true" />
+                <span
+                    className="pointer-events-none absolute -right-1 -top-1 grid size-6 place-items-center rounded-full bg-emerald-600 text-[10px] font-bold text-white motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-bottom-2 motion-safe:duration-500 motion-safe:delay-150 dark:bg-emerald-500"
+                    aria-hidden="true"
+                >
+                    ✓
+                </span>
+            </div>
+            <div className="flex max-w-sm flex-col gap-1.5">
+                <p className="text-lg font-semibold tracking-tight">Job done!</p>
+                <p className="text-sm text-muted-foreground">Nothing left to view — you've been through every file.</p>
+                <p className="text-xs text-muted-foreground">Select a file anytime to open its diff again.</p>
+            </div>
         </div>
     );
 }
@@ -727,6 +775,7 @@ function FileList({
     const [query, setQuery] = useState("");
     const deferredQuery = useDeferredValue(query);
     const filter = deferredQuery.trim().toLowerCase();
+    const listRef = useRef<HTMLElement>(null);
 
     const visibleFiles = useMemo(() => {
         if (!filter) {
@@ -741,6 +790,15 @@ function FileList({
     useEffect(() => {
         setExpandedDirs(defaultExpandedDirPaths(tree));
     }, [tree]);
+
+    useEffect(() => {
+        if (!selectedPath) {
+            return;
+        }
+
+        const selected = listRef.current?.querySelector<HTMLElement>(`[data-file-path="${CSS.escape(selectedPath)}"]`);
+        selected?.scrollIntoView({ block: "nearest" });
+    }, [selectedPath, visibleFiles, layout]);
 
     if (status === "loading" || status === "idle") {
         return <FileListLoadingSkeleton />;
@@ -823,7 +881,7 @@ function FileList({
                     </HelpTooltip>
                 </div>
             </div>
-            <nav aria-label="Changed files" className="min-h-0 flex-1 overflow-auto">
+            <nav ref={listRef} aria-label="Changed files" className="min-h-0 flex-1 overflow-auto">
                 {visibleFiles.length === 0 ? (
                     <p className="p-3 text-sm text-muted-foreground">No files match “{deferredQuery.trim()}”.</p>
                 ) : layout === "tree" ? (
@@ -983,6 +1041,7 @@ function FileRow({
     return (
         <button
             type="button"
+            data-file-path={file.path}
             onClick={() => onSelect(file.path)}
             title={
                 updated

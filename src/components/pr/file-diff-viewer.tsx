@@ -1,3 +1,4 @@
+import { useHotkey } from "@tanstack/react-hotkeys";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { diffWords } from "diff";
 import {
@@ -8,10 +9,12 @@ import {
     FoldVertical,
     MessageSquare,
     PencilLine,
+    Search,
     UnfoldVertical,
     X,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
+import { createPortal } from "react-dom";
 
 import type { DiffLayout } from "#/lib/diff-preferences.ts";
 import type {
@@ -36,8 +39,10 @@ import {
     DropdownMenuTrigger,
 } from "#/components/ui/dropdown-menu.tsx";
 import { HelpTooltip } from "#/components/ui/help-tooltip.tsx";
+import { Input } from "#/components/ui/input.tsx";
 import { DiffLoadingSkeleton } from "#/components/ui/loading.tsx";
 import { tokensForDiffLine, useFileSyntaxHighlight, type FileSyntaxMaps } from "#/hooks/use-file-syntax-highlight.ts";
+import { collectDiffSearchMatches, searchHighlightsForCell, type DiffSearchMatch } from "#/lib/diff-file-search.ts";
 import { DIFF_EXPAND_CHUNK, expandDiffGap, materializeFileDiff } from "#/lib/session/build-file-diff.ts";
 import { buildSuggestionComment, hasSuggestionFence, stripSuggestionFence } from "#/lib/session/suggestion.ts";
 import { notifyCopied, notifyError, notifySuccess } from "#/lib/toast.ts";
@@ -67,9 +72,16 @@ const STUB_COPY: Record<FileStubReason, { title: string; body: string; canForce:
 export type LineTarget = { path: string; line: number; side: DiffSide; text: string };
 
 type SplitRow =
-    | { key: string; kind: "hunk"; line: DiffLine }
-    | { key: string; kind: "gap"; line: DiffLine }
-    | { key: string; kind: "pair"; left: DiffLine | null; right: DiffLine | null };
+    | { key: string; kind: "hunk"; line: DiffLine; lineIndex: number }
+    | { key: string; kind: "gap"; line: DiffLine; lineIndex: number }
+    | {
+          key: string;
+          kind: "pair";
+          left: DiffLine | null;
+          right: DiffLine | null;
+          leftLineIndex: number | null;
+          rightLineIndex: number | null;
+      };
 
 export function FileDiffViewer({
     path,
@@ -130,6 +142,10 @@ export function FileDiffViewer({
     const [draftBody, setDraftBody] = useState("");
     const [saving, setSaving] = useState<"stage" | "single" | null>(null);
     const [showFullFile, setShowFullFile] = useState(false);
+    const [searchOpen, setSearchOpen] = useState(false);
+    const [searchQuery, setSearchQuery] = useState("");
+    const [activeMatchId, setActiveMatchId] = useState(-1);
+    const searchInputRef = useRef<HTMLInputElement>(null);
     const [expansions, setExpansions] = useState<
         Record<string, { fromStart?: number; fromEnd?: number; all?: boolean }>
     >({});
@@ -141,6 +157,9 @@ export function FileDiffViewer({
         setShowFullFile(false);
         setExpansions({});
         setCompose(null);
+        setSearchOpen(false);
+        setSearchQuery("");
+        setActiveMatchId(-1);
     }, [path, hideWhitespace]);
 
     const rendered = useMemo(() => {
@@ -154,6 +173,69 @@ export function FileDiffViewer({
             expansions: effectiveShowFullFile ? {} : expansions,
         });
     }, [diff, path, hideWhitespace, effectiveShowFullFile, expansions]);
+
+    const searchMatches = useMemo(
+        () => (rendered?.lines ? collectDiffSearchMatches(rendered.lines, searchQuery, layout) : []),
+        [rendered?.lines, searchQuery, layout],
+    );
+
+    useEffect(() => {
+        if (searchMatches.length === 0) {
+            setActiveMatchId(-1);
+            return;
+        }
+        setActiveMatchId((current) =>
+            searchMatches.some((match) => match.id === current) ? current : searchMatches[0]!.id,
+        );
+    }, [searchMatches]);
+
+    function openSearch() {
+        setSearchOpen(true);
+        requestAnimationFrame(() => searchInputRef.current?.focus());
+    }
+
+    function closeSearch() {
+        setSearchOpen(false);
+        setSearchQuery("");
+        setActiveMatchId(-1);
+    }
+
+    function stepSearchMatch(direction: 1 | -1) {
+        if (searchMatches.length === 0) {
+            return;
+        }
+        const currentIndex = searchMatches.findIndex((match) => match.id === activeMatchId);
+        const baseIndex = currentIndex === -1 ? 0 : currentIndex;
+        const nextIndex = (baseIndex + direction + searchMatches.length) % searchMatches.length;
+        setActiveMatchId(searchMatches[nextIndex]!.id);
+    }
+
+    useHotkey(
+        "Mod+F",
+        (event) => {
+            event.preventDefault();
+            if (searchOpen) {
+                searchInputRef.current?.focus();
+                searchInputRef.current?.select();
+                return;
+            }
+            openSearch();
+        },
+        { ignoreInputs: false },
+    );
+
+    useHotkey(
+        "Escape",
+        () => {
+            if (searchOpen) {
+                closeSearch();
+            }
+        },
+        { enabled: searchOpen, ignoreInputs: false },
+    );
+
+    useHotkey("Enter", () => stepSearchMatch(1), { enabled: searchOpen, ignoreInputs: true });
+    useHotkey("Shift+Enter", () => stepSearchMatch(-1), { enabled: searchOpen, ignoreInputs: true });
 
     const lineHeight = compactLineHeight ? COMPACT_LINE_HEIGHT : LINE_HEIGHT;
     const syntax = useFileSyntaxHighlight(path, diff?.beforeText, diff?.afterText);
@@ -215,7 +297,21 @@ export function FileDiffViewer({
                     setExpansions({});
                     notifySuccess("Collapsed file context");
                 }}
+                onOpenSearch={openSearch}
             />
+
+            {searchOpen ? (
+                <FileDiffSearchBar
+                    inputRef={searchInputRef}
+                    query={searchQuery}
+                    matchCount={searchMatches.length}
+                    activeMatchIndex={searchMatches.findIndex((match) => match.id === activeMatchId)}
+                    onQueryChange={setSearchQuery}
+                    onPrevious={() => stepSearchMatch(-1)}
+                    onNext={() => stepSearchMatch(1)}
+                    onClose={closeSearch}
+                />
+            ) : null}
 
             {error ? (
                 <p className="p-4 text-sm text-destructive">{error}</p>
@@ -273,6 +369,8 @@ export function FileDiffViewer({
                         }}
                         onRemovePending={onRemovePending}
                         onReplyToThread={onReplyToThread}
+                        searchMatches={searchMatches}
+                        activeMatchId={activeMatchId}
                     />
                 </div>
             )}
@@ -289,6 +387,7 @@ function FileDiffHeader({
     onViewedChange,
     onShowFullFile,
     onCollapseContext,
+    onOpenSearch,
 }: {
     path: string;
     file: PullRequestFile | null;
@@ -298,10 +397,17 @@ function FileDiffHeader({
     onViewedChange: (viewed: boolean) => void;
     onShowFullFile: () => void;
     onCollapseContext: () => void;
+    onOpenSearch: () => void;
 }) {
     return (
         <header className="flex shrink-0 flex-wrap items-center gap-2 border-b bg-muted/30 px-2 py-1.5">
             <code className="min-w-0 flex-1 truncate font-mono text-xs">{path}</code>
+            <HelpTooltip label="Find in file (⌘F)">
+                <Button type="button" variant="ghost" size="icon-sm" className="size-7" onClick={onOpenSearch}>
+                    <Search className="size-3.5" aria-hidden="true" />
+                    <span className="sr-only">Find in file</span>
+                </Button>
+            </HelpTooltip>
             <HelpTooltip label="Copy path">
                 <Button
                     type="button"
@@ -357,6 +463,76 @@ function FileDiffHeader({
                 </DropdownMenuContent>
             </DropdownMenu>
         </header>
+    );
+}
+
+function FileDiffSearchBar({
+    inputRef,
+    query,
+    matchCount,
+    activeMatchIndex,
+    onQueryChange,
+    onPrevious,
+    onNext,
+    onClose,
+}: {
+    inputRef: RefObject<HTMLInputElement | null>;
+    query: string;
+    matchCount: number;
+    activeMatchIndex: number;
+    onQueryChange: (query: string) => void;
+    onPrevious: () => void;
+    onNext: () => void;
+    onClose: () => void;
+}) {
+    const status =
+        query.trim().length === 0 ? "" : matchCount === 0 ? "No matches" : `${activeMatchIndex + 1} of ${matchCount}`;
+
+    return (
+        <div className="flex shrink-0 items-center gap-2 border-b bg-muted/40 px-2 py-1.5">
+            <Search className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+            <Input
+                ref={inputRef}
+                value={query}
+                onChange={(event) => onQueryChange(event.target.value)}
+                placeholder="Find in file…"
+                className="h-7 min-w-0 flex-1 font-mono text-xs"
+                aria-label="Find in file"
+            />
+            <span className="w-16 shrink-0 text-right text-xs tabular-nums text-muted-foreground">{status}</span>
+            <HelpTooltip label="Previous match (Shift+Enter)">
+                <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon-sm"
+                    className="size-7"
+                    disabled={matchCount === 0}
+                    onClick={onPrevious}
+                >
+                    <ChevronUp className="size-3.5" aria-hidden="true" />
+                    <span className="sr-only">Previous match</span>
+                </Button>
+            </HelpTooltip>
+            <HelpTooltip label="Next match (Enter)">
+                <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon-sm"
+                    className="size-7"
+                    disabled={matchCount === 0}
+                    onClick={onNext}
+                >
+                    <ChevronDown className="size-3.5" aria-hidden="true" />
+                    <span className="sr-only">Next match</span>
+                </Button>
+            </HelpTooltip>
+            <HelpTooltip label="Close (Esc)">
+                <Button type="button" variant="ghost" size="icon-sm" className="size-7" onClick={onClose}>
+                    <X className="size-3.5" aria-hidden="true" />
+                    <span className="sr-only">Close find bar</span>
+                </Button>
+            </HelpTooltip>
+        </div>
     );
 }
 
@@ -586,6 +762,181 @@ function targetForLine(path: string, line: DiffLine): LineTarget | null {
     return null;
 }
 
+function unifiedLineTargets(path: string, line: DiffLine): { left: LineTarget | null; right: LineTarget | null } {
+    if (line.kind === "hunk" || line.kind === "gap") {
+        return { left: null, right: null };
+    }
+
+    const text = line.text ?? "";
+    const left = line.oldNumber != null ? { path, line: line.oldNumber, side: "LEFT" as const, text } : null;
+    const right = line.newNumber != null ? { path, line: line.newNumber, side: "RIGHT" as const, text } : null;
+    return { left, right };
+}
+
+function lineTargetFromSelection(container: HTMLElement, path: string): { target: LineTarget; rect: DOMRect } | null {
+    const selection = window.getSelection();
+    if (!selection || selection.isCollapsed || !selection.anchorNode) {
+        return null;
+    }
+
+    const selectedText = selection.toString();
+    if (!selectedText.trim()) {
+        return null;
+    }
+
+    const anchor = selection.anchorNode instanceof Element ? selection.anchorNode : selection.anchorNode.parentElement;
+    const codeEl = anchor?.closest("[data-diff-code]");
+    if (!codeEl || !container.contains(codeEl)) {
+        return null;
+    }
+
+    const line = Number(codeEl.getAttribute("data-diff-line"));
+    const side = codeEl.getAttribute("data-diff-side");
+    const codePath = codeEl.getAttribute("data-diff-path");
+    if (!codePath || codePath !== path || !Number.isFinite(line) || (side !== "LEFT" && side !== "RIGHT")) {
+        return null;
+    }
+
+    const range = selection.getRangeAt(0);
+    const rect = range.getBoundingClientRect();
+    const clientRects = range.getClientRects();
+    const anchorRect = rect.width > 0 || rect.height > 0 ? rect : clientRects.length > 0 ? clientRects[0]! : null;
+    if (!anchorRect) {
+        return null;
+    }
+
+    return {
+        target: { path, line, side, text: selectedText },
+        rect: anchorRect,
+    };
+}
+
+function DiffLineNumber({
+    number,
+    target,
+    disabled,
+    selected,
+    onSelect,
+}: {
+    number: number | null;
+    target: LineTarget | null;
+    disabled?: boolean;
+    selected: boolean;
+    onSelect: (target: LineTarget) => void;
+}) {
+    if (number == null) {
+        return (
+            <span className="select-none px-2 text-right text-muted-foreground/70 tabular-nums" aria-hidden="true" />
+        );
+    }
+
+    const clickable = target != null && !disabled;
+
+    return (
+        <span
+            role={clickable ? "button" : undefined}
+            tabIndex={clickable ? 0 : undefined}
+            title={clickable ? "Add comment on this line" : undefined}
+            aria-label={clickable ? `Add comment on line ${number}` : undefined}
+            className={cn(
+                "select-none px-2 text-right text-muted-foreground/70 tabular-nums",
+                clickable &&
+                    "cursor-pointer hover:bg-sky-500/15 hover:text-sky-800 dark:hover:bg-sky-500/20 dark:hover:text-sky-200",
+                selected && "font-medium text-sky-700 dark:text-sky-300",
+            )}
+            onClick={(event) => {
+                event.stopPropagation();
+                if (clickable) {
+                    onSelect(target);
+                }
+            }}
+            onKeyDown={(event) => {
+                if (!clickable) {
+                    return;
+                }
+                if (event.key === "Enter" || event.key === " ") {
+                    event.preventDefault();
+                    onSelect(target);
+                }
+            }}
+        >
+            {number}
+        </span>
+    );
+}
+
+function DiffCodeCell({
+    path,
+    target,
+    markSearchActive,
+    children,
+}: {
+    path: string;
+    target: LineTarget | null;
+    markSearchActive?: boolean;
+    children: ReactNode;
+}) {
+    return (
+        <span
+            {...(target
+                ? {
+                      "data-diff-code": "",
+                      "data-diff-path": path,
+                      "data-diff-line": target.line,
+                      "data-diff-side": target.side,
+                  }
+                : {})}
+            {...(markSearchActive ? { "data-diff-search-active": "true" } : {})}
+            className="select-text overflow-hidden whitespace-pre px-2 text-foreground"
+        >
+            {children}
+        </span>
+    );
+}
+
+type SelectionPopupState = { target: LineTarget; x: number; y: number };
+
+function DiffSelectionCommentPopup({
+    popup,
+    onComment,
+    onDismiss,
+}: {
+    popup: SelectionPopupState;
+    onComment: (target: LineTarget) => void;
+    onDismiss: () => void;
+}) {
+    if (typeof document === "undefined") {
+        return null;
+    }
+
+    return createPortal(
+        <>
+            <button
+                type="button"
+                aria-label="Dismiss"
+                className="fixed inset-0 z-40 cursor-default"
+                onMouseDown={onDismiss}
+            />
+            <div
+                className="pointer-events-none fixed z-50 -translate-x-1/2 -translate-y-full pb-1.5"
+                style={{ left: popup.x, top: popup.y }}
+            >
+                <Button
+                    type="button"
+                    size="sm"
+                    className="pointer-events-auto h-7 gap-1.5 shadow-md"
+                    onMouseDown={(event) => event.preventDefault()}
+                    onClick={() => onComment(popup.target)}
+                >
+                    <MessageSquare className="size-3.5" aria-hidden="true" />
+                    Comment
+                </Button>
+            </div>
+        </>,
+        document.body,
+    );
+}
+
 function toSplitRows(lines: Array<DiffLine>): Array<SplitRow> {
     const rows: Array<SplitRow> = [];
     let index = 0;
@@ -594,13 +945,20 @@ function toSplitRows(lines: Array<DiffLine>): Array<SplitRow> {
         const line = lines[index]!;
 
         if (line.kind === "hunk" || line.kind === "gap") {
-            rows.push({ key: `${line.kind}-${index}`, kind: line.kind, line });
+            rows.push({ key: `${line.kind}-${index}`, kind: line.kind, line, lineIndex: index });
             index++;
             continue;
         }
 
         if (line.kind === "context") {
-            rows.push({ key: `ctx-${index}`, kind: "pair", left: line, right: line });
+            rows.push({
+                key: `ctx-${index}`,
+                kind: "pair",
+                left: line,
+                right: line,
+                leftLineIndex: index,
+                rightLineIndex: index,
+            });
             index++;
             continue;
         }
@@ -613,6 +971,7 @@ function toSplitRows(lines: Array<DiffLine>): Array<SplitRow> {
             dels.push(lines[index]!);
             index++;
         }
+        const addStart = index;
         while (index < lines.length && lines[index]!.kind === "add") {
             adds.push(lines[index]!);
             index++;
@@ -625,6 +984,8 @@ function toSplitRows(lines: Array<DiffLine>): Array<SplitRow> {
                 kind: "pair",
                 left: dels[offset] ?? null,
                 right: adds[offset] ?? null,
+                leftLineIndex: dels[offset] ? start + offset : null,
+                rightLineIndex: adds[offset] ? addStart + offset : null,
             });
         }
     }
@@ -641,7 +1002,7 @@ type LineAnnotations = {
 };
 
 type VirtualRow =
-    | { key: string; kind: "unified"; line: DiffLine }
+    | { key: string; kind: "unified"; line: DiffLine; lineIndex: number }
     | { key: string; kind: "split"; row: SplitRow }
     | { key: string; kind: "notes"; notes: LineAnnotations }
     | { key: string; kind: "compose"; target: LineTarget };
@@ -757,7 +1118,7 @@ function buildVirtualRows(
     }
 
     for (const [index, line] of lines.entries()) {
-        rows.push({ key: `line-${index}-${line.kind}`, kind: "unified", line });
+        rows.push({ key: `line-${index}-${line.kind}`, kind: "unified", line, lineIndex: index });
         if (line.kind === "hunk" || line.kind === "gap") {
             continue;
         }
@@ -810,6 +1171,27 @@ function maxLineChars(lines: Array<DiffLine>, side?: DiffSide): number {
     return max;
 }
 
+function virtualRowIndexForMatch(virtualRows: ReadonlyArray<VirtualRow>, match: DiffSearchMatch): number {
+    for (const [index, row] of virtualRows.entries()) {
+        if (row.kind === "unified" && row.lineIndex === match.lineIndex && match.side === "unified") {
+            return index;
+        }
+        if (row.kind !== "split" || row.row.kind !== "pair") {
+            continue;
+        }
+        if (match.side === "both" && row.row.leftLineIndex === match.lineIndex) {
+            return index;
+        }
+        if (match.side === "LEFT" && row.row.leftLineIndex === match.lineIndex) {
+            return index;
+        }
+        if (match.side === "RIGHT" && row.row.rightLineIndex === match.lineIndex) {
+            return index;
+        }
+    }
+    return -1;
+}
+
 function VirtualDiffLines({
     lines,
     path,
@@ -840,6 +1222,8 @@ function VirtualDiffLines({
     onExpandGap,
     onRemovePending,
     onReplyToThread,
+    searchMatches,
+    activeMatchId,
 }: {
     lines: Array<DiffLine>;
     path: string;
@@ -870,6 +1254,8 @@ function VirtualDiffLines({
     onExpandGap: (gapId: string, direction: "up" | "down" | "all" | "full") => void;
     onRemovePending: (commentId: string) => Promise<void>;
     onReplyToThread: (threadId: string, body: string) => Promise<void>;
+    searchMatches: ReadonlyArray<DiffSearchMatch>;
+    activeMatchId: number;
 }) {
     const parentRef = useRef<HTMLDivElement>(null);
     const splitRootRef = useRef<HTMLDivElement>(null);
@@ -879,6 +1265,7 @@ function VirtualDiffLines({
     const [leftScroll, setLeftScroll] = useState(0);
     const [rightScroll, setRightScroll] = useState(0);
     const [unifiedScroll, setUnifiedScroll] = useState(0);
+    const [selectionPopup, setSelectionPopup] = useState<SelectionPopupState | null>(null);
     /** Left pane share in split layout (0.2–0.8). */
     const [splitLeftRatio, setSplitLeftRatio] = useState(0.5);
 
@@ -920,6 +1307,68 @@ function VirtualDiffLines({
     );
 
     useEffect(() => {
+        if (activeMatchId < 0 || searchMatches.length === 0) {
+            return;
+        }
+        const match = searchMatches.find((item) => item.id === activeMatchId);
+        if (!match) {
+            return;
+        }
+        const rowIndex = virtualRowIndexForMatch(virtualRows, match);
+        if (rowIndex < 0) {
+            return;
+        }
+        virtualizer.scrollToIndex(rowIndex, { align: "center" });
+        requestAnimationFrame(() => {
+            document.querySelector('[data-diff-search-active="true"]')?.scrollIntoView({ block: "nearest" });
+        });
+    }, [activeMatchId, searchMatches, virtualRows, virtualizer]);
+
+    useEffect(() => {
+        if (selected) {
+            setSelectionPopup(null);
+        }
+    }, [selected]);
+
+    useEffect(() => {
+        const scroller = parentRef.current;
+        if (!scroller || disabled) {
+            return;
+        }
+
+        const onMouseUp = () => {
+            requestAnimationFrame(() => {
+                const match = lineTargetFromSelection(scroller, path);
+                if (match) {
+                    setSelectionPopup({
+                        target: match.target,
+                        x: match.rect.left + match.rect.width / 2,
+                        y: match.rect.top,
+                    });
+                    return;
+                }
+                setSelectionPopup(null);
+            });
+        };
+
+        const onScroll = () => setSelectionPopup(null);
+        const onKeyDown = (event: KeyboardEvent) => {
+            if (event.key === "Escape") {
+                setSelectionPopup(null);
+            }
+        };
+
+        scroller.addEventListener("mouseup", onMouseUp);
+        scroller.addEventListener("scroll", onScroll, { passive: true });
+        window.addEventListener("keydown", onKeyDown);
+        return () => {
+            scroller.removeEventListener("mouseup", onMouseUp);
+            scroller.removeEventListener("scroll", onScroll);
+            window.removeEventListener("keydown", onKeyDown);
+        };
+    }, [path, disabled]);
+
+    useEffect(() => {
         setLeftScroll(0);
         setRightScroll(0);
         setUnifiedScroll(0);
@@ -932,7 +1381,24 @@ function VirtualDiffLines({
         if (unifiedScrollRef.current) {
             unifiedScrollRef.current.scrollLeft = 0;
         }
-    }, [path, layout, lines]);
+        parentRef.current?.scrollTo({ top: 0, left: 0 });
+        virtualizer.scrollToOffset(0, { align: "start" });
+    }, [path, virtualizer]);
+
+    useEffect(() => {
+        setLeftScroll(0);
+        setRightScroll(0);
+        setUnifiedScroll(0);
+        if (leftScrollRef.current) {
+            leftScrollRef.current.scrollLeft = 0;
+        }
+        if (rightScrollRef.current) {
+            rightScrollRef.current.scrollLeft = 0;
+        }
+        if (unifiedScrollRef.current) {
+            unifiedScrollRef.current.scrollLeft = 0;
+        }
+    }, [layout, lines]);
 
     // Horizontal trackpad/shift-wheel over the code area: the row viewport is overflow-x-hidden
     // (virtualized), so scroll must be forwarded to the bottom pane scrollbars.
@@ -1074,6 +1540,8 @@ function VirtualDiffLines({
                                         rightScroll={rightScroll}
                                         leftContentWidth={leftContentWidth}
                                         rightContentWidth={rightContentWidth}
+                                        searchMatches={searchMatches}
+                                        activeMatchId={activeMatchId}
                                         onSelect={onSelect}
                                         onExpandGap={onExpandGap}
                                     />
@@ -1087,12 +1555,15 @@ function VirtualDiffLines({
                                         >
                                             <UnifiedRow
                                                 line={row.line}
+                                                lineIndex={row.lineIndex}
                                                 path={path}
                                                 lineHeight={lineHeight}
                                                 syntax={syntax}
                                                 pendingByLine={pendingByLine}
                                                 disabled={disabled}
                                                 selected={selected}
+                                                searchMatches={searchMatches}
+                                                activeMatchId={activeMatchId}
                                                 onSelect={onSelect}
                                                 onExpandGap={onExpandGap}
                                             />
@@ -1134,6 +1605,18 @@ function VirtualDiffLines({
                     <div aria-hidden="true" style={{ width: unifiedContentWidth, height: 1 }} />
                 </div>
             )}
+
+            {selectionPopup ? (
+                <DiffSelectionCommentPopup
+                    popup={selectionPopup}
+                    onDismiss={() => setSelectionPopup(null)}
+                    onComment={(target) => {
+                        onSelect(target);
+                        setSelectionPopup(null);
+                        window.getSelection()?.removeAllRanges();
+                    }}
+                />
+            ) : null}
         </div>
     );
 }
@@ -1276,22 +1759,28 @@ function GapBar({
 
 function UnifiedRow({
     line,
+    lineIndex,
     path,
     lineHeight,
     syntax,
     pendingByLine,
     disabled,
     selected,
+    searchMatches,
+    activeMatchId,
     onSelect,
     onExpandGap,
 }: {
     line: DiffLine;
+    lineIndex: number;
     path: string;
     lineHeight: number;
     syntax: FileSyntaxMaps;
     pendingByLine: Set<string>;
     disabled?: boolean;
     selected: LineTarget | null;
+    searchMatches: ReadonlyArray<DiffSearchMatch>;
+    activeMatchId: number;
     onSelect: (target: LineTarget) => void;
     onExpandGap: (gapId: string, direction: "up" | "down" | "all" | "full") => void;
 }) {
@@ -1308,46 +1797,56 @@ function UnifiedRow({
     }
 
     const target = targetForLine(path, line);
-    const isSelected =
-        selected &&
-        target &&
-        selected.line === target.line &&
-        selected.side === target.side &&
-        selected.path === target.path;
-    const hasPending = target ? pendingByLine.has(`${target.side}:${target.line}`) : false;
+    const { left: leftTarget, right: rightTarget } = unifiedLineTargets(path, line);
+    const isLeftSelected =
+        selected != null &&
+        leftTarget != null &&
+        selected.path === leftTarget.path &&
+        selected.line === leftTarget.line &&
+        selected.side === leftTarget.side;
+    const isRightSelected =
+        selected != null &&
+        rightTarget != null &&
+        selected.path === rightTarget.path &&
+        selected.line === rightTarget.line &&
+        selected.side === rightTarget.side;
+    const isRowSelected = isLeftSelected || isRightSelected;
+    const hasPending =
+        (leftTarget && pendingByLine.has(`${leftTarget.side}:${leftTarget.line}`)) ||
+        (rightTarget && pendingByLine.has(`${rightTarget.side}:${rightTarget.line}`));
     const tokens = tokensForDiffLine(syntax, line.kind, line.oldNumber, line.newNumber);
     const wordSide = line.kind === "del" ? "del" : line.kind === "add" ? "add" : undefined;
+    const searchHighlights = searchHighlightsForCell(searchMatches, activeMatchId, lineIndex, "unified");
+    const markSearchActive = searchHighlights.some((highlight) => highlight.active);
 
     return (
         <div
             className={cn(
                 "grid h-full grid-cols-[3.5rem_3.5rem_minmax(0,1fr)]",
                 lineClass(line),
-                target
-                    ? disabled
-                        ? "cursor-not-allowed"
-                        : "cursor-pointer hover:brightness-95 dark:hover:brightness-110"
-                    : undefined,
-                isSelected && "ring-1 ring-inset ring-sky-500",
+                isRowSelected && "ring-1 ring-inset ring-sky-500",
                 hasPending && "outline outline-1 -outline-offset-1 outline-amber-500/60",
             )}
             style={{ minHeight: lineHeight }}
-            onClick={() => {
-                if (target && !disabled) {
-                    onSelect(target);
-                }
-            }}
         >
-            <span className="select-none px-2 text-right text-muted-foreground/70 tabular-nums">
-                {line.oldNumber ?? ""}
-            </span>
-            <span className="select-none px-2 text-right text-muted-foreground/70 tabular-nums">
-                {line.newNumber ?? ""}
-            </span>
-            <span className="overflow-hidden whitespace-pre px-2 text-foreground">
+            <DiffLineNumber
+                number={line.oldNumber}
+                target={leftTarget}
+                disabled={disabled}
+                selected={isLeftSelected}
+                onSelect={onSelect}
+            />
+            <DiffLineNumber
+                number={line.newNumber}
+                target={rightTarget}
+                disabled={disabled}
+                selected={isRightSelected}
+                onSelect={onSelect}
+            />
+            <DiffCodeCell path={path} target={target} markSearchActive={markSearchActive}>
                 {prefix(line)}
-                <DiffCodeText text={line.text} tokens={tokens} side={wordSide} />
-            </span>
+                <DiffCodeText text={line.text} tokens={tokens} side={wordSide} searchHighlights={searchHighlights} />
+            </DiffCodeCell>
         </div>
     );
 }
@@ -1364,6 +1863,8 @@ function SplitRowView({
     rightScroll,
     leftContentWidth,
     rightContentWidth,
+    searchMatches,
+    activeMatchId,
     onSelect,
     onExpandGap,
 }: {
@@ -1378,6 +1879,8 @@ function SplitRowView({
     rightScroll: number;
     leftContentWidth: string;
     rightContentWidth: string;
+    searchMatches: ReadonlyArray<DiffSearchMatch>;
+    activeMatchId: number;
     onSelect: (target: LineTarget) => void;
     onExpandGap: (gapId: string, direction: "up" | "down" | "all" | "full") => void;
 }) {
@@ -1419,6 +1922,7 @@ function SplitRowView({
                 <div style={{ width: leftContentWidth, transform: `translateX(-${leftScroll}px)` }}>
                     <SplitCell
                         line={left}
+                        lineIndex={row.kind === "pair" ? row.leftLineIndex : null}
                         path={path}
                         side="LEFT"
                         syntax={syntax}
@@ -1426,6 +1930,8 @@ function SplitRowView({
                         pendingByLine={pendingByLine}
                         disabled={disabled}
                         selected={selected}
+                        searchMatches={searchMatches}
+                        activeMatchId={activeMatchId}
                         onSelect={onSelect}
                     />
                 </div>
@@ -1434,6 +1940,7 @@ function SplitRowView({
                 <div style={{ width: rightContentWidth, transform: `translateX(-${rightScroll}px)` }}>
                     <SplitCell
                         line={right}
+                        lineIndex={row.kind === "pair" ? row.rightLineIndex : null}
                         path={path}
                         side="RIGHT"
                         syntax={syntax}
@@ -1441,6 +1948,8 @@ function SplitRowView({
                         pendingByLine={pendingByLine}
                         disabled={disabled}
                         selected={selected}
+                        searchMatches={searchMatches}
+                        activeMatchId={activeMatchId}
                         onSelect={onSelect}
                     />
                 </div>
@@ -1451,6 +1960,7 @@ function SplitRowView({
 
 function SplitCell({
     line,
+    lineIndex,
     path,
     side,
     syntax,
@@ -1458,9 +1968,12 @@ function SplitCell({
     pendingByLine,
     disabled,
     selected,
+    searchMatches,
+    activeMatchId,
     onSelect,
 }: {
     line: DiffLine | null;
+    lineIndex: number | null;
     path: string;
     side: DiffSide;
     syntax: FileSyntaxMaps;
@@ -1468,6 +1981,8 @@ function SplitCell({
     pendingByLine: Set<string>;
     disabled?: boolean;
     selected: LineTarget | null;
+    searchMatches: ReadonlyArray<DiffSearchMatch>;
+    activeMatchId: number;
     onSelect: (target: LineTarget) => void;
 }) {
     if (!line) {
@@ -1505,35 +2020,35 @@ function SplitCell({
     const number = side === "LEFT" ? line.oldNumber : line.newNumber;
     const tokens = tokensForDiffLine(syntax, line.kind, line.oldNumber, line.newNumber);
     const wordSide = side === "LEFT" ? "del" : "add";
+    const searchHighlights =
+        lineIndex === null ? [] : searchHighlightsForCell(searchMatches, activeMatchId, lineIndex, side);
+    const markSearchActive = searchHighlights.some((highlight) => highlight.active);
 
     return (
         <div
             className={cn(
                 "grid h-full grid-cols-[3rem_minmax(0,1fr)]",
                 lineClass(line),
-                usableTarget
-                    ? disabled
-                        ? "cursor-not-allowed"
-                        : "cursor-pointer hover:brightness-95 dark:hover:brightness-110"
-                    : undefined,
                 isSelected && "ring-1 ring-inset ring-sky-500",
                 hasPending && "outline outline-1 -outline-offset-1 outline-amber-500/60",
             )}
-            onClick={() => {
-                if (usableTarget && !disabled) {
-                    onSelect(usableTarget);
-                }
-            }}
         >
-            <span className="select-none px-2 text-right text-muted-foreground/70 tabular-nums">{number ?? ""}</span>
-            <span className="overflow-hidden whitespace-pre px-2 text-foreground">
+            <DiffLineNumber
+                number={number}
+                target={usableTarget}
+                disabled={disabled}
+                selected={Boolean(isSelected)}
+                onSelect={onSelect}
+            />
+            <DiffCodeCell path={path} target={usableTarget} markSearchActive={markSearchActive}>
                 <DiffCodeText
                     text={line.text}
                     tokens={tokens}
                     wordParts={wordDiff}
                     side={wordDiff ? wordSide : line.kind === "del" ? "del" : line.kind === "add" ? "add" : undefined}
+                    searchHighlights={searchHighlights}
                 />
-            </span>
+            </DiffCodeCell>
         </div>
     );
 }

@@ -8,6 +8,7 @@ import { RelativeTime } from "#/components/ui/relative-time.tsx";
 import { Textarea } from "#/components/ui/textarea.tsx";
 import { useSession } from "#/lib/session/provider.tsx";
 import { notifyAction } from "#/lib/toast.ts";
+import { cn } from "#/lib/utils.ts";
 
 export function ReviewThreadsPanel({
     repository,
@@ -84,9 +85,9 @@ function ThreadCard({ repository, number, thread }: { repository: string; number
                     </span>
                 ) : null}
             </p>
-            <ul className="flex flex-col gap-1.5">
-                {comments.map((comment) => (
-                    <li key={comment.id}>
+            <ul className="flex flex-col">
+                {comments.map((comment, index) => (
+                    <li key={comment.id} className={cn("py-1.5", index > 0 && "border-t border-border")}>
                         <span className="font-medium">{comment.author}</span>{" "}
                         <RelativeTime iso={comment.createdAt} className="text-muted-foreground" />
                         <p className="mt-0.5 whitespace-pre-wrap">{comment.body}</p>
