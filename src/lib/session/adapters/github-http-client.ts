@@ -51,6 +51,7 @@ import {
     parsePullRequestNumberQuery,
 } from "#/lib/session/pull-request-search.ts";
 import { matchesRelatedRefs } from "#/lib/session/related-pull-requests.ts";
+import { aggregateReviewerStatuses } from "#/lib/session/reviewer-status.ts";
 
 const DEFAULT_GRAPHQL_URL = "https://api.github.com/graphql";
 const DEFAULT_REST_URL = "https://api.github.com";
@@ -1926,8 +1927,13 @@ type PullRequestNode = {
     reviewRequests: {
         nodes: Array<{ requestedReviewer: { login?: string; name?: string } | null }>;
     };
-    latestReviews: {
-        nodes: Array<{ databaseId: number | null; author: { login: string } | null; state: string }>;
+    reviews: {
+        nodes: Array<{
+            databaseId: number | null;
+            submittedAt: string | null;
+            author: { login: string } | null;
+            state: string;
+        }>;
     };
     commits: { nodes: Array<{ commit: { statusCheckRollup: { state: string } | null } }> };
     mergeable: "MERGEABLE" | "CONFLICTING" | "UNKNOWN";
@@ -2018,16 +2024,19 @@ function toPullRequestSummary(node: PullRequestNode): PullRequestSummary {
             const name = reviewer?.login ?? reviewer?.name;
             return name ? [name] : [];
         }),
-        reviewers: node.latestReviews.nodes.flatMap((review) =>
-            review.author && review.databaseId != null
-                ? [
-                      {
-                          login: review.author.login,
-                          state: toReviewState(review.state),
-                          reviewId: review.databaseId,
-                      },
-                  ]
-                : [],
+        reviewers: aggregateReviewerStatuses(
+            node.reviews.nodes.flatMap((review) =>
+                review.author && review.databaseId != null && review.submittedAt
+                    ? [
+                          {
+                              login: review.author.login,
+                              databaseId: review.databaseId,
+                              submittedAt: review.submittedAt,
+                              state: review.state,
+                          },
+                      ]
+                    : [],
+            ),
         ),
         checks: toCheckState(node.commits.nodes[0]?.commit.statusCheckRollup?.state),
         additions: node.additions,
@@ -2400,13 +2409,14 @@ const PULL_REQUEST_FIELDS = `
             }
         }
     }
-    latestReviews(first: 20) {
+    reviews(first: 100) {
         nodes {
             databaseId
+            submittedAt
+            state
             author {
                 login
             }
-            state
         }
     }
     commits(last: 1) {
