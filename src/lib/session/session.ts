@@ -1,5 +1,19 @@
+import type { QueryClient } from "@tanstack/react-query";
+
 import { Store } from "@tanstack/store";
 
+import type {
+    ConversationQueryData,
+    FileDiffQueryData,
+    InboxQueryData,
+    PullRequestCommitsQueryData,
+    PullRequestDetailQueryData,
+    PullRequestFilesQueryData,
+    RelatedPullRequestsQueryData,
+    RepositoriesQueryData,
+    RepositoryMetadataQueryData,
+    ReviewThreadsQueryData,
+} from "#/lib/query/types.ts";
 import type { SuggestionChange } from "#/lib/session/apply-suggestion.ts";
 import type { SessionError } from "#/lib/session/errors.ts";
 import type {
@@ -35,10 +49,20 @@ import type {
     ReviewThreadComment,
 } from "#/lib/session/types.ts";
 
+import { CACHE_POLICY } from "#/lib/query/cache-policy.ts";
+import {
+    emptyInboxQueryData,
+    fetchInboxSections,
+    mergePullRequestSummaries,
+    patchInboxPullRequest,
+} from "#/lib/query/inbox-fetch.ts";
+import { getInboxQueryData, inboxQueryKey, setInboxQueryData } from "#/lib/query/inbox.ts";
+import { invalidateInboxForRefresh, invalidatePullRequestSecondaryAfterMutation } from "#/lib/query/invalidate.ts";
+import { setPullRequestDetailQueryData } from "#/lib/query/pull-request.ts";
+import { queryKeys } from "#/lib/query/query-keys.ts";
 import { EasyReviewError, missingToken, toSessionError, unauthorized } from "#/lib/session/errors.ts";
 import { parseGraphiteStackComment, resolveStackFromGraphiteComment } from "#/lib/session/graphite-stack-comments.ts";
 import {
-    allSectionDefinitions,
     defaultExpandedSections,
     defaultLabelForSection,
     defaultSectionLayout,
@@ -81,7 +105,7 @@ const INBOX_CACHE_KEY = "inbox:cache";
 const INBOX_EXPANDED_KEY = "inbox:expanded";
 const INBOX_SECTIONS_KEY = "inbox:sections";
 /** Background tab-focus revalidates skip if the inbox was refreshed more recently than this. */
-const INBOX_BACKGROUND_REVALIDATE_MIN_MS = 90_000;
+const INBOX_BACKGROUND_REVALIDATE_MIN_MS = CACHE_POLICY.inbox.backgroundRevalidateMinMs;
 /** Index of every persisted draft key so disconnect can wipe them without a store scan. */
 const DRAFT_INDEX_KEY = "review-drafts:index";
 
@@ -245,6 +269,7 @@ export type SessionState = {
 
 export type EasyReviewSessionDeps = {
     github: GithubClient;
+    queryClient: QueryClient;
     store: KeyValueStore;
     /**
      * When set, `restore` probes GitHub with a session credential (OAuth cookie + same-origin
@@ -290,18 +315,6 @@ const initialInboxState: InboxState = {
     lastLoadedAt: null,
 };
 
-function mergePullRequestSummaries(
-    existing: ReadonlyArray<PullRequestSummary>,
-    incoming: ReadonlyArray<PullRequestSummary>,
-): Array<PullRequestSummary> {
-    const byKey = new Map(existing.map((pullRequest) => [pullRequest.key, pullRequest]));
-    for (const pullRequest of incoming) {
-        const previous = byKey.get(pullRequest.key);
-        byKey.set(pullRequest.key, previous ? mergePullRequestSummary(previous, pullRequest) : pullRequest);
-    }
-    return [...byKey.values()];
-}
-
 function pullRequestSummaryNeedsHydration(pullRequest: PullRequestSummary): boolean {
     return (
         pullRequest.reviewers.length === 0 &&
@@ -311,34 +324,6 @@ function pullRequestSummaryNeedsHydration(pullRequest: PullRequestSummary): bool
         pullRequest.reviewDecision === null &&
         pullRequest.mergeable === "unknown"
     );
-}
-
-function mergePullRequestSummary(previous: PullRequestSummary, incoming: PullRequestSummary): PullRequestSummary {
-    if (!pullRequestSummaryNeedsHydration(incoming) && !pullRequestSummaryNeedsHydration(previous)) {
-        return Date.parse(incoming.updatedAt) >= Date.parse(previous.updatedAt) ? incoming : previous;
-    }
-
-    if (!pullRequestSummaryNeedsHydration(incoming)) {
-        return incoming;
-    }
-
-    return {
-        ...incoming,
-        reviewers: previous.reviewers.length > 0 ? previous.reviewers : incoming.reviewers,
-        reviewRequests: previous.reviewRequests.length > 0 ? previous.reviewRequests : incoming.reviewRequests,
-        checks: previous.checks !== "none" ? previous.checks : incoming.checks,
-        commentCount: previous.commentCount > 0 ? previous.commentCount : incoming.commentCount,
-        reviewDecision: previous.reviewDecision ?? incoming.reviewDecision,
-        mergeable: previous.mergeable !== "unknown" ? previous.mergeable : incoming.mergeable,
-        assignees: previous.assignees.length > 0 ? previous.assignees : incoming.assignees,
-        labels: previous.labels.length > 0 ? previous.labels : incoming.labels,
-    };
-}
-
-function isRateLimitedError(error: unknown): boolean {
-    return error instanceof EasyReviewError
-        ? error.kind === "rate-limited"
-        : toSessionError(error).kind === "rate-limited";
 }
 
 const initialFilesListState: FilesListState = {
@@ -382,7 +367,7 @@ type InboxCache = {
  * The single application port the UI talks to. It owns credentials, browser persistence and
  * every GitHub interaction, so behaviour can be tested without a DOM or a real GitHub.
  */
-export function createEasyReviewSession({ github, store, oauth }: EasyReviewSessionDeps) {
+export function createEasyReviewSession({ github, queryClient, store, oauth }: EasyReviewSessionDeps) {
     const initialThreadsState: ReviewThreadsState = { status: "idle", items: [], error: null };
     const initialConversationState: ConversationCommentsState = { status: "idle", items: [], error: null };
     const initialCommitsState: PullRequestCommitsState = { status: "idle", items: [], error: null };
@@ -510,6 +495,50 @@ export function createEasyReviewSession({ github, store, oauth }: EasyReviewSess
         return token;
     }
 
+    function currentInboxQueryContext(): { login: string } | null {
+        const login = state.state.auth.viewer?.login;
+        if (!login) {
+            return null;
+        }
+
+        return { login };
+    }
+
+    function readInboxQueryData(): InboxQueryData {
+        const context = currentInboxQueryContext();
+        if (!context) {
+            return emptyInboxQueryData();
+        }
+
+        return getInboxQueryData(queryClient, context.login) ?? emptyInboxQueryData();
+    }
+
+    function syncInboxQueryData(data: InboxQueryData): void {
+        const context = currentInboxQueryContext();
+        if (context) {
+            setInboxQueryData(queryClient, context.login, data);
+        }
+
+        setInbox({
+            pullRequests: data.pullRequests,
+            sectionPullRequests: data.sectionPullRequests,
+            sectionCounts: data.sectionCounts,
+            sectionPagination: data.sectionPagination,
+            lastLoadedAt: data.lastLoadedAt,
+        });
+    }
+
+    function syncInboxFromStore(): void {
+        const { inbox } = state.state;
+        syncInboxQueryData({
+            pullRequests: inbox.pullRequests,
+            sectionPullRequests: inbox.sectionPullRequests,
+            sectionCounts: inbox.sectionCounts,
+            sectionPagination: inbox.sectionPagination,
+            lastLoadedAt: inbox.lastLoadedAt,
+        });
+    }
+
     async function readJson<TValue>(key: string): Promise<TValue | null> {
         const raw = await store.get(key);
 
@@ -623,6 +652,23 @@ export function createEasyReviewSession({ github, store, oauth }: EasyReviewSess
             expandedSections: defaultExpandedSections(sectionLayout),
             sectionLayout,
         });
+
+        if (login && inbox) {
+            setInboxQueryData(queryClient, login, {
+                pullRequests: inbox.pullRequests,
+                sectionPullRequests: inbox.sectionPullRequests ?? {},
+                sectionCounts: inbox.sectionCounts ?? {},
+                sectionPagination: {},
+                lastLoadedAt: inbox.lastLoadedAt,
+            });
+        }
+
+        if (login && repositories) {
+            queryClient.setQueryData<RepositoriesQueryData>(queryKeys.repos.list(login), {
+                available: repositories.available,
+                lastLoadedAt: repositories.lastLoadedAt,
+            });
+        }
     }
 
     /**
@@ -741,6 +787,9 @@ export function createEasyReviewSession({ github, store, oauth }: EasyReviewSess
         latestAuthAttempt++;
         latestRepositoryLoad++;
         latestInboxLoad++;
+        latestPullRequestLoads.forEach((_value, key) => {
+            latestPullRequestLoads.set(key, (latestPullRequestLoads.get(key) ?? 0) + 1);
+        });
         token = null;
         if (oauth) {
             try {
@@ -750,6 +799,7 @@ export function createEasyReviewSession({ github, store, oauth }: EasyReviewSess
             }
         }
         await store.remove(LEGACY_BROWSER_TOKEN_KEY);
+        queryClient.removeQueries({ queryKey: ["pullRequest"] });
         resetSessionUi();
         setAuth({ status: "unauthenticated", viewer: null, tokenStored: false, error: null });
     }
@@ -761,16 +811,42 @@ export function createEasyReviewSession({ github, store, oauth }: EasyReviewSess
     /** Ask GitHub which repositories this session can see. */
     async function refreshRepositories(): Promise<void> {
         const attempt = ++latestRepositoryLoad;
-        const cached = state.state.repos.available;
+        const login = state.state.auth.viewer?.login;
+        const cached =
+            (login ? queryClient.getQueryData<RepositoriesQueryData>(queryKeys.repos.list(login)) : undefined)
+                ?.available ?? state.state.repos.available;
         setRepos({ refreshing: true, status: cached.length ? "ready" : "loading", error: null });
 
         try {
-            const available = await github.listRepositories(requireToken());
+            if (!login) {
+                throw unauthorized("Not signed in.");
+            }
+
+            await queryClient.invalidateQueries({ queryKey: queryKeys.repos.list(login) });
+            const data = await queryClient.fetchQuery({
+                queryKey: queryKeys.repos.list(login),
+                queryFn: async () => {
+                    const available = await github.listRepositories(requireToken());
+                    return { available, lastLoadedAt: new Date().toISOString() } satisfies RepositoriesQueryData;
+                },
+            });
+
             if (attempt !== latestRepositoryLoad) return;
 
-            const lastLoadedAt = new Date().toISOString();
-            await store.set(REPOS_CACHE_KEY, JSON.stringify({ available, lastLoadedAt } satisfies RepositoriesCache));
-            setRepos({ status: "ready", refreshing: false, available, lastLoadedAt, error: null });
+            await store.set(
+                REPOS_CACHE_KEY,
+                JSON.stringify({
+                    available: data.available,
+                    lastLoadedAt: data.lastLoadedAt,
+                } satisfies RepositoriesCache),
+            );
+            setRepos({
+                status: "ready",
+                refreshing: false,
+                available: data.available,
+                lastLoadedAt: data.lastLoadedAt,
+                error: null,
+            });
         } catch (error) {
             if (attempt !== latestRepositoryLoad) return;
             setRepos({
@@ -825,80 +901,25 @@ export function createEasyReviewSession({ github, store, oauth }: EasyReviewSess
 
         if (!viewerLogin || selected.length === 0) {
             if (attempt === undefined || attempt === latestInboxLoad) {
-                setInbox({
-                    pullRequests: [],
-                    sectionPullRequests: {},
-                    sectionCounts: {},
-                    sectionPagination: {},
-                });
+                syncInboxQueryData(emptyInboxQueryData());
             }
             return { successes: 0, failure: null };
         }
 
-        const selectedSet = new Set(selected);
-        const definitions = sectionIds
-            ? allSectionDefinitions(inbox.sectionLayout).filter((definition) => sectionIds.includes(definition.id))
-            : visibleSectionDefinitions(inbox.sectionLayout);
-
-        let failure: SessionError | null = null;
-        let successes = 0;
-        let stopFetching = false;
-        const results: Array<{
-            id: InboxSectionId;
-            pullRequests: Array<PullRequestSummary>;
-            totalCount: number;
-            pageInfo: InboxPullRequestPageInfo;
-        } | null> = [];
-
-        for (const definition of definitions) {
-            if (stopFetching) {
-                break;
-            }
-
-            if (attempt !== undefined && attempt !== latestInboxLoad) {
-                return { successes, failure };
-            }
-
-            const query = sectionFilterToSearchQuery(definition.filter, viewerLogin);
-
-            try {
-                if (query) {
-                    const page = await github.fetchSectionPullRequests(requireToken(), {
-                        query,
-                        repositories: selected,
-                        limit: INBOX_SECTION_LOAD_SIZE,
-                    });
-                    successes += 1;
-                    results.push({ id: definition.id, ...page });
-                    continue;
-                }
-
-                const matched = inbox.pullRequests
-                    .filter(
-                        (pullRequest) =>
-                            selectedSet.has(pullRequest.repository) &&
-                            matchSectionFilter(pullRequest, definition.filter, viewerLogin),
-                    )
-                    .sort(comparePullRequestsByUpdatedAtDesc);
-                const pullRequests = matched.slice(0, INBOX_SECTION_LOAD_SIZE);
-                successes += 1;
-                results.push({
-                    id: definition.id,
-                    pullRequests,
-                    totalCount: matched.length,
-                    pageInfo: {
-                        hasNextPage: matched.length > pullRequests.length,
-                        endCursor: matched.length > pullRequests.length ? String(pullRequests.length) : null,
-                    },
-                });
-            } catch (error) {
-                failure ??= toSessionError(error);
-                results.push(null);
-                if (isRateLimitedError(error)) {
-                    stopFetching = true;
-                }
-            }
+        if (attempt !== undefined && attempt !== latestInboxLoad) {
+            return { successes: 0, failure: null };
         }
+
+        const existing = readInboxQueryData();
+        const { data, successes, failure } = await fetchInboxSections({
+            github,
+            token: requireToken(),
+            viewerLogin,
+            selected,
+            sectionLayout: inbox.sectionLayout,
+            existing,
+            sectionIds,
+        });
 
         if (attempt !== undefined && attempt !== latestInboxLoad) {
             return { successes, failure };
@@ -908,29 +929,7 @@ export function createEasyReviewSession({ github, store, oauth }: EasyReviewSess
             return { successes, failure };
         }
 
-        const sectionPullRequests = sectionIds ? { ...inbox.sectionPullRequests } : {};
-        const sectionCounts = sectionIds ? { ...inbox.sectionCounts } : {};
-        const sectionPagination = sectionIds ? { ...inbox.sectionPagination } : {};
-        let mergedPool = sectionIds ? [...inbox.pullRequests] : [];
-
-        for (const result of results) {
-            if (!result) {
-                continue;
-            }
-
-            sectionPullRequests[result.id] = result.pullRequests;
-            sectionCounts[result.id] = result.totalCount;
-            sectionPagination[result.id] = result.pageInfo;
-            mergedPool = mergePullRequestSummaries(mergedPool, result.pullRequests);
-        }
-
-        setInbox({
-            pullRequests: mergedPool,
-            sectionPullRequests,
-            sectionCounts,
-            sectionPagination,
-            error: failure && Object.keys(sectionPullRequests).length > 0 ? failure : inbox.error,
-        });
+        syncInboxQueryData(data);
 
         return { successes, failure };
     }
@@ -951,10 +950,10 @@ export function createEasyReviewSession({ github, store, oauth }: EasyReviewSess
     /** Refresh every section from GitHub ({@link INBOX_SECTION_LOAD_SIZE} rows + total count each). */
     async function refreshInbox(): Promise<void> {
         const attempt = ++latestInboxLoad;
-        const { selected } = state.state.repos;
-        const cached = state.state.inbox.pullRequests;
+        const context = currentInboxQueryContext();
+        const cached = readInboxQueryData();
 
-        if (selected.length === 0) {
+        if (!context || state.state.repos.selected.length === 0) {
             setInbox({
                 status: "ready",
                 refreshing: false,
@@ -966,30 +965,43 @@ export function createEasyReviewSession({ github, store, oauth }: EasyReviewSess
                 loadingMoreSection: null,
                 error: null,
             });
+            syncInboxQueryData(emptyInboxQueryData());
             return;
         }
 
-        // Keep painted UI while refreshing — only the first load may show a loading skeleton.
-        const keepPainted = state.state.inbox.status === "ready" || cached.length > 0;
+        const keepPainted = state.state.inbox.status === "ready" || cached.pullRequests.length > 0;
         setInbox({ refreshing: true, status: keepPainted ? "ready" : "loading", error: null });
 
+        const key = inboxQueryKey(context.login);
+
         try {
-            const { successes, failure } = await loadInboxSections(undefined, attempt);
+            await queryClient.invalidateQueries({ queryKey: key });
+            await queryClient.fetchQuery({
+                queryKey: key,
+                queryFn: async () => {
+                    const { successes, failure } = await loadInboxSections(undefined, attempt);
+                    if (attempt !== latestInboxLoad) {
+                        return readInboxQueryData();
+                    }
+
+                    if (successes === 0 && failure) {
+                        throw new EasyReviewError(failure.kind, failure.message, { retryAt: failure.retryAt });
+                    }
+
+                    return readInboxQueryData();
+                },
+            });
+
             if (attempt !== latestInboxLoad) return;
 
-            if (successes === 0 && failure) {
-                throw new EasyReviewError(failure.kind, failure.message, { retryAt: failure.retryAt });
-            }
-
-            const { pullRequests, sectionPullRequests, sectionCounts } = state.state.inbox;
-            const lastLoadedAt = new Date().toISOString();
+            const data = readInboxQueryData();
             await store.set(
                 INBOX_CACHE_KEY,
                 JSON.stringify({
-                    pullRequests,
-                    sectionPullRequests,
-                    sectionCounts,
-                    lastLoadedAt,
+                    pullRequests: data.pullRequests,
+                    sectionPullRequests: data.sectionPullRequests,
+                    sectionCounts: data.sectionCounts,
+                    lastLoadedAt: data.lastLoadedAt,
                 } satisfies InboxCache),
             );
             setInbox({
@@ -997,13 +1009,13 @@ export function createEasyReviewSession({ github, store, oauth }: EasyReviewSess
                 refreshing: false,
                 stale: false,
                 loadingMoreSection: null,
-                lastLoadedAt,
-                error: failure && cached.length > 0 ? failure : null,
+                lastLoadedAt: data.lastLoadedAt,
+                error: null,
             });
         } catch (error) {
             if (attempt !== latestInboxLoad) return;
             setInbox({
-                status: cached.length ? "ready" : "error",
+                status: cached.pullRequests.length ? "ready" : "error",
                 refreshing: false,
                 stale: false,
                 error: toSessionError(error),
@@ -1037,7 +1049,8 @@ export function createEasyReviewSession({ github, store, oauth }: EasyReviewSess
         }
 
         if (options?.background) {
-            const { lastLoadedAt } = state.state.inbox;
+            const inboxData = readInboxQueryData();
+            const lastLoadedAt = inboxData.lastLoadedAt ?? state.state.inbox.lastLoadedAt;
             if (lastLoadedAt && Date.now() - Date.parse(lastLoadedAt) < INBOX_BACKGROUND_REVALIDATE_MIN_MS) {
                 return;
             }
@@ -1049,6 +1062,10 @@ export function createEasyReviewSession({ github, store, oauth }: EasyReviewSess
     /** Mark the inbox dirty so the next Inbox visit / loadInbox picks up a fresh GitHub fetch. */
     function invalidateInbox(): void {
         setInbox({ stale: true });
+        const context = currentInboxQueryContext();
+        if (context) {
+            invalidateInboxForRefresh(queryClient, context.login);
+        }
     }
 
     async function persistInboxPullRequests(pullRequests: Array<PullRequestSummary>): Promise<void> {
@@ -1114,6 +1131,7 @@ export function createEasyReviewSession({ github, store, oauth }: EasyReviewSess
                     loadingMoreSection: null,
                     error: null,
                 });
+                syncInboxFromStore();
                 return;
             }
 
@@ -1135,6 +1153,7 @@ export function createEasyReviewSession({ github, store, oauth }: EasyReviewSess
                 loadingMoreSection: null,
                 error: null,
             });
+            syncInboxFromStore();
             await persistInboxPullRequests(mergedPool);
         } catch (error) {
             setInbox({
@@ -1397,17 +1416,28 @@ export function createEasyReviewSession({ github, store, oauth }: EasyReviewSess
         setPullRequest(key, { refreshing: true, status: keepPainted ? "ready" : "loading", error: null });
 
         try {
-            const detail = await github.getPullRequest(requireToken(), repository, number);
+            await queryClient.invalidateQueries({ queryKey: queryKeys.pullRequest.detail(key) });
+            const data = await queryClient.fetchQuery({
+                queryKey: queryKeys.pullRequest.detail(key),
+                queryFn: async () => {
+                    const detail = await github.getPullRequest(requireToken(), repository, number);
+                    return { detail, lastLoadedAt: new Date().toISOString() };
+                },
+            });
             if (attempt !== latestPullRequestLoads.get(key)) return;
+            if (state.state.auth.status !== "authenticated") {
+                queryClient.removeQueries({ queryKey: queryKeys.pullRequest.detail(key) });
+                return;
+            }
 
             setPullRequest(key, {
                 status: "ready",
                 refreshing: false,
-                detail,
-                lastLoadedAt: new Date().toISOString(),
+                detail: data.detail,
+                lastLoadedAt: data.lastLoadedAt,
                 error: null,
             });
-            await syncDraftWithHead(detail);
+            await syncDraftWithHead(data.detail);
             await refreshSecondaryPullRequestViews(repository, number);
         } catch (error) {
             if (attempt !== latestPullRequestLoads.get(key)) return;
@@ -1446,9 +1476,28 @@ export function createEasyReviewSession({ github, store, oauth }: EasyReviewSess
     function getPullRequestPage(repository: string, number: number): PullRequestPage {
         const key = pullRequestKey(repository, number);
         const view = state.state.pullRequests[key] ?? initialPullRequestView;
-        const summary = state.state.inbox.pullRequests.find((pullRequest) => pullRequest.key === key) ?? null;
+        const inboxData = readInboxQueryData();
+        const summary = inboxData.pullRequests.find((pullRequest) => pullRequest.key === key) ?? null;
+        const detailData = queryClient.getQueryData<PullRequestDetailQueryData>(queryKeys.pullRequest.detail(key));
+        const filesData = queryClient.getQueryData<PullRequestFilesQueryData>(queryKeys.pullRequest.files(key));
 
-        return { ...view, repository, number, summary };
+        return {
+            ...view,
+            repository,
+            number,
+            summary,
+            detail: detailData?.detail ?? view.detail,
+            lastLoadedAt: detailData?.lastLoadedAt ?? view.lastLoadedAt,
+            files: filesData
+                ? {
+                      status: "ready",
+                      refreshing: false,
+                      items: filesData.items,
+                      lastLoadedAt: filesData.lastLoadedAt,
+                      error: null,
+                  }
+                : view.files,
+        };
     }
 
     /** Paths only — opening Review Changes must not download every patch. */
@@ -1461,17 +1510,24 @@ export function createEasyReviewSession({ github, store, oauth }: EasyReviewSess
         setFiles(key, { refreshing: true, status: cached.length ? "ready" : "loading", error: null });
 
         try {
-            const items = await github.listPullRequestFiles(requireToken(), repository, number);
+            await queryClient.invalidateQueries({ queryKey: queryKeys.pullRequest.files(key) });
+            const data = await queryClient.fetchQuery({
+                queryKey: queryKeys.pullRequest.files(key),
+                queryFn: async () => {
+                    const items = await github.listPullRequestFiles(requireToken(), repository, number);
+                    return { items, lastLoadedAt: new Date().toISOString() };
+                },
+            });
             if (attempt !== latestFileListLoads.get(key)) return;
 
-            // Drop cached diffs: the head may have moved, and loadFileDiff would otherwise keep
-            // serving the pre-refresh patch for the still-selected path.
+            void queryClient.removeQueries({ queryKey: ["pullRequest", key, "diff"] });
+
             setPullRequest(key, {
                 files: {
                     status: "ready",
                     refreshing: false,
-                    items,
-                    lastLoadedAt: new Date().toISOString(),
+                    items: data.items,
+                    lastLoadedAt: data.lastLoadedAt,
                     error: null,
                 },
                 diffs: {},
@@ -1531,14 +1587,27 @@ export function createEasyReviewSession({ github, store, oauth }: EasyReviewSess
 
         try {
             const previousPath =
-                state.state.pullRequests[key]?.files.items.find((file) => file.path === path)?.previousPath ?? null;
-            const diff = await github.getPullRequestFileDiff(requireToken(), repository, number, path, {
-                force,
-                previousPath,
+                state.state.pullRequests[key]?.files.items.find((file) => file.path === path)?.previousPath ??
+                queryClient
+                    .getQueryData<PullRequestFilesQueryData>(queryKeys.pullRequest.files(key))
+                    ?.items.find((file) => file.path === path)?.previousPath ??
+                null;
+            if (force) {
+                await queryClient.invalidateQueries({ queryKey: queryKeys.pullRequest.diff(key, path) });
+            }
+            const data = await queryClient.fetchQuery({
+                queryKey: queryKeys.pullRequest.diff(key, path),
+                queryFn: async () => {
+                    const diff = await github.getPullRequestFileDiff(requireToken(), repository, number, path, {
+                        force,
+                        previousPath,
+                    });
+                    return { diff };
+                },
             });
             if (attempt !== latestFileDiffLoads.get(diffKey)) return;
 
-            setFileDiff(key, path, { status: "ready", refreshing: false, diff, error: null });
+            setFileDiff(key, path, { status: "ready", refreshing: false, diff: data.diff, error: null });
         } catch (error) {
             if (attempt !== latestFileDiffLoads.get(diffKey)) return;
             setFileDiff(key, path, {
@@ -1584,7 +1653,12 @@ export function createEasyReviewSession({ github, store, oauth }: EasyReviewSess
     }
 
     function getFileDiff(repository: string, number: number, path: string): FileDiffState {
-        return state.state.pullRequests[pullRequestKey(repository, number)]?.diffs[path] ?? initialFileDiffState;
+        const key = pullRequestKey(repository, number);
+        const cached = queryClient.getQueryData<FileDiffQueryData>(queryKeys.pullRequest.diff(key, path));
+        if (cached?.diff) {
+            return { status: "ready", refreshing: false, diff: cached.diff, error: null };
+        }
+        return state.state.pullRequests[key]?.diffs[path] ?? initialFileDiffState;
     }
 
     function emptyDraft(repository: string, number: number, headSha: string): ReviewDraft {
@@ -1842,14 +1916,20 @@ export function createEasyReviewSession({ github, store, oauth }: EasyReviewSess
         }));
 
         try {
-            const items = await github.listReviewThreads(requireToken(), repository, number);
+            const data = await queryClient.fetchQuery({
+                queryKey: queryKeys.pullRequest.threads(key),
+                queryFn: async () => {
+                    const items = await github.listReviewThreads(requireToken(), repository, number);
+                    return { items };
+                },
+            });
             if (attempt !== latestReviewThreadLoads.get(key)) {
                 return;
             }
 
             state.setState((prev) => ({
                 ...prev,
-                reviewThreads: { ...prev.reviewThreads, [key]: { status: "ready", items, error: null } },
+                reviewThreads: { ...prev.reviewThreads, [key]: { status: "ready", items: data.items, error: null } },
             }));
         } catch (error) {
             if (attempt !== latestReviewThreadLoads.get(key)) {
@@ -1871,7 +1951,12 @@ export function createEasyReviewSession({ github, store, oauth }: EasyReviewSess
     }
 
     function getReviewThreads(repository: string, number: number): ReviewThreadsState {
-        return state.state.reviewThreads[pullRequestKey(repository, number)] ?? initialThreadsState;
+        const key = pullRequestKey(repository, number);
+        const cached = queryClient.getQueryData<ReviewThreadsQueryData>(queryKeys.pullRequest.threads(key));
+        if (cached) {
+            return { status: "ready", items: cached.items, error: null };
+        }
+        return state.state.reviewThreads[key] ?? initialThreadsState;
     }
 
     async function replyToReviewThread(
@@ -1889,15 +1974,17 @@ export function createEasyReviewSession({ github, store, oauth }: EasyReviewSess
         const key = pullRequestKey(repository, number);
         state.setState((prev) => {
             const current = prev.reviewThreads[key] ?? initialThreadsState;
+            const nextItems = current.items.map((thread) =>
+                thread.id === threadId ? { ...thread, comments: [...thread.comments, reply] } : thread,
+            );
+            queryClient.setQueryData<ReviewThreadsQueryData>(queryKeys.pullRequest.threads(key), { items: nextItems });
             return {
                 ...prev,
                 reviewThreads: {
                     ...prev.reviewThreads,
                     [key]: {
                         ...current,
-                        items: current.items.map((thread) =>
-                            thread.id === threadId ? { ...thread, comments: [...thread.comments, reply] } : thread,
-                        ),
+                        items: nextItems,
                     },
                 },
             };
@@ -1915,15 +2002,17 @@ export function createEasyReviewSession({ github, store, oauth }: EasyReviewSess
         const key = pullRequestKey(repository, number);
         state.setState((prev) => {
             const current = prev.reviewThreads[key] ?? initialThreadsState;
+            const nextItems = current.items.map((thread) =>
+                thread.id === threadId ? { ...thread, isResolved: resolved } : thread,
+            );
+            queryClient.setQueryData<ReviewThreadsQueryData>(queryKeys.pullRequest.threads(key), { items: nextItems });
             return {
                 ...prev,
                 reviewThreads: {
                     ...prev.reviewThreads,
                     [key]: {
                         ...current,
-                        items: current.items.map((thread) =>
-                            thread.id === threadId ? { ...thread, isResolved: resolved } : thread,
-                        ),
+                        items: nextItems,
                     },
                 },
             };
@@ -1948,7 +2037,13 @@ export function createEasyReviewSession({ github, store, oauth }: EasyReviewSess
         }));
 
         try {
-            const items = await github.listPullRequestTimeline(requireToken(), repository, number);
+            const data = await queryClient.fetchQuery({
+                queryKey: queryKeys.pullRequest.conversation(key),
+                queryFn: async () => {
+                    const items = await github.listPullRequestTimeline(requireToken(), repository, number);
+                    return { items };
+                },
+            });
             if (attempt !== latestConversationCommentLoads.get(key)) {
                 return;
             }
@@ -1957,7 +2052,7 @@ export function createEasyReviewSession({ github, store, oauth }: EasyReviewSess
                 ...prev,
                 conversationComments: {
                     ...prev.conversationComments,
-                    [key]: { status: "ready", items, error: null },
+                    [key]: { status: "ready", items: data.items, error: null },
                 },
             }));
         } catch (error) {
@@ -1980,7 +2075,12 @@ export function createEasyReviewSession({ github, store, oauth }: EasyReviewSess
     }
 
     function getConversationComments(repository: string, number: number): ConversationCommentsState {
-        return state.state.conversationComments[pullRequestKey(repository, number)] ?? initialConversationState;
+        const key = pullRequestKey(repository, number);
+        const cached = queryClient.getQueryData<ConversationQueryData>(queryKeys.pullRequest.conversation(key));
+        if (cached) {
+            return { status: "ready", items: cached.items, error: null };
+        }
+        return state.state.conversationComments[key] ?? initialConversationState;
     }
 
     async function loadPullRequestCommits(repository: string, number: number): Promise<void> {
@@ -2006,7 +2106,13 @@ export function createEasyReviewSession({ github, store, oauth }: EasyReviewSess
         }));
 
         try {
-            const items = await github.listPullRequestCommits(requireToken(), repository, number);
+            const data = await queryClient.fetchQuery({
+                queryKey: queryKeys.pullRequest.commits(key),
+                queryFn: async () => {
+                    const items = await github.listPullRequestCommits(requireToken(), repository, number);
+                    return { items };
+                },
+            });
             if (attempt !== latestPullRequestCommitLoads.get(key)) {
                 return;
             }
@@ -2015,7 +2121,7 @@ export function createEasyReviewSession({ github, store, oauth }: EasyReviewSess
                 ...prev,
                 pullRequestCommits: {
                     ...prev.pullRequestCommits,
-                    [key]: { status: "ready", items, error: null },
+                    [key]: { status: "ready", items: data.items, error: null },
                 },
             }));
         } catch (error) {
@@ -2038,7 +2144,12 @@ export function createEasyReviewSession({ github, store, oauth }: EasyReviewSess
     }
 
     function getPullRequestCommits(repository: string, number: number): PullRequestCommitsState {
-        return state.state.pullRequestCommits[pullRequestKey(repository, number)] ?? initialCommitsState;
+        const key = pullRequestKey(repository, number);
+        const cached = queryClient.getQueryData<PullRequestCommitsQueryData>(queryKeys.pullRequest.commits(key));
+        if (cached) {
+            return { status: "ready", items: cached.items, error: null };
+        }
+        return state.state.pullRequestCommits[key] ?? initialCommitsState;
     }
 
     function relatedContextFor(
@@ -2103,32 +2214,36 @@ export function createEasyReviewSession({ github, store, oauth }: EasyReviewSess
         }));
 
         try {
-            const repositories = await repositoriesForRelatedSearch(repository);
-
-            if (attempt !== latestRelatedPullRequestLoads.get(key)) {
-                return;
-            }
-
-            const fetched =
-                repositories.length === 0
-                    ? []
-                    : await github.listRelatedPullRequests(requireToken(), {
-                          repositories,
-                          headRefName: context.headRefName,
-                          baseRefName: context.baseRefName,
-                      });
-
-            if (attempt !== latestRelatedPullRequestLoads.get(key)) {
-                return;
-            }
-
-            const items = selectRelatedPullRequests({
-                pullRequests: fetched,
-                headRefName: context.headRefName,
-                baseRefName: context.baseRefName,
-                excludeRepository: repository,
-                focalCreatedAt: context.createdAt,
+            const data = await queryClient.fetchQuery({
+                queryKey: queryKeys.pullRequest.related(key),
+                queryFn: async () => {
+                    const repositories = await repositoriesForRelatedSearch(repository);
+                    const fetched =
+                        repositories.length === 0
+                            ? []
+                            : await github.listRelatedPullRequests(requireToken(), {
+                                  repositories,
+                                  headRefName: context.headRefName,
+                                  baseRefName: context.baseRefName,
+                              });
+                    const items = selectRelatedPullRequests({
+                        pullRequests: fetched,
+                        headRefName: context.headRefName,
+                        baseRefName: context.baseRefName,
+                        excludeRepository: repository,
+                        focalCreatedAt: context.createdAt,
+                    });
+                    return {
+                        items,
+                        headRefName: context.headRefName,
+                        baseRefName: context.baseRefName,
+                    };
+                },
             });
+
+            if (attempt !== latestRelatedPullRequestLoads.get(key)) {
+                return;
+            }
 
             state.setState((prev) => ({
                 ...prev,
@@ -2136,9 +2251,9 @@ export function createEasyReviewSession({ github, store, oauth }: EasyReviewSess
                     ...prev.relatedPullRequests,
                     [key]: {
                         status: "ready",
-                        items,
-                        headRefName: context.headRefName,
-                        baseRefName: context.baseRefName,
+                        items: data.items,
+                        headRefName: data.headRefName,
+                        baseRefName: data.baseRefName,
                         error: null,
                     },
                 },
@@ -2165,7 +2280,18 @@ export function createEasyReviewSession({ github, store, oauth }: EasyReviewSess
     }
 
     function getRelatedPullRequests(repository: string, number: number): RelatedPullRequestsState {
-        return state.state.relatedPullRequests[pullRequestKey(repository, number)] ?? initialRelatedState;
+        const key = pullRequestKey(repository, number);
+        const cached = queryClient.getQueryData<RelatedPullRequestsQueryData>(queryKeys.pullRequest.related(key));
+        if (cached) {
+            return {
+                status: "ready",
+                items: cached.items,
+                headRefName: cached.headRefName,
+                baseRefName: cached.baseRefName,
+                error: null,
+            };
+        }
+        return state.state.relatedPullRequests[key] ?? initialRelatedState;
     }
 
     function setRepoStackIndex(repository: string, patch: Partial<RepoStackIndexState>): void {
@@ -2426,7 +2552,16 @@ export function createEasyReviewSession({ github, store, oauth }: EasyReviewSess
         const timelineComment: PullRequestTimelineItem = { kind: "comment", ...comment };
         state.setState((prev) => {
             const current = prev.conversationComments[key] ?? initialConversationState;
+            const nextItems = [...current.items, timelineComment];
+            queryClient.setQueryData<ConversationQueryData>(queryKeys.pullRequest.conversation(key), {
+                items: nextItems,
+            });
             const view = prev.pullRequests[key];
+            const nextDetail =
+                view?.detail != null ? { ...view.detail, commentCount: view.detail.commentCount + 1 } : null;
+            if (nextDetail) {
+                setPullRequestDetailQueryData(queryClient, key, nextDetail);
+            }
             return {
                 ...prev,
                 conversationComments: {
@@ -2434,19 +2569,16 @@ export function createEasyReviewSession({ github, store, oauth }: EasyReviewSess
                     [key]: {
                         ...current,
                         status: "ready",
-                        items: [...current.items, timelineComment],
+                        items: nextItems,
                         error: null,
                     },
                 },
-                pullRequests: view?.detail
+                pullRequests: nextDetail
                     ? {
                           ...prev.pullRequests,
                           [key]: {
-                              ...view,
-                              detail: {
-                                  ...view.detail,
-                                  commentCount: view.detail.commentCount + 1,
-                              },
+                              ...view!,
+                              detail: nextDetail,
                           },
                       }
                     : prev.pullRequests,
@@ -2482,27 +2614,27 @@ export function createEasyReviewSession({ github, store, oauth }: EasyReviewSess
                 lastLoadedAt: new Date().toISOString(),
                 error: null,
             });
+            setPullRequestDetailQueryData(queryClient, key, detail);
 
-            const pullRequests = state.state.inbox.pullRequests.some((pullRequest) => pullRequest.key === key)
-                ? state.state.inbox.pullRequests.map((pullRequest) => (pullRequest.key === key ? summary : pullRequest))
-                : state.state.inbox.pullRequests;
-
-            setInbox({ pullRequests });
-            if (state.state.inbox.lastLoadedAt) {
+            const inboxData = readInboxQueryData();
+            const nextInbox = patchInboxPullRequest(inboxData, summary);
+            syncInboxQueryData(nextInbox);
+            if (nextInbox.lastLoadedAt) {
                 await store.set(
                     INBOX_CACHE_KEY,
                     JSON.stringify({
-                        pullRequests,
-                        lastLoadedAt: state.state.inbox.lastLoadedAt,
+                        pullRequests: nextInbox.pullRequests,
+                        sectionPullRequests: nextInbox.sectionPullRequests,
+                        sectionCounts: nextInbox.sectionCounts,
+                        lastLoadedAt: nextInbox.lastLoadedAt,
                     } satisfies InboxCache),
                 );
             }
 
             await syncDraftWithHead(detail);
-            // Mutations always create timeline events (ready/draft, labels, renames, …).
-            await loadConversationComments(repository, number);
-            if (state.state.reviewThreads[key]?.status !== "idle") {
-                await loadReviewThreads(repository, number);
+            const login = state.state.auth.viewer?.login ?? "";
+            if (login) {
+                invalidatePullRequestSecondaryAfterMutation(queryClient, login, repository, number);
             }
         } catch (error) {
             if (attempt !== latestPullRequestLoads.get(key)) {
@@ -2553,10 +2685,16 @@ export function createEasyReviewSession({ github, store, oauth }: EasyReviewSess
         }));
 
         try {
-            const [users, labels] = await Promise.all([
-                github.listRepositoryAssignees(requireToken(), repository),
-                github.listRepositoryLabels(requireToken(), repository),
-            ]);
+            const data = await queryClient.fetchQuery({
+                queryKey: queryKeys.repository.metadata(repository),
+                queryFn: async () => {
+                    const [users, labels] = await Promise.all([
+                        github.listRepositoryAssignees(requireToken(), repository),
+                        github.listRepositoryLabels(requireToken(), repository),
+                    ]);
+                    return { users, labels };
+                },
+            });
 
             if (attempt !== latestRepositoryMetadataLoads.get(repository)) {
                 return;
@@ -2566,7 +2704,7 @@ export function createEasyReviewSession({ github, store, oauth }: EasyReviewSess
                 ...prev,
                 repositoryMetadata: {
                     ...prev.repositoryMetadata,
-                    [repository]: { status: "ready", users, labels, error: null },
+                    [repository]: { status: "ready", users: data.users, labels: data.labels, error: null },
                 },
             }));
         } catch (error) {
@@ -2590,6 +2728,10 @@ export function createEasyReviewSession({ github, store, oauth }: EasyReviewSess
     }
 
     function getRepositoryMetadata(repository: string): RepositoryMetadataState {
+        const cached = queryClient.getQueryData<RepositoryMetadataQueryData>(queryKeys.repository.metadata(repository));
+        if (cached) {
+            return { status: "ready", users: cached.users, labels: cached.labels, error: null };
+        }
         return state.state.repositoryMetadata[repository] ?? initialRepositoryMetadata;
     }
 
@@ -2943,10 +3085,11 @@ export function createEasyReviewSession({ github, store, oauth }: EasyReviewSess
 
     /** Visible sections in the user's layout order, empty ones included when not hidden. */
     function getInboxSections(): Array<InboxSection> {
-        const { inbox, repos } = state.state;
+        const { repos, inbox } = state.state;
         const selected = new Set(repos.selected);
+        const queryData = readInboxQueryData();
         const sectionPullRequests = Object.fromEntries(
-            Object.entries(inbox.sectionPullRequests).map(([sectionId, pullRequests]) => [
+            Object.entries(queryData.sectionPullRequests).map(([sectionId, pullRequests]) => [
                 sectionId,
                 pullRequests.filter((pullRequest) => selected.has(pullRequest.repository)),
             ]),
@@ -2955,7 +3098,7 @@ export function createEasyReviewSession({ github, store, oauth }: EasyReviewSess
         return inboxSectionsFromLoaded(
             visibleSectionDefinitions(inbox.sectionLayout),
             sectionPullRequests,
-            inbox.sectionCounts,
+            queryData.sectionCounts,
         );
     }
 
@@ -3024,6 +3167,9 @@ export function createEasyReviewSession({ github, store, oauth }: EasyReviewSess
 
     return {
         state,
+        github,
+        queryClient,
+        requireToken,
         restore,
         connect,
         beginOAuthLogin,

@@ -1,19 +1,12 @@
-import { useSelector } from "@tanstack/react-store";
 import { GitCommitHorizontal } from "lucide-react";
-import { useEffect } from "react";
 
 import { CheckStateIcon } from "#/components/pr/commit-checks-menu.tsx";
 import { RelativeTime } from "#/components/ui/relative-time.tsx";
 import { Skeleton } from "#/components/ui/skeleton.tsx";
-import { useSession } from "#/lib/session/provider.tsx";
+import { usePullRequestCommitsQuery } from "#/lib/query/pull-request.ts";
 
 export function PullRequestCommits({ repository, number }: { repository: string; number: number }) {
-    const session = useSession();
-    const commits = useSelector(session.state, () => session.getPullRequestCommits(repository, number));
-
-    useEffect(() => {
-        void session.loadPullRequestCommits(repository, number);
-    }, [session, repository, number]);
+    const commits = usePullRequestCommitsQuery(repository, number);
 
     return (
         <section

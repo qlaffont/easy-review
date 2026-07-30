@@ -1,7 +1,6 @@
 import { useNavigate } from "@tanstack/react-router";
-import { useSelector } from "@tanstack/react-store";
 import { ChevronRight, FolderGit2, Keyboard, RefreshCw, Settings } from "lucide-react";
-import { lazy, Suspense, useEffect, useEffectEvent, useState } from "react";
+import { lazy, Suspense, useEffect, useEffectEvent, useRef, useState } from "react";
 
 import type { InboxSection, InboxSectionId, SectionColorId, SectionIconId } from "#/lib/session/inbox-sections.ts";
 import type { PullRequestSummary } from "#/lib/session/types.ts";
@@ -19,6 +18,8 @@ import {
 } from "#/components/ui/dropdown-menu.tsx";
 import { InboxLoadingSkeleton, LazyChunkFallback } from "#/components/ui/loading.tsx";
 import { RelativeTime } from "#/components/ui/relative-time.tsx";
+import { useInboxQuery } from "#/lib/query/inbox.ts";
+import { invalidateInboxAfterRepoSelection } from "#/lib/query/invalidate.ts";
 import { useSession, useSessionState } from "#/lib/session/provider.tsx";
 import { useQuietRevalidate } from "#/lib/session/quiet-revalidate.ts";
 import { notifyAction } from "#/lib/toast.ts";
@@ -41,21 +42,23 @@ export function InboxBoard() {
     const session = useSession();
     const navigate = useNavigate();
     const openRepoPicker = useOpenRepoPicker();
-    const inbox = useSessionState((state) => state.inbox);
+    const { data, sections, isLoading, isFetching, isError, error, refresh, revalidate } = useInboxQuery();
+    const login = useSessionState((state) => state.auth.viewer?.login ?? "");
+    const inboxUi = useSessionState((state) => state.inbox);
     const selectedCount = useSessionState((state) => state.repos.selected.length);
-    const sections = useSelector(session.state, () => session.getInboxSections());
-    const sectionLayout = useSelector(session.state, () => session.getSectionLayout());
+    const sectionLayout = inboxUi.sectionLayout;
     const [selectedKey, setSelectedKey] = useState<string | null>(null);
     const [visibleCountBySection, setVisibleCountBySection] = useState<Partial<Record<InboxSectionId, number>>>({});
     const [filterSectionId, setFilterSectionId] = useState<InboxSectionId | null>(null);
     const [appearanceSectionId, setAppearanceSectionId] = useState<InboxSectionId | null>(null);
+    const previousSelectedCount = useRef<number | null>(null);
 
     function visibleCountFor(id: InboxSectionId): number {
         return visibleCountBySection[id] ?? INBOX_SECTION_PAGE_SIZE;
     }
 
     const flatRows = sections
-        .filter((section) => inbox.expandedSections.includes(section.id))
+        .filter((section) => inboxUi.expandedSections.includes(section.id))
         .flatMap((section) => section.pullRequests.slice(0, visibleCountFor(section.id)));
     const selected = flatRows.find((pullRequest) => pullRequest.key === selectedKey) ?? flatRows[0] ?? null;
 
@@ -95,27 +98,26 @@ export function InboxBoard() {
         });
     });
 
-    // Always refetch when opening the Inbox (mount / return from a PR) and when the allowlist size changes.
+    // Refetch when the allowlist changes — not on first paint (refetchOnMount covers stale cache).
     useEffect(() => {
-        void session.refreshInbox();
-    }, [session, selectedCount]);
-
-    // Repo swaps that keep the same count still flip `stale` — pick those up without a second mount fetch loop.
-    useEffect(() => {
-        if (!inbox.stale) {
+        if (previousSelectedCount.current === null) {
+            previousSelectedCount.current = selectedCount;
             return;
         }
-        void session.loadInbox();
-    }, [session, inbox.stale]);
+        if (previousSelectedCount.current !== selectedCount && login) {
+            invalidateInboxAfterRepoSelection(session.queryClient, login);
+            previousSelectedCount.current = selectedCount;
+        }
+    }, [session.queryClient, login, selectedCount]);
 
     useQuietRevalidate(() => {
-        void session.revalidateInbox({ background: true });
+        void revalidate({ background: true });
     });
 
     useEffect(() => {
         function revalidateWhenVisible() {
             if (document.visibilityState === "visible") {
-                void session.revalidateInbox({ background: true });
+                void revalidate({ background: true });
             }
         }
 
@@ -126,7 +128,7 @@ export function InboxBoard() {
             document.removeEventListener("visibilitychange", revalidateWhenVisible);
             window.removeEventListener("focus", revalidateWhenVisible);
         };
-    }, [session]);
+    }, [revalidate]);
 
     useEffect(() => {
         function onKeyDown(event: KeyboardEvent) {
@@ -190,14 +192,14 @@ export function InboxBoard() {
             <div className="sticky top-12 z-10 -mx-4 border-b bg-background px-4 py-3">
                 <div className="flex items-center justify-between gap-3">
                     <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
-                        {inbox.refreshing ? (
+                        {isFetching ? (
                             <span className="inline-flex items-center gap-1.5 text-sky-700 dark:text-sky-300">
                                 <RefreshCw className="size-3 animate-spin" aria-hidden="true" />
                                 Syncing with GitHub…
                             </span>
-                        ) : inbox.lastLoadedAt ? (
+                        ) : data?.lastLoadedAt ? (
                             <span className="inline-flex items-center gap-1">
-                                Updated <RelativeTime iso={inbox.lastLoadedAt} />
+                                Updated <RelativeTime iso={data.lastLoadedAt} />
                             </span>
                         ) : (
                             "Not synced yet"
@@ -212,35 +214,35 @@ export function InboxBoard() {
                         <Button
                             variant="outline"
                             size="sm"
-                            disabled={inbox.refreshing}
+                            disabled={isFetching}
                             onClick={() =>
-                                void notifyAction(() => session.refreshInbox(), {
+                                void notifyAction(() => refresh(), {
                                     loading: "Refreshing inbox…",
                                     success: "Inbox refreshed",
                                     error: "Could not refresh the inbox.",
                                 })
                             }
                         >
-                            <RefreshCw className={inbox.refreshing ? "animate-spin" : undefined} />
+                            <RefreshCw className={isFetching ? "animate-spin" : undefined} />
                             Refresh
                         </Button>
                     </div>
                 </div>
             </div>
 
-            {inbox.error ? (
+            {isError && error ? (
                 <p className="rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
-                    {inbox.error.message}
+                    {error instanceof Error ? error.message : "Could not load the inbox."}
                 </p>
             ) : null}
 
-            {inbox.status === "loading" ? (
+            {isLoading && !data ? (
                 <InboxLoadingSkeleton />
             ) : (
                 <div className="flex flex-col gap-2">
                     {sections.map((section) => {
                         const layoutEntry = sectionLayout.find((entry) => entry.id === section.id);
-                        const isExpanded = inbox.expandedSections.includes(section.id);
+                        const isExpanded = inboxUi.expandedSections.includes(section.id);
                         const visibleCount = visibleCountFor(section.id);
                         return (
                             <InboxSectionPanel
@@ -280,7 +282,7 @@ export function InboxBoard() {
                                         }));
                                     })();
                                 }}
-                                loadingMore={inbox.loadingMoreSection === section.id}
+                                loadingMore={inboxUi.loadingMoreSection === section.id}
                                 canLoadMoreFromGitHub={session.canLoadMoreInboxSection(section.id)}
                                 onSelect={setSelectedKey}
                             />

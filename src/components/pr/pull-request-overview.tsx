@@ -1,5 +1,4 @@
 import { Link } from "@tanstack/react-router";
-import { useSelector } from "@tanstack/react-store";
 import {
     ArrowLeft,
     Check,
@@ -59,6 +58,8 @@ import {
 } from "#/components/ui/loading.tsx";
 import { Popover, PopoverContent, PopoverTrigger } from "#/components/ui/popover.tsx";
 import { RelativeTime } from "#/components/ui/relative-time.tsx";
+import { useAuthViewer } from "#/lib/query/auth.ts";
+import { usePullRequestPage } from "#/lib/query/pull-request.ts";
 import { pullRequestSeo, usePageSeo } from "#/lib/seo.ts";
 import { useSession } from "#/lib/session/provider.tsx";
 import { useCheckStatusRevalidate } from "#/lib/session/quiet-revalidate.ts";
@@ -115,8 +116,7 @@ export function PullRequestOverview({
     number: number;
     initialPath?: string;
 }) {
-    const session = useSession();
-    const page = useSelector(session.state, () => session.getPullRequestPage(repository, number));
+    const page = usePullRequestPage(repository, number);
     const headline: Headline | null = page.detail ?? page.summary;
     const headerSentinelRef = useRef<HTMLDivElement>(null);
     const [stickyVisible, setStickyVisible] = useState(false);
@@ -136,20 +136,14 @@ export function PullRequestOverview({
         }),
     );
 
-    useEffect(() => {
-        session.invalidateInbox();
-        void session.loadPullRequest(repository, number);
-        void session.loadPullRequestFiles(repository, number);
-    }, [session, repository, number]);
-
     useCheckStatusRevalidate(() => {
-        void session.revalidatePullRequest(repository, number);
+        void page.revalidateDetail({ checkPoll: true });
     });
 
     useEffect(() => {
         function revalidateWhenVisible() {
             if (document.visibilityState === "visible") {
-                void session.revalidatePullRequest(repository, number);
+                void page.revalidateDetail({ background: true });
             }
         }
 
@@ -160,7 +154,7 @@ export function PullRequestOverview({
             document.removeEventListener("visibilitychange", revalidateWhenVisible);
             window.removeEventListener("focus", revalidateWhenVisible);
         };
-    }, [session, repository, number]);
+    }, [page]);
 
     useEffect(() => {
         const hash = window.location.hash;
@@ -179,7 +173,7 @@ export function PullRequestOverview({
             history.replaceState(null, "", `#${tab}`);
         }
         if (tab === "commits") {
-            void session.loadPullRequestCommits(repository, number);
+            // Commits query loads when PullRequestCommits mounts.
         }
     }
 
@@ -210,7 +204,7 @@ export function PullRequestOverview({
             <StickyPullRequestBar headline={headline} visible={stickyVisible} />
             <div className="mx-auto flex w-full max-w-6xl flex-col gap-5 px-4 py-6">
                 <div ref={headerSentinelRef}>
-                    <PullRequestHeader page={page} headline={headline} />
+                    <PullRequestHeader page={page} headline={headline} onRefresh={page.refresh} />
                 </div>
 
                 <PullRequestTabNav headline={headline} detail={page.detail} active={activeTab} onSelect={selectTab} />
@@ -656,7 +650,15 @@ function StickyPullRequestBar({ headline, visible }: { headline: Headline; visib
     );
 }
 
-function PullRequestHeader({ page, headline }: { page: PullRequestPage; headline: Headline }) {
+function PullRequestHeader({
+    page,
+    headline,
+    onRefresh,
+}: {
+    page: PullRequestPage;
+    headline: Headline;
+    onRefresh: () => Promise<void>;
+}) {
     const session = useSession();
     const [busy, setBusy] = useState(false);
     const [actionError, setActionError] = useState<string | null>(null);
@@ -765,7 +767,7 @@ function PullRequestHeader({ page, headline }: { page: PullRequestPage; headline
                             disabled={page.refreshing || busy || editing}
                             aria-label="Refresh pull request"
                             onClick={() =>
-                                void notifyAction(() => session.refreshPullRequest(page.repository, page.number), {
+                                void notifyAction(() => onRefresh(), {
                                     loading: "Refreshing pull request…",
                                     success: "Pull request refreshed",
                                     error: "Could not refresh the pull request.",
@@ -1020,7 +1022,7 @@ function Description({
     onQuote: (body: string) => void;
 }) {
     const session = useSession();
-    const viewer = useSelector(session.state, (state) => state.auth.viewer);
+    const viewer = useAuthViewer();
     const [editing, setEditing] = useState(false);
     const [draft, setDraft] = useState("");
     const [saving, setSaving] = useState(false);

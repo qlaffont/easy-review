@@ -1,14 +1,13 @@
 import { Link } from "@tanstack/react-router";
-import { useSelector } from "@tanstack/react-store";
 import { GitMerge, GitPullRequest, GitPullRequestClosed, GitPullRequestDraft } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 
 import type { PullRequestSummary } from "#/lib/session/types.ts";
 
 import { Badge } from "#/components/ui/badge.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import { Card } from "#/components/ui/card.tsx";
-import { useSession } from "#/lib/session/provider.tsx";
+import { useRelatedPullRequestsQuery } from "#/lib/query/pull-request.ts";
 import { RELATED_SIDEBAR_VISIBLE_CAP } from "#/lib/session/related-pull-requests.ts";
 
 function RelatedStateIcon({ pullRequest }: { pullRequest: PullRequestSummary }) {
@@ -57,21 +56,16 @@ function RelatedRow({ pullRequest }: { pullRequest: PullRequestSummary }) {
 export function RelatedPullRequestsSidebar({
     repository,
     number,
-    headRefName,
-    baseRefName,
+    headRefName: _headRefName,
+    baseRefName: _baseRefName,
 }: {
     repository: string;
     number: number;
     headRefName: string;
     baseRefName: string;
 }) {
-    const session = useSession();
-    const related = useSelector(session.state, () => session.getRelatedPullRequests(repository, number));
+    const related = useRelatedPullRequestsQuery(repository, number);
     const [expanded, setExpanded] = useState(false);
-
-    useEffect(() => {
-        void session.loadRelatedPullRequests(repository, number);
-    }, [session, repository, number, headRefName, baseRefName]);
 
     const hasItems = related.items.length > 0;
     const visible = expanded ? related.items : related.items.slice(0, RELATED_SIDEBAR_VISIBLE_CAP);

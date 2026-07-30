@@ -1,5 +1,4 @@
 import { useNavigate } from "@tanstack/react-router";
-import { useSelector } from "@tanstack/react-store";
 import { ChevronDown } from "lucide-react";
 import { useMemo, useRef, useState } from "react";
 
@@ -11,6 +10,8 @@ import { HelpTooltip } from "#/components/ui/help-tooltip.tsx";
 import { Popover, PopoverContent, PopoverTrigger } from "#/components/ui/popover.tsx";
 import { mentionCandidatesFromPullRequest } from "#/lib/composer-commands.ts";
 import { useDiffPreferences } from "#/lib/diff-preferences.ts";
+import { usePullRequestPage, useReviewThreadsQuery } from "#/lib/query/pull-request.ts";
+import { useReviewDraft } from "#/lib/query/review-draft.ts";
 import { useSession } from "#/lib/session/provider.tsx";
 import { notifyAction, notifyActionWithInboxPrompt, notifySuccess } from "#/lib/toast.ts";
 import { cn } from "#/lib/utils.ts";
@@ -44,9 +45,9 @@ export function ReviewChangesMenu({ repository, number }: { repository: string; 
     const session = useSession();
     const navigate = useNavigate();
     const [preferences] = useDiffPreferences();
-    const draft = useSelector(session.state, () => session.getReviewDraft(repository, number));
-    const page = useSelector(session.state, () => session.getPullRequestPage(repository, number));
-    const threads = useSelector(session.state, () => session.getReviewThreads(repository, number));
+    const draft = useReviewDraft(repository, number);
+    const page = usePullRequestPage(repository, number);
+    const threads = useReviewThreadsQuery(repository, number);
     const [open, setOpen] = useState(false);
     const [submitting, setSubmitting] = useState(false);
     const [resolvingAll, setResolvingAll] = useState(false);

@@ -1,3 +1,4 @@
+import { useQueryClient } from "@tanstack/react-query";
 import { useSelector } from "@tanstack/react-store";
 import { createContext, use, useEffect, useState } from "react";
 
@@ -21,26 +22,30 @@ function beginOAuthLogin(): void {
     window.location.assign("/api/auth/github");
 }
 
+function createSession(queryClient: ReturnType<typeof useQueryClient>): EasyReviewSession {
+    return createEasyReviewSession({
+        github: useFixtures
+            ? createSeededGithub()
+            : createGithubHttpClient(globalThis.fetch, {
+                  restBaseUrl: "/api/github",
+                  graphqlUrl: "/api/github/graphql",
+                  credentials: "include",
+              }),
+        queryClient,
+        store: createBrowserStore(),
+        oauth: useFixtures
+            ? undefined
+            : {
+                  sessionCredential: GITHUB_SESSION_CREDENTIAL,
+                  logout: logoutOAuthSession,
+                  beginLogin: beginOAuthLogin,
+              },
+    });
+}
+
 export function SessionProvider({ children }: { children: React.ReactNode }) {
-    const [session] = useState(() =>
-        createEasyReviewSession({
-            github: useFixtures
-                ? createSeededGithub()
-                : createGithubHttpClient(globalThis.fetch, {
-                      restBaseUrl: "/api/github",
-                      graphqlUrl: "/api/github/graphql",
-                      credentials: "include",
-                  }),
-            store: createBrowserStore(),
-            oauth: useFixtures
-                ? undefined
-                : {
-                      sessionCredential: GITHUB_SESSION_CREDENTIAL,
-                      logout: logoutOAuthSession,
-                      beginLogin: beginOAuthLogin,
-                  },
-        }),
-    );
+    const queryClient = useQueryClient();
+    const [session] = useState(() => createSession(queryClient));
 
     useEffect(() => {
         if (useFixtures) {

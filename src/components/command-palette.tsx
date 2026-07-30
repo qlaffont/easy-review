@@ -19,6 +19,7 @@ import {
 } from "#/components/ui/command.tsx";
 import { TruncatedText } from "#/components/ui/truncated-text.tsx";
 import { availableActions } from "#/lib/actions/catalog.ts";
+import { useInboxPullRequests } from "#/lib/query/inbox.ts";
 import { useSession, useSessionState } from "#/lib/session/provider.tsx";
 import { matchesPullRequestSearchQuery, parsePullRequestUrl } from "#/lib/session/pull-request-search.ts";
 
@@ -98,7 +99,7 @@ function IndexShortcutKeys({ index }: { index: number }) {
 export function CommandPalette() {
     const session = useSession();
     const bridge = useActionsBridge();
-    const inboxPullRequests = useSessionState((state) => state.inbox.pullRequests);
+    const inboxPullRequests = useInboxPullRequests();
     const selectedRepos = useSessionState((state) => state.repos.selected);
     const [open, setOpen] = useState(false);
     const [query, setQuery] = useState("");

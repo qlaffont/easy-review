@@ -6,6 +6,7 @@ import type { MemoryStore } from "#/lib/session/testing/memory-store.ts";
 import { createEasyReviewSession } from "#/lib/session/session.ts";
 import { createFakeGithub } from "#/lib/session/testing/fake-github.ts";
 import { createMemoryStore } from "#/lib/session/testing/memory-store.ts";
+import { createTestQueryClient } from "#/lib/session/testing/test-query-client.ts";
 
 const TOKEN = "test_cred_valid";
 const NOW = "2026-07-27T12:00:00.000Z";
@@ -14,7 +15,7 @@ let github: FakeGithub;
 let store: MemoryStore;
 
 function newSession() {
-    return createEasyReviewSession({ github, store });
+    return createEasyReviewSession({ github, queryClient: createTestQueryClient(), store });
 }
 
 async function connectedSession(selected: Array<string> = ["acme/api", "acme/web"]) {
@@ -140,7 +141,11 @@ describe("loadRelatedPullRequests", () => {
             updatedAt: NOW,
         });
 
-        const session = createEasyReviewSession({ github: isolatedGithub, store: isolatedStore });
+        const session = createEasyReviewSession({
+            github: isolatedGithub,
+            queryClient: createTestQueryClient(),
+            store: isolatedStore,
+        });
         await session.connect(TOKEN);
         await session.setSelectedRepositories(["acme/api"]);
         await session.refreshRepositories();

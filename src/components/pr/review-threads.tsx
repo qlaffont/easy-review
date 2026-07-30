@@ -1,11 +1,11 @@
-import { useSelector } from "@tanstack/react-store";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 
 import type { ReviewThread } from "#/lib/session/types.ts";
 
 import { Button } from "#/components/ui/button.tsx";
 import { RelativeTime } from "#/components/ui/relative-time.tsx";
 import { Textarea } from "#/components/ui/textarea.tsx";
+import { useReviewThreadsQuery } from "#/lib/query/pull-request.ts";
 import { useSession } from "#/lib/session/provider.tsx";
 import { notifyAction } from "#/lib/toast.ts";
 import { cn } from "#/lib/utils.ts";
@@ -19,12 +19,7 @@ export function ReviewThreadsPanel({
     number: number;
     path: string | null;
 }) {
-    const session = useSession();
-    const threads = useSelector(session.state, () => session.getReviewThreads(repository, number));
-
-    useEffect(() => {
-        void session.loadReviewThreads(repository, number);
-    }, [session, repository, number]);
+    const threads = useReviewThreadsQuery(repository, number);
 
     const visible = path ? threads.items.filter((thread) => thread.path === path) : threads.items;
 

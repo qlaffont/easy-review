@@ -6,6 +6,7 @@ import type { MemoryStore } from "#/lib/session/testing/memory-store.ts";
 import { createEasyReviewSession } from "#/lib/session/session.ts";
 import { createFakeGithub } from "#/lib/session/testing/fake-github.ts";
 import { createMemoryStore } from "#/lib/session/testing/memory-store.ts";
+import { createTestQueryClient } from "#/lib/session/testing/test-query-client.ts";
 
 const TOKEN = "test_cred_valid";
 
@@ -13,7 +14,7 @@ let github: FakeGithub;
 let store: MemoryStore;
 
 async function connectedSession() {
-    const session = createEasyReviewSession({ github, store });
+    const session = createEasyReviewSession({ github, queryClient: createTestQueryClient(), store });
     await session.connect(TOKEN);
     return session;
 }

@@ -1,4 +1,3 @@
-import { useSelector } from "@tanstack/react-store";
 import {
     ChevronDown,
     ChevronRight,
@@ -49,6 +48,15 @@ import {
     type FileTreeDirNode,
     type FileTreeNode,
 } from "#/lib/file-tree.ts";
+import { useAuthViewer } from "#/lib/query/auth.ts";
+import {
+    useFileDiffQuery,
+    usePullRequestCommitsQuery,
+    usePullRequestFilesQuery,
+    usePullRequestPage,
+    useReviewThreadsQuery,
+} from "#/lib/query/pull-request.ts";
+import { useReviewDraft } from "#/lib/query/review-draft.ts";
 import { useSession } from "#/lib/session/provider.tsx";
 import { notifyAction } from "#/lib/toast.ts";
 import { cn } from "#/lib/utils.ts";
@@ -67,17 +75,15 @@ export function ReviewChanges({
     initialPath?: string;
 }) {
     const session = useSession();
-    const page = useSelector(session.state, () => session.getPullRequestPage(repository, number));
-    const draft = useSelector(session.state, () => session.getReviewDraft(repository, number));
-    const threads = useSelector(session.state, () => session.getReviewThreads(repository, number));
-    const commits = useSelector(session.state, () => session.getPullRequestCommits(repository, number));
-    const viewer = useSelector(session.state, (state) => state.auth.viewer);
+    const page = usePullRequestPage(repository, number);
+    const draft = useReviewDraft(repository, number);
+    const threads = useReviewThreadsQuery(repository, number);
+    const commits = usePullRequestCommitsQuery(repository, number);
+    const { files, refresh: refreshFiles } = usePullRequestFilesQuery(repository, number);
+    const viewer = useAuthViewer();
     const [selectedPath, setSelectedPath] = useState<string | null>(initialPath ?? null);
     const [browsingViewedFile, setBrowsingViewedFile] = useState(Boolean(initialPath));
     const allViewedRef = useRef(false);
-    const selectedDiff = useSelector(session.state, () =>
-        selectedPath ? session.getFileDiff(repository, number, selectedPath) : null,
-    );
     const [preferences, setPreferences] = useDiffPreferences();
     const headSha = page.detail?.headSha ?? "";
     const baseSha = page.detail?.baseSha ?? "";
@@ -86,6 +92,8 @@ export function ReviewChanges({
     const [resizingFileList, setResizingFileList] = useState(false);
     const fileListWidth = preferences.fileListWidth;
     const [commitRange, setCommitRange] = useState<CommitRangeValue>({ mode: "all" });
+    const selectedDiffQuery = useFileDiffQuery(repository, number, commitRange.mode === "range" ? null : selectedPath);
+    const selectedDiff = commitRange.mode === "range" ? null : selectedDiffQuery;
     const [rangeFiles, setRangeFiles] = useState<Array<PullRequestFile> | null>(null);
     const [rangeFilesStatus, setRangeFilesStatus] = useState<"idle" | "loading" | "ready" | "error">("idle");
     const [rangeFilesError, setRangeFilesError] = useState<string | null>(null);
@@ -96,27 +104,17 @@ export function ReviewChanges({
     const rangeDiffAttempt = useRef(0);
 
     const isolatingRange = commitRange.mode === "range";
-    const filesItems = isolatingRange ? (rangeFiles ?? []) : page.files.items;
-    const filesStatus = isolatingRange
-        ? rangeFilesStatus === "idle"
-            ? "loading"
-            : rangeFilesStatus
-        : page.files.status;
-    const filesError = isolatingRange ? rangeFilesError : (page.files.error?.message ?? null);
+    const filesItems = isolatingRange ? (rangeFiles ?? []) : files.items;
+    const filesStatus = isolatingRange ? (rangeFilesStatus === "idle" ? "loading" : rangeFilesStatus) : files.status;
+    const filesError = isolatingRange ? rangeFilesError : (files.error?.message ?? null);
     const filesEpoch = isolatingRange
         ? `${commitRange.baseOid}:${commitRange.headOid}:${rangeFilesStatus}`
-        : page.files.lastLoadedAt;
+        : files.lastLoadedAt;
 
     const viewedCount = filesItems.filter((file) => fileViewState(viewedMarks, file.path, headSha) === "viewed").length;
     const allViewed = filesStatus === "ready" && filesItems.length > 0 && viewedCount === filesItems.length;
     const showFileDiff = selectedPath !== null && (!allViewed || browsingViewedFile);
     const fileListSelectedPath = showFileDiff ? selectedPath : null;
-
-    useEffect(() => {
-        void session.loadPullRequestFiles(repository, number);
-        void session.loadReviewThreads(repository, number);
-        void session.loadPullRequestCommits(repository, number);
-    }, [session, repository, number]);
 
     useEffect(() => {
         setViewedMarks(readViewedFileMarks(repository, number, headSha));
@@ -184,12 +182,7 @@ export function ReviewChanges({
     }
 
     useEffect(() => {
-        if (!selectedPath || !showFileDiff) {
-            return;
-        }
-
-        if (commitRange.mode !== "range") {
-            void session.loadFileDiff(repository, number, selectedPath);
+        if (!selectedPath || !showFileDiff || commitRange.mode !== "range") {
             return;
         }
 
@@ -314,7 +307,7 @@ export function ReviewChanges({
             }
             return;
         }
-        await session.loadFileDiff(repository, number, selectedPath, { force: true });
+        await selectedDiffQuery.refresh();
     }
 
     return (
@@ -421,13 +414,13 @@ export function ReviewChanges({
                                 variant="ghost"
                                 size="sm"
                                 className="h-7 px-2 text-xs"
-                                disabled={isolatingRange ? rangeFilesStatus === "loading" : page.files.refreshing}
+                                disabled={isolatingRange ? rangeFilesStatus === "loading" : files.refreshing}
                                 onClick={() => {
                                     if (commitRange.mode === "range") {
                                         setCommitRange({ ...commitRange });
                                         return;
                                     }
-                                    void notifyAction(() => session.refreshPullRequestFiles(repository, number), {
+                                    void notifyAction(() => refreshFiles(), {
                                         loading: "Refreshing files…",
                                         success: "File list refreshed",
                                         error: "Could not refresh files.",
@@ -437,7 +430,7 @@ export function ReviewChanges({
                                 <RefreshCw
                                     className={cn(
                                         "size-3.5",
-                                        (isolatingRange ? rangeFilesStatus === "loading" : page.files.refreshing) &&
+                                        (isolatingRange ? rangeFilesStatus === "loading" : files.refreshing) &&
                                             "animate-spin",
                                     )}
                                 />

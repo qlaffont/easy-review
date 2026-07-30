@@ -1,5 +1,4 @@
 import { Link } from "@tanstack/react-router";
-import { useSelector } from "@tanstack/react-store";
 import {
     ChevronDown,
     ChevronRight,
@@ -27,7 +26,8 @@ import {
 } from "#/components/ui/dropdown-menu.tsx";
 import { LoadingIcon } from "#/components/ui/loading.tsx";
 import { RelativeTime } from "#/components/ui/relative-time.tsx";
-import { useSession } from "#/lib/session/provider.tsx";
+import { usePullRequestStackQuery, useRepoStackIndexQuery } from "#/lib/query/stack.ts";
+import { useSessionState } from "#/lib/session/provider.tsx";
 import {
     formatStackBranches,
     formatStackGhCheckoutCommands,
@@ -105,61 +105,35 @@ async function copyText(label: string, value: string): Promise<void> {
 const idleStackState: PullRequestStackState = { status: "idle", stack: null, error: null };
 
 function usePullRequestStackState(repository: string, number: number): PullRequestStackState {
-    const session = useSession();
     const [stackPreferences] = useStackPreferences();
-    const indexState = useSelector(session.state, (storeState) => storeState.repoStackIndices[repository]);
-    const overrideState = useSelector(
-        session.state,
-        (storeState) => storeState.pullRequestStackOverrides[`${repository}#${number}`],
-    );
+    const index = useRepoStackIndexQuery(repository);
+    const stackQuery = usePullRequestStackQuery(repository, number);
+    const overrideState = useSessionState((state) => state.pullRequestStackOverrides[`${repository}#${number}`]);
 
-    // Branch-name resolution needs the repo-wide index; load it as soon as stacks are enabled.
     useEffect(() => {
-        if (!stackPreferences.enabled) {
-            return;
-        }
-        void session.loadRepoStackIndex(repository);
-    }, [session, repository, stackPreferences.enabled]);
-
-    const stackState = useSelector(session.state, () => {
-        if (!stackPreferences.enabled) {
-            return idleStackState;
-        }
-
-        return session.getPullRequestStack(repository, number);
-    });
-
-    // Graphite comments are a fallback — only fetch after branch resolution finishes without a match.
-    useEffect(() => {
-        if (!stackPreferences.enabled || stackState.stack) {
+        if (!stackPreferences.enabled || stackQuery.stack) {
             return;
         }
 
-        const indexStatus = indexState?.status ?? "idle";
+        const indexStatus = index.status;
         const overrideStatus = overrideState?.status ?? "idle";
 
-        // Wait for the repo index; branch names are tried before Graphite comments.
         if (indexStatus === "idle" || indexStatus === "loading") {
             return;
         }
 
-        // Skip if this PR's Graphite override is already loading or settled.
         if (overrideStatus === "loading" || overrideStatus === "ready") {
             return;
         }
 
-        void session.loadGraphiteStack(repository, number);
-    }, [
-        session,
-        repository,
-        number,
-        stackPreferences.enabled,
-        stackState.stack,
-        indexState?.status,
-        overrideState?.status,
-    ]);
+        void stackQuery.loadGraphite();
+    }, [stackPreferences.enabled, stackQuery.stack, stackQuery.loadGraphite, index.status, overrideState?.status]);
 
-    return stackState;
+    if (!stackPreferences.enabled) {
+        return idleStackState;
+    }
+
+    return stackQuery;
 }
 
 /** Same-repo stack from branch names, with Graphite comment fallback when branches no longer chain. */

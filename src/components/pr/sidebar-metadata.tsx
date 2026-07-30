@@ -1,4 +1,3 @@
-import { useSelector } from "@tanstack/react-store";
 import {
     Check,
     CheckCircle2,
@@ -12,7 +11,7 @@ import {
     X,
     XCircle,
 } from "lucide-react";
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 
 import type {
     Label,
@@ -46,6 +45,7 @@ import { HelpTooltip } from "#/components/ui/help-tooltip.tsx";
 import { Input } from "#/components/ui/input.tsx";
 import { Popover, PopoverContent, PopoverTrigger } from "#/components/ui/popover.tsx";
 import { Skeleton } from "#/components/ui/skeleton.tsx";
+import { useRepositoryMetadataQuery } from "#/lib/query/pull-request.ts";
 import { useSession } from "#/lib/session/provider.tsx";
 import { notifyAction } from "#/lib/toast.ts";
 import { cn } from "#/lib/utils.ts";
@@ -93,13 +93,12 @@ export function PullRequestSidebarMetadata({
     detail: PullRequestDetail;
     reviewers: Array<ReviewerStatus>;
 }) {
-    const session = useSession();
-    const meta = useSelector(session.state, () => session.getRepositoryMetadata(detail.repository));
+    const { metadata: meta } = useRepositoryMetadataQuery(detail.repository);
     const canEdit = detail.state === "open";
 
-    useEffect(() => {
-        void session.loadRepositoryMetadata(detail.repository);
-    }, [session, detail.repository]);
+    if (!meta) {
+        return null;
+    }
 
     const usersByLogin = useMemo(() => new Map(meta.users.map((user) => [user.login, user])), [meta.users]);
 

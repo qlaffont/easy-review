@@ -1,4 +1,3 @@
-import { useSelector } from "@tanstack/react-store";
 import {
     AtSign,
     Bold,
@@ -53,6 +52,7 @@ import {
     replaceMediaPlaceholder,
 } from "#/lib/composer-media.ts";
 import { insertBlock, insertLink, prefixLines, wrapSelection } from "#/lib/markdown-edit.ts";
+import { useRepositoryMetadataQuery } from "#/lib/query/pull-request.ts";
 import { useSession } from "#/lib/session/provider.tsx";
 import { notifyError } from "#/lib/toast.ts";
 import { cn } from "#/lib/utils.ts";
@@ -190,15 +190,9 @@ export function MarkdownComposer({
     const [menuDismissed, setMenuDismissed] = useState(false);
     const [draggingMedia, setDraggingMedia] = useState(false);
     const [uploadingCount, setUploadingCount] = useState(0);
-    const meta = useSelector(session.state, () => (repository ? session.getRepositoryMetadata(repository) : null));
+    const { metadata: meta } = useRepositoryMetadataQuery(repository ?? null);
 
     valueRef.current = value;
-
-    useEffect(() => {
-        if (repository) {
-            void session.loadRepositoryMetadata(repository);
-        }
-    }, [session, repository]);
 
     useEffect(() => {
         const pending = pendingSelection.current;

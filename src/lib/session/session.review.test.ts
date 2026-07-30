@@ -6,6 +6,7 @@ import type { MemoryStore } from "#/lib/session/testing/memory-store.ts";
 import { createEasyReviewSession } from "#/lib/session/session.ts";
 import { createFakeGithub } from "#/lib/session/testing/fake-github.ts";
 import { createMemoryStore } from "#/lib/session/testing/memory-store.ts";
+import { createTestQueryClient } from "#/lib/session/testing/test-query-client.ts";
 
 const TOKEN = "test_cred_valid";
 
@@ -13,7 +14,7 @@ let github: FakeGithub;
 let store: MemoryStore;
 
 async function connectedWithPr() {
-    const session = createEasyReviewSession({ github, store });
+    const session = createEasyReviewSession({ github, queryClient: createTestQueryClient(), store });
     await session.connect(TOKEN);
     await session.loadPullRequest("acme/api", 1);
     return session;
@@ -81,7 +82,7 @@ describe("staged review drafts", () => {
         });
         await session.setReviewEvent("acme/api", 1, "approve");
 
-        const reloaded = createEasyReviewSession({ github, store });
+        const reloaded = createEasyReviewSession({ github, queryClient: createTestQueryClient(), store });
         await reloaded.connect(TOKEN);
         await reloaded.loadPullRequest("acme/api", 1);
 
@@ -204,7 +205,7 @@ describe("staged review drafts", () => {
     });
 
     it("does not mark a draft stale when the first comment lands before the PR detail", async () => {
-        const session = createEasyReviewSession({ github, store });
+        const session = createEasyReviewSession({ github, queryClient: createTestQueryClient(), store });
         await session.connect(TOKEN);
         await session.addPendingComment("acme/api", 1, {
             path: "src/a.ts",

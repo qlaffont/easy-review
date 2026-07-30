@@ -1,5 +1,4 @@
 import { Link } from "@tanstack/react-router";
-import { useSelector } from "@tanstack/react-store";
 import {
     ChevronDown,
     ChevronRight,
@@ -44,6 +43,7 @@ import { Button } from "#/components/ui/button.tsx";
 import { ConversationLoadingSkeleton } from "#/components/ui/loading.tsx";
 import { RelativeTime } from "#/components/ui/relative-time.tsx";
 import { mentionCandidatesFromPullRequest } from "#/lib/composer-commands.ts";
+import { useConversationQuery, usePullRequestPage, useReviewThreadsQuery } from "#/lib/query/pull-request.ts";
 import { useSession } from "#/lib/session/provider.tsx";
 import { notifyAction } from "#/lib/toast.ts";
 import { cn } from "#/lib/utils.ts";
@@ -73,9 +73,9 @@ export function PullRequestConversation({
     onQuote?: (body: string) => void;
 }) {
     const session = useSession();
-    const timeline = useSelector(session.state, () => session.getConversationComments(repository, number));
-    const threads = useSelector(session.state, () => session.getReviewThreads(repository, number));
-    const page = useSelector(session.state, () => session.getPullRequestPage(repository, number));
+    const timeline = useConversationQuery(repository, number);
+    const threads = useReviewThreadsQuery(repository, number);
+    const page = usePullRequestPage(repository, number);
     const mentionUsers = useMemo(() => mentionCandidatesFromPullRequest(page.detail), [page.detail]);
     const authorLogin = page.detail?.author ?? page.summary?.author ?? null;
     const [owner = "", repo = ""] = repository.split("/");
@@ -108,11 +108,6 @@ export function PullRequestConversation({
         });
         return [...timelineEntries, ...threadEntries].sort((a, b) => a.at.localeCompare(b.at));
     }, [timeline.items, threads.items]);
-
-    useEffect(() => {
-        void session.loadConversationComments(repository, number);
-        void session.loadReviewThreads(repository, number);
-    }, [session, repository, number]);
 
     useEffect(() => {
         if (!quoteInsert) {

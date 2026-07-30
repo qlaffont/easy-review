@@ -6,6 +6,7 @@ import type { MemoryStore } from "#/lib/session/testing/memory-store.ts";
 import { createEasyReviewSession } from "#/lib/session/session.ts";
 import { createFakeGithub } from "#/lib/session/testing/fake-github.ts";
 import { createMemoryStore } from "#/lib/session/testing/memory-store.ts";
+import { createTestQueryClient } from "#/lib/session/testing/test-query-client.ts";
 
 const TOKEN = "test_cred_valid";
 
@@ -13,7 +14,7 @@ let github: FakeGithub;
 let store: MemoryStore;
 
 async function connectedWithInbox() {
-    const session = createEasyReviewSession({ github, store });
+    const session = createEasyReviewSession({ github, queryClient: createTestQueryClient(), store });
     await session.connect(TOKEN);
     await session.setSelectedRepositories(["acme/api"]);
     await session.loadInbox();
@@ -46,7 +47,7 @@ describe("inbox section customization", () => {
         const session = await connectedWithInbox();
         await session.setSectionLabel("needs-your-review", "My turn");
 
-        const reloaded = createEasyReviewSession({ github, store });
+        const reloaded = createEasyReviewSession({ github, queryClient: createTestQueryClient(), store });
         await reloaded.connect(TOKEN);
 
         expect(reloaded.getSectionLayout().find((entry) => entry.id === "needs-your-review")?.label).toBe("My turn");
@@ -133,7 +134,7 @@ describe("inbox section customization", () => {
         await session.setSectionDefaultExpanded("drafts", true);
         await session.setSectionDefaultExpanded("approved", false);
 
-        const reloaded = createEasyReviewSession({ github, store });
+        const reloaded = createEasyReviewSession({ github, queryClient: createTestQueryClient(), store });
         await reloaded.connect(TOKEN);
 
         expect(reloaded.getSectionLayout().find((entry) => entry.id === "drafts")?.defaultExpanded).toBe(true);
@@ -145,7 +146,7 @@ describe("inbox section customization", () => {
         await session.setSectionColor("needs-your-review", "violet");
         await session.setSectionIcon("needs-your-review", "flame");
 
-        const reloaded = createEasyReviewSession({ github, store });
+        const reloaded = createEasyReviewSession({ github, queryClient: createTestQueryClient(), store });
         await reloaded.connect(TOKEN);
 
         expect(reloaded.getSectionLayout().find((entry) => entry.id === "needs-your-review")).toMatchObject({
@@ -159,7 +160,7 @@ describe("inbox section customization", () => {
         const session = await connectedWithInbox();
         await session.setSectionCustomColor("approved", "#AbC");
 
-        const reloaded = createEasyReviewSession({ github, store });
+        const reloaded = createEasyReviewSession({ github, queryClient: createTestQueryClient(), store });
         await reloaded.connect(TOKEN);
 
         expect(reloaded.getSectionLayout().find((entry) => entry.id === "approved")?.customColor).toBe("#aabbcc");

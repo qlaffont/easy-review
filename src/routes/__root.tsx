@@ -1,4 +1,5 @@
 import { TanStackDevtools } from "@tanstack/react-devtools";
+import { ReactQueryDevtoolsPanel } from "@tanstack/react-query-devtools";
 import { HeadContent, Outlet, Scripts, createRootRoute } from "@tanstack/react-router";
 import { TanStackRouterDevtoolsPanel } from "@tanstack/react-router-devtools";
 
@@ -7,6 +8,7 @@ import { SessionGate } from "#/components/session-gate.tsx";
 import { ThemeProvider } from "#/components/theme-provider.tsx";
 import { Toaster } from "#/components/ui/sonner.tsx";
 import { TooltipProvider } from "#/components/ui/tooltip.tsx";
+import { AppQueryProvider } from "#/lib/query/provider.tsx";
 import { buildHead, siteName } from "#/lib/seo.ts";
 import { SessionProvider } from "#/lib/session/provider.tsx";
 
@@ -63,23 +65,29 @@ function RootDocument({ children }: { children: React.ReactNode }) {
             <body suppressHydrationWarning>
                 <ThemeProvider>
                     <TooltipProvider delayDuration={400} skipDelayDuration={200}>
-                        <SessionProvider>{children}</SessionProvider>
+                        <AppQueryProvider>
+                            <SessionProvider>{children}</SessionProvider>
+                            {import.meta.env.DEV ? (
+                                <TanStackDevtools
+                                    config={{
+                                        position: "bottom-right",
+                                    }}
+                                    plugins={[
+                                        {
+                                            name: "TanStack Query",
+                                            render: <ReactQueryDevtoolsPanel />,
+                                        },
+                                        {
+                                            name: "Tanstack Router",
+                                            render: <TanStackRouterDevtoolsPanel />,
+                                        },
+                                    ]}
+                                />
+                            ) : null}
+                        </AppQueryProvider>
                         <Toaster />
                     </TooltipProvider>
                 </ThemeProvider>
-                {import.meta.env.DEV ? (
-                    <TanStackDevtools
-                        config={{
-                            position: "bottom-right",
-                        }}
-                        plugins={[
-                            {
-                                name: "Tanstack Router",
-                                render: <TanStackRouterDevtoolsPanel />,
-                            },
-                        ]}
-                    />
-                ) : null}
                 <Scripts />
             </body>
         </html>

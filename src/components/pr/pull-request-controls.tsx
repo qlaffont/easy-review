@@ -1,5 +1,4 @@
 import { useNavigate } from "@tanstack/react-router";
-import { useSelector } from "@tanstack/react-store";
 import { AlertTriangle, Check, CheckCircle2, ChevronDown, CircleX, GitPullRequestDraft, Users } from "lucide-react";
 import { useMemo, useRef, useState } from "react";
 
@@ -34,6 +33,7 @@ import {
     DropdownMenuTrigger,
 } from "#/components/ui/dropdown-menu.tsx";
 import { useDiffPreferences } from "#/lib/diff-preferences.ts";
+import { useReviewThreadsQuery } from "#/lib/query/pull-request.ts";
 import { useSession } from "#/lib/session/provider.tsx";
 import { notifyAction, notifyActionWithInboxPrompt } from "#/lib/toast.ts";
 import { cn } from "#/lib/utils.ts";
@@ -73,7 +73,7 @@ export function PullRequestControls({ detail }: { detail: PullRequestDetail }) {
     const session = useSession();
     const navigate = useNavigate();
     const [preferences] = useDiffPreferences();
-    const threads = useSelector(session.state, () => session.getReviewThreads(detail.repository, detail.number));
+    const threads = useReviewThreadsQuery(detail.repository, detail.number);
     const unresolvedThreads = useMemo(() => threads.items.filter((thread) => !thread.isResolved), [threads.items]);
     const [error, setError] = useState<string | null>(null);
     const [busy, setBusy] = useState(false);

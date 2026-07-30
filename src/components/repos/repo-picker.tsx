@@ -17,6 +17,7 @@ import {
 import { HelpTooltip } from "#/components/ui/help-tooltip.tsx";
 import { Input } from "#/components/ui/input.tsx";
 import { RepoPickerLoadingSkeleton } from "#/components/ui/loading.tsx";
+import { useRepositoriesQuery } from "#/lib/query/repositories.ts";
 import { useSession, useSessionState } from "#/lib/session/provider.tsx";
 import { notifyAction, notifySuccess } from "#/lib/toast.ts";
 
@@ -62,7 +63,8 @@ function matches(repository: Repository, query: string): boolean {
 
 function RepoPickerDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
     const session = useSession();
-    const repos = useSessionState((state) => state.repos);
+    const { available, isLoading, isFetching, refresh } = useRepositoriesQuery();
+    const selectedRepos = useSessionState((state) => state.repos.selected);
     const [search, setSearch] = useState("");
     const deferredSearch = useDeferredValue(search);
 
@@ -72,11 +74,11 @@ function RepoPickerDialog({ open, onOpenChange }: { open: boolean; onOpenChange:
         }
     }, [open, session]);
 
-    const selected = useMemo(() => new Set(repos.selected), [repos.selected]);
+    const selected = useMemo(() => new Set(selectedRepos), [selectedRepos]);
     const visible = useMemo(() => {
         const query = deferredSearch.trim().toLowerCase();
-        return query ? repos.available.filter((repository) => matches(repository, query)) : repos.available;
-    }, [repos.available, deferredSearch]);
+        return query ? available.filter((repository) => matches(repository, query)) : available;
+    }, [available, deferredSearch]);
 
     return (
         <Dialog open={open} onOpenChange={onOpenChange}>
@@ -100,33 +102,31 @@ function RepoPickerDialog({ open, onOpenChange }: { open: boolean; onOpenChange:
                             variant="outline"
                             size="icon"
                             aria-label="Refresh the list from GitHub"
-                            disabled={repos.refreshing}
+                            disabled={isFetching}
                             onClick={() =>
-                                void notifyAction(() => session.refreshRepositories(), {
+                                void notifyAction(() => refresh(), {
                                     loading: "Refreshing repositories…",
                                     success: "Repositories refreshed",
                                     error: "Could not refresh repositories.",
                                 })
                             }
                         >
-                            <RefreshCw className={repos.refreshing ? "animate-spin" : undefined} />
+                            <RefreshCw className={isFetching ? "animate-spin" : undefined} />
                         </Button>
                     </HelpTooltip>
                 </div>
 
-                {repos.error ? <p className="text-sm text-destructive">{repos.error.message}</p> : null}
-
                 <div className="-mx-1 min-h-0 flex-1 overflow-y-auto px-1">
-                    {repos.status === "loading" ? (
+                    {isLoading && available.length === 0 ? (
                         <RepoPickerLoadingSkeleton />
                     ) : visible.length === 0 ? (
                         <div className="flex flex-col gap-2 py-8 text-center text-sm text-muted-foreground">
                             <p>
-                                {repos.available.length === 0
+                                {available.length === 0
                                     ? "This session cannot see any repository."
                                     : "No repository matches that filter."}
                             </p>
-                            {repos.available.length === 0 ? (
+                            {available.length === 0 ? (
                                 <p>
                                     Missing an org repo? Install the GitHub App on that organization (Any account
                                     installability, select the repos, org approval if required), then sign in again and
@@ -172,7 +172,7 @@ function RepoPickerDialog({ open, onOpenChange }: { open: boolean; onOpenChange:
 
                 <DialogFooter className="sm:justify-between">
                     <span className="text-sm text-muted-foreground">
-                        {repos.selected.length} selected of {repos.available.length} visible
+                        {selectedRepos.length} selected of {available.length} visible
                     </span>
                     <Button onClick={() => onOpenChange(false)}>Done</Button>
                 </DialogFooter>
