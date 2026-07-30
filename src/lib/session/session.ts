@@ -2847,13 +2847,13 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
         await refreshAfterMutation(repository, number);
     }
 
-    async function dismissReview(
-        repository: string,
-        number: number,
-        reviewId: number,
-        message = "Dismissed via Easy Review",
-    ): Promise<void> {
-        await github.dismissReview(requireToken(), repository, number, reviewId, message);
+    async function dismissReview(repository: string, number: number, reviewId: number, message: string): Promise<void> {
+        const trimmed = message.trim();
+        if (!trimmed) {
+            throw new EasyReviewError("unknown", "A comment is required to dismiss a review.");
+        }
+
+        await github.dismissReview(requireToken(), repository, number, reviewId, trimmed);
         await refreshAfterMutation(repository, number);
     }
 

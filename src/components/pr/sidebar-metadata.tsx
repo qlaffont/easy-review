@@ -45,6 +45,7 @@ import { HelpTooltip } from "#/components/ui/help-tooltip.tsx";
 import { Input } from "#/components/ui/input.tsx";
 import { Popover, PopoverContent, PopoverTrigger } from "#/components/ui/popover.tsx";
 import { Skeleton } from "#/components/ui/skeleton.tsx";
+import { Textarea } from "#/components/ui/textarea.tsx";
 import { useRepositoryMetadataQuery } from "#/lib/query/pull-request.ts";
 import { useSession } from "#/lib/session/provider.tsx";
 import { notifyAction } from "#/lib/toast.ts";
@@ -197,11 +198,11 @@ function ReviewersSection({
         }
     }
 
-    async function dismiss(reviewId: number, login: string) {
+    async function dismiss(reviewId: number, login: string, message: string) {
         setBusy(true);
         setError(null);
         try {
-            await notifyAction(() => session.dismissReview(detail.repository, detail.number, reviewId), {
+            await notifyAction(() => session.dismissReview(detail.repository, detail.number, reviewId, message), {
                 loading: "Dismissing review…",
                 success: `Dismissed ${login}'s review`,
                 error: "Could not dismiss the review.",
@@ -248,7 +249,7 @@ function ReviewersSection({
                             canEdit={canEdit}
                             busy={busy}
                             onReRequest={() => void reRequest(reviewer.login)}
-                            onDismiss={() => void dismiss(reviewer.reviewId, reviewer.login)}
+                            onDismiss={(message) => void dismiss(reviewer.reviewId, reviewer.login, message)}
                         />
                     ))}
                 </ul>
@@ -293,11 +294,30 @@ function ReviewerRow({
     canEdit: boolean;
     busy: boolean;
     onReRequest: () => void;
-    onDismiss: () => void;
+    onDismiss: (message: string) => void;
 }) {
     const [confirmDismiss, setConfirmDismiss] = useState(false);
+    const [dismissMessage, setDismissMessage] = useState("");
     const meta = REVIEW_STATE_META[reviewer.state];
     const dismissable = canDismissReview(reviewer.state);
+    const canSubmitDismiss = dismissMessage.trim().length > 0;
+
+    function handleDismissOpenChange(open: boolean) {
+        setConfirmDismiss(open);
+        if (!open) {
+            setDismissMessage("");
+        }
+    }
+
+    function submitDismiss() {
+        const message = dismissMessage.trim();
+        if (!message) {
+            return;
+        }
+        setConfirmDismiss(false);
+        setDismissMessage("");
+        onDismiss(message);
+    }
 
     return (
         <li className="group flex items-center gap-2 rounded-md py-0.5">
@@ -350,7 +370,7 @@ function ReviewerRow({
                             ) : null}
                         </DropdownMenuContent>
                     </DropdownMenu>
-                    <AlertDialog open={confirmDismiss} onOpenChange={setConfirmDismiss}>
+                    <AlertDialog open={confirmDismiss} onOpenChange={handleDismissOpenChange}>
                         <AlertDialogContent>
                             <AlertDialogHeader>
                                 <AlertDialogTitle>Dismiss {reviewer.login}&apos;s review?</AlertDialogTitle>
@@ -359,11 +379,23 @@ function ReviewerRow({
                                     requirements. You can re-request a review afterward.
                                 </AlertDialogDescription>
                             </AlertDialogHeader>
+                            <Textarea
+                                value={dismissMessage}
+                                onChange={(event) => setDismissMessage(event.target.value)}
+                                placeholder="Leave a comment explaining why this review is being dismissed"
+                                rows={3}
+                                disabled={busy}
+                                aria-label="Dismiss review comment"
+                            />
                             <AlertDialogFooter>
                                 <AlertDialogCancel>Cancel</AlertDialogCancel>
                                 <AlertDialogAction
                                     className="bg-destructive text-white hover:bg-destructive/90"
-                                    onClick={onDismiss}
+                                    disabled={!canSubmitDismiss || busy}
+                                    onClick={(event) => {
+                                        event.preventDefault();
+                                        submitDismiss();
+                                    }}
                                 >
                                     Dismiss review
                                 </AlertDialogAction>

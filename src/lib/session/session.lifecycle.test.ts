@@ -90,7 +90,7 @@ describe("pull request lifecycle", () => {
         await session.setSelectedRepositories(["acme/api"]);
         await session.loadPullRequest("acme/api", 2);
 
-        await session.dismissReview("acme/api", 2, 42);
+        await session.dismissReview("acme/api", 2, 42, "No longer valid after rebase.");
 
         expect(github.calls).toContain("dismissReview");
         expect(session.getPullRequestPage("acme/api", 2).detail?.reviewers).toEqual([
