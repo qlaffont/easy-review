@@ -1,5 +1,6 @@
 import { Link } from "@tanstack/react-router";
 import {
+    AlertTriangle,
     ChevronDown,
     ChevronRight,
     GitBranch,
@@ -17,6 +18,7 @@ import type { PullRequestStackState } from "#/lib/session/session.ts";
 import type { PullRequestSummary, ReviewDecision } from "#/lib/session/types.ts";
 
 import { ChecksDot } from "#/components/pr/checks-dot.tsx";
+import { pullRequestHasMergeConflicts } from "#/components/pr/merge-requirements.ts";
 import { Button } from "#/components/ui/button.tsx";
 import {
     DropdownMenu,
@@ -291,12 +293,19 @@ function StackPanelLoading() {
 function StackRowContent({ pullRequest }: { pullRequest: PullRequestSummary }) {
     const reviewStatus = stackReviewStatus(pullRequest);
     const showChecks = pullRequest.state === "open" && !pullRequest.isDraft;
+    const hasConflicts = pullRequestHasMergeConflicts(pullRequest);
 
     return (
         <div className="flex min-w-0 flex-col gap-1">
             <span className="flex min-w-0 items-center gap-2">
                 <StackStateIcon pullRequest={pullRequest} />
                 <span className="min-w-0 flex-1 truncate text-sm font-medium text-foreground">{pullRequest.title}</span>
+                {hasConflicts ? (
+                    <span className="inline-flex shrink-0 items-center gap-1 text-xs font-medium text-amber-700 dark:text-amber-400">
+                        <AlertTriangle className="size-3" aria-hidden="true" />
+                        Conflicts
+                    </span>
+                ) : null}
                 <span className="shrink-0 text-xs text-muted-foreground tabular-nums">#{pullRequest.number}</span>
             </span>
             <span className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">

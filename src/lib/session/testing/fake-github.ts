@@ -231,6 +231,7 @@ const SUMMARY_FIELDS = [
     "changedFiles",
     "commentCount",
     "mergeable",
+    "mergeStateStatus",
     "assignees",
     "labels",
 ] as const satisfies ReadonlyArray<keyof PullRequestSummary>;
@@ -837,8 +838,13 @@ export function createFakeGithub(): FakeGithub {
             return respond("listPullRequestFiles", () => {
                 authenticate(token);
                 requirePullRequest(token, repository, number);
-                const stored = filesByPullRequest.get(filesKey(token, repository, number)) ?? [];
-                return stored.map(({ before: _before, after: _after, ...file }) => file);
+                const key = filesKey(token, repository, number);
+                const stored = filesByPullRequest.get(key) ?? [];
+                const viewed = viewedFilesByPullRequest.get(key) ?? new Set<string>();
+                return stored.map(({ before: _before, after: _after, ...file }) => ({
+                    ...file,
+                    viewerViewedState: viewed.has(file.path) ? ("VIEWED" as const) : ("UNVIEWED" as const),
+                }));
             });
         },
         listComparedFiles(token, _repository, baseOid, headOid) {

@@ -4,16 +4,22 @@ import { describe, expect, it } from "vitest";
 
 import { Markdown } from "#/components/pr/markdown.tsx";
 import {
+    attachmentLabelFromLinkText,
     isGithubPrivateMediaUrl,
     isGithubRepoBlobRawUrl,
     isGithubUserAttachmentUrl,
+    isGraphiteUserAttachmentUrl,
+    mediaKindFromLinkText,
     parseGithubAttachmentMarkdownHtml,
     parseGithubRepoBlobRawUrl,
+    parseGraphiteUserAttachmentUrl,
     repositoryFromGithubBaseUrl,
     shouldEmbedGithubAttachment,
+    shouldEmbedGraphiteAttachment,
 } from "#/lib/github-attachment.ts";
 
 const ATTACHMENT = "https://github.com/user-attachments/assets/0682c898-4e3a-4209-a711-54519406d6a8";
+const GRAPHITE_VIDEO = "https://app.graphite.com/user-attachments/video/4280fb23-bfcc-429d-95a4-461f52ce5fc1.mov";
 const REPO_BLOB =
     "https://github.com/acme/api/blob/b395d09f1dd536188676eeb4a6958f77aebf3f08/ae48774b65c9-shot.png?raw=true";
 const REPO_BLOB_ENCODED =
@@ -33,6 +39,27 @@ describe("isGithubUserAttachmentUrl", () => {
         expect(isGithubUserAttachmentUrl("https://app.intercom.com/a/inbox/x")).toBe(false);
         expect(isGithubUserAttachmentUrl("https://github.com/acme/api/assets/1")).toBe(false);
         expect(isGithubUserAttachmentUrl("https://user-images.githubusercontent.com/1/x.png")).toBe(false);
+        expect(isGithubUserAttachmentUrl(GRAPHITE_VIDEO)).toBe(false);
+    });
+});
+
+describe("parseGraphiteUserAttachmentUrl", () => {
+    it("parses Graphite video urls", () => {
+        expect(parseGraphiteUserAttachmentUrl(GRAPHITE_VIDEO)).toEqual({
+            kind: "video",
+            src: GRAPHITE_VIDEO,
+            name: "4280fb23-bfcc-429d-95a4-461f52ce5fc1.mov",
+        });
+        expect(isGraphiteUserAttachmentUrl(GRAPHITE_VIDEO)).toBe(true);
+        expect(shouldEmbedGraphiteAttachment(GRAPHITE_VIDEO)).toBe(true);
+    });
+
+    it("rejects Graphite thumbnail paths", () => {
+        expect(
+            parseGraphiteUserAttachmentUrl(
+                "https://app.graphite.com/user-attachments/thumbnails/4280fb23-bfcc-429d-95a4-461f52ce5fc1.mov",
+            ),
+        ).toBeNull();
     });
 });
 
@@ -65,8 +92,15 @@ describe("shouldEmbedGithubAttachment", () => {
         expect(shouldEmbedGithubAttachment(ATTACHMENT, ATTACHMENT)).toBe(true);
     });
 
-    it("keeps named links as ordinary links", () => {
+    it("keeps generic named links as ordinary links", () => {
         expect(shouldEmbedGithubAttachment(ATTACHMENT, "screenshot")).toBe(false);
+        expect(shouldEmbedGithubAttachment(ATTACHMENT, "Open asset")).toBe(false);
+    });
+
+    it("embeds Graphite-style video links with a filename label", () => {
+        const label = "Enregistrement de l'écran 2026-07-30 à 17.56.22.mov (uploaded via Graphite)";
+        expect(shouldEmbedGithubAttachment(ATTACHMENT, label)).toBe(true);
+        expect(mediaKindFromLinkText(label)).toBe("video");
     });
 });
 
@@ -90,17 +124,43 @@ describe("Markdown github attachment embeds", () => {
         expect(html).toContain("<a ");
     });
 
-    it("keeps an explicitly labeled attachment link as a link", () => {
+    it("keeps an explicitly labeled non-media attachment link as a link", () => {
         const html = renderMarkdown(`[Open asset](${ATTACHMENT})`);
         expect(html).toContain(`href="${ATTACHMENT}"`);
         expect(html).toContain("Open asset");
         expect(html).not.toMatch(/<(?:img|video)\b/);
     });
 
+    it("renders Graphite video links as an embedded player", () => {
+        const label = "screen-recording.mov (uploaded via Graphite)";
+        const html = renderMarkdown(`[${label}](${ATTACHMENT})`);
+        expect(html).toContain(`src="${ATTACHMENT}"`);
+        expect(html).toMatch(/<video\b/);
+        expect(html).not.toContain("screen-recording.mov (uploaded via Graphite)");
+    });
+
     it("routes repo blob raw images through private media resolution", () => {
         const html = renderMarkdown(`![shot.png](${REPO_BLOB})`);
         expect(html).toContain(`src="${REPO_BLOB}"`);
         expect(html).toMatch(/<img\b/);
+    });
+
+    it("renders Graphite video links with HTML label as an embedded player", () => {
+        const markdown = `[Enregistrement de l'écran 2026-07-30 à 17.56.22.mov <span class="graphite__hidden">(uploaded via Graphite)</span> <img class="graphite__hidden" src="https://app.graphite.com/user-attachments/thumbnails/4280fb23-bfcc-429d-95a4-461f52ce5fc1.mov" />](${GRAPHITE_VIDEO})`;
+        const html = renderMarkdown(markdown);
+
+        expect(html).toContain(`src="${GRAPHITE_VIDEO}"`);
+        expect(html).toMatch(/<video\b/);
+        expect(html).toMatch(/Enregistrement de l(?:'|&#x27;)écran 2026-07-30 à 17\.56\.22\.mov/);
+        expect(html).not.toContain("(uploaded via Graphite)");
+    });
+});
+
+describe("attachmentLabelFromLinkText", () => {
+    it("strips Graphite upload metadata from link labels", () => {
+        expect(
+            attachmentLabelFromLinkText("Enregistrement de l'écran 2026-07-30 à 17.56.22.mov (uploaded via Graphite)"),
+        ).toBe("Enregistrement de l'écran 2026-07-30 à 17.56.22.mov");
     });
 });
 

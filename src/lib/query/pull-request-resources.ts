@@ -155,6 +155,7 @@ function toSummary(detail: PullRequestDetail): PullRequestSummary {
         changedFiles: detail.changedFiles,
         commentCount: detail.commentCount,
         mergeable: detail.mergeable,
+        mergeStateStatus: detail.mergeStateStatus,
         assignees: detail.assignees,
         labels: detail.labels,
     };

@@ -340,6 +340,7 @@ describe("load more", () => {
                         changedFiles: 0,
                         commentCount: 0,
                         mergeable: "mergeable",
+                        mergeStateStatus: "unknown",
                         assignees: [],
                         labels: [],
                     },

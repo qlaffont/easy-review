@@ -118,6 +118,19 @@ export function DiffSettingsMenu({
                 >
                     Compact line height
                 </DropdownMenuCheckboxItem>
+                <DropdownMenuCheckboxItem
+                    checked={preferences.wrapLines}
+                    onCheckedChange={(checked) => onChange({ wrapLines: checked === true })}
+                >
+                    <span className="flex flex-1 items-center gap-1.5">
+                        Wrap long lines
+                        <HelpTooltip label="Break long lines to fit the pane instead of scrolling horizontally.">
+                            <span className="inline-flex">
+                                <Info className="size-3.5 text-muted-foreground" aria-hidden="true" />
+                            </span>
+                        </HelpTooltip>
+                    </span>
+                </DropdownMenuCheckboxItem>
             </DropdownMenuContent>
         </DropdownMenu>
     );

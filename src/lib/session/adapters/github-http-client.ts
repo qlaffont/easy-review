@@ -1951,6 +1951,7 @@ type PullRequestNode = {
     };
     commits: { nodes: Array<{ commit: { statusCheckRollup: { state: string } | null } }> };
     mergeable: "MERGEABLE" | "CONFLICTING" | "UNKNOWN";
+    mergeStateStatus?: string;
     labels: { nodes: Array<{ name: string; color: string }> } | null;
     assignees: { nodes: Array<{ login: string }> };
 };
@@ -2058,6 +2059,7 @@ function toPullRequestSummary(node: PullRequestNode): PullRequestSummary {
         changedFiles: node.changedFiles,
         commentCount: node.totalCommentsCount ?? 0,
         mergeable: toMergeableState(node.mergeable),
+        mergeStateStatus: toMergeStateStatus(node.mergeStateStatus),
         assignees: node.assignees.nodes.map((assignee) => assignee.login),
         labels: node.labels?.nodes ?? [],
     };
@@ -2246,6 +2248,7 @@ function toSearchPullRequestSummary(node: SearchPullRequestNode): PullRequestSum
         changedFiles: node.changedFiles,
         commentCount: 0,
         mergeable: "unknown",
+        mergeStateStatus: "unknown",
         assignees: [],
         labels: [],
     };
@@ -2414,6 +2417,7 @@ const PULL_REQUEST_SUMMARY_FIELDS = `
     deletions
     changedFiles
     mergeable
+    mergeStateStatus
     reviewDecision
     author {
         login
@@ -2580,6 +2584,7 @@ type PullRequestFileNode = {
     additions: number;
     deletions: number;
     changeType: "ADDED" | "DELETED" | "MODIFIED" | "RENAMED" | "COPIED" | "CHANGED";
+    viewerViewedState: "VIEWED" | "UNVIEWED" | "DISMISSED";
 };
 
 type PullRequestFilesQuery = {
@@ -2722,6 +2727,7 @@ const PULL_REQUEST_FILES_QUERY = `
                         additions
                         deletions
                         changeType
+                        viewerViewedState
                     }
                     pageInfo {
                         hasNextPage
@@ -3512,6 +3518,7 @@ function toPullRequestFile(node: PullRequestFileNode): PullRequestFile {
         additions: node.additions,
         deletions: node.deletions,
         stub: stubForPath(node.path),
+        viewerViewedState: node.viewerViewedState,
     };
 }
 

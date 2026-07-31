@@ -13,6 +13,7 @@ import { memo } from "react";
 import type { PullRequestSummary, ReviewState } from "#/lib/session/types.ts";
 
 import { ChecksDot } from "#/components/pr/checks-dot.tsx";
+import { pullRequestHasMergeConflicts } from "#/components/pr/merge-requirements.ts";
 import { HelpTooltip } from "#/components/ui/help-tooltip.tsx";
 import { RelativeTime } from "#/components/ui/relative-time.tsx";
 import { excludeAuthorFromReviewRequests, excludeAuthorFromReviewers } from "#/lib/session/reviewer-status.ts";
@@ -174,7 +175,7 @@ export const PullRequestRow = memo(function PullRequestRow({
     selected?: boolean;
 }) {
     const [owner = "", repo = ""] = pullRequest.repository.split("/");
-    const hasConflicts = pullRequest.state === "open" && pullRequest.mergeable === "conflicting";
+    const hasConflicts = pullRequestHasMergeConflicts(pullRequest);
 
     return (
         <Link

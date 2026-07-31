@@ -22,10 +22,15 @@ import { remarkAlert } from "remark-github-blockquote-alert";
 
 import { SuggestionApplyActions, type SuggestionApplyTarget } from "#/components/pr/suggestion-apply.tsx";
 import {
+    attachmentLabelFromLinkText,
     isGithubPrivateMediaUrl,
     isGithubUserAttachmentUrl,
+    isGraphiteUserAttachmentUrl,
+    mediaKindFromLinkText,
+    parseGraphiteUserAttachmentUrl,
     repositoryFromGithubBaseUrl,
     shouldEmbedGithubAttachment,
+    shouldEmbedGraphiteAttachment,
     type ResolvedGithubAttachment,
 } from "#/lib/github-attachment.ts";
 import { prepareMarkdownSource } from "#/lib/markdown-source.ts";
@@ -46,6 +51,7 @@ const MermaidDiagram = lazy(() =>
 const ALERT_CLASS = /^markdown-alert(?:-[\w-]+)?$/;
 const SECTION_CLASS = /^(?:markdown-alert(?:-[\w-]+)?|footnotes)$/;
 const OCTICON_CLASS = /^octicon$/;
+const GRAPHITE_HIDDEN_CLASS = /^graphite__hidden$/;
 
 /**
  * Allow the same structural HTML GitHub keeps in issue/PR bodies, plus alert markup
@@ -81,12 +87,17 @@ const sanitizeSchema = {
             "xmlns",
         ],
         path: ["d", "fill", "fillRule", "fill-rule", "clipRule", "clip-rule"],
+        span: [
+            ...(defaultSchema.attributes?.span ?? []),
+            ["className", GRAPHITE_HIDDEN_CLASS],
+            ["class", GRAPHITE_HIDDEN_CLASS],
+        ],
         input: [...(defaultSchema.attributes?.input ?? []), "disabled", "checked", "type"],
         video: ["src", "controls", "playsInline", "playsinline", "preload", "width", "height"],
     },
 };
 
-/** GitHub-hosted images only — blocks arbitrary tracking pixels in PR/comment markdown. */
+/** GitHub- and Graphite-hosted images only — blocks arbitrary tracking pixels in PR/comment markdown. */
 function isAllowedMarkdownImageSrc(src: string | undefined): boolean {
     if (!src) {
         return false;
@@ -102,7 +113,8 @@ function isAllowedMarkdownImageSrc(src: string | undefined): boolean {
             host === "github.com" ||
             host === "www.github.com" ||
             host.endsWith(".github.com") ||
-            host.endsWith(".githubusercontent.com")
+            host.endsWith(".githubusercontent.com") ||
+            isGraphiteUserAttachmentUrl(src)
         );
     } catch {
         return false;
@@ -360,6 +372,9 @@ function linkChildrenText(children: ReactNode): string {
 const MarkdownRepoContext = createContext<string | null>(null);
 
 function AttachmentFallback({ href, name }: { href: string; name?: string }) {
+    const fallbackLabel =
+        name ?? (isGraphiteUserAttachmentUrl(href) ? "Open attachment on Graphite" : "Open attachment on GitHub");
+
     return (
         <a
             href={href}
@@ -368,9 +383,50 @@ function AttachmentFallback({ href, name }: { href: string; name?: string }) {
             className="my-2 flex items-center gap-2 rounded-md border bg-muted/40 px-3 py-2 text-sm text-foreground no-underline hover:bg-muted/70"
         >
             <Film className="size-4 shrink-0 text-muted-foreground" aria-hidden />
-            <span className="min-w-0 flex-1 truncate font-medium">{name ?? "Open attachment on GitHub"}</span>
+            <span className="min-w-0 flex-1 truncate font-medium">{fallbackLabel}</span>
             <ExternalLink className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
         </a>
+    );
+}
+
+/** Graphite PR media — direct CDN URL, no GitHub markdown API resolution. */
+function GraphiteAttachmentMedia({ src, name, kind }: { src: string; name?: string; kind: "image" | "video" }) {
+    const [failed, setFailed] = useState(false);
+
+    if (failed) {
+        return <AttachmentFallback href={src} name={name} />;
+    }
+
+    if (kind === "video") {
+        return (
+            <div className="my-2 overflow-hidden rounded-md border bg-muted/20">
+                {name ? (
+                    <div className="border-b px-3 py-1.5 text-xs font-medium text-muted-foreground">{name}</div>
+                ) : null}
+                <video
+                    src={src}
+                    controls
+                    playsInline
+                    preload="metadata"
+                    className="max-h-[min(480px,70vh)] w-full max-w-full bg-muted"
+                    onError={() => setFailed(true)}
+                >
+                    <a href={src} target="_blank" rel="noreferrer noopener ugc">
+                        {src}
+                    </a>
+                </video>
+            </div>
+        );
+    }
+
+    return (
+        <img
+            src={src}
+            alt=""
+            loading="lazy"
+            className="my-2 max-h-[min(480px,70vh)] max-w-full rounded-md"
+            onError={() => setFailed(true)}
+        />
     );
 }
 
@@ -379,11 +435,11 @@ function AttachmentFallback({ href, name }: { href: string; name?: string }) {
  * `blob/…?raw=true` uploads (Contents `download_url`). Cookies are not sent on cross-origin
  * `<img>`/`<video>`, so bare github.com URLs fail for private repos.
  */
-function GithubAttachmentMedia({ src }: { src: string }) {
+function GithubAttachmentMedia({ src, preferredKind }: { src: string; preferredKind?: "image" | "video" }) {
     const repository = useContext(MarkdownRepoContext);
     const session = useOptionalSession();
     const [resolved, setResolved] = useState<ResolvedGithubAttachment | null>(null);
-    const [mode, setMode] = useState<"image" | "video">("image");
+    const [mode, setMode] = useState<"image" | "video">(preferredKind ?? "image");
     const [failed, setFailed] = useState(false);
     const [retried, setRetried] = useState(false);
     const isUserAttachment = isGithubUserAttachmentUrl(src);
@@ -497,8 +553,20 @@ function MarkdownVideo({ src, ...props }: ComponentPropsWithoutRef<"video">) {
 
 const components = {
     a: ({ href, children, className, ...props }: ComponentPropsWithoutRef<"a">) => {
-        if (shouldEmbedGithubAttachment(href, linkChildrenText(children))) {
-            return <GithubAttachmentMedia src={href!} />;
+        const linkText = linkChildrenText(children);
+        if (shouldEmbedGraphiteAttachment(href)) {
+            const parsed = parseGraphiteUserAttachmentUrl(href);
+            const label = attachmentLabelFromLinkText(linkText);
+            return (
+                <GraphiteAttachmentMedia
+                    src={href!}
+                    name={label || parsed?.name}
+                    kind={parsed?.kind ?? mediaKindFromLinkText(linkText) ?? "video"}
+                />
+            );
+        }
+        if (shouldEmbedGithubAttachment(href, linkText)) {
+            return <GithubAttachmentMedia src={href!} preferredKind={mediaKindFromLinkText(linkText) ?? undefined} />;
         }
 
         return (
@@ -708,7 +776,7 @@ export const Markdown = memo(function Markdown({
     return (
         <SuggestionContext.Provider value={suggestionContext}>
             <MarkdownRepoContext.Provider value={repositoryFromGithubBaseUrl(baseUrl)}>
-                <div className="prose prose-sm max-w-none text-foreground dark:prose-invert prose-p:my-2 prose-hr:my-3 prose-pre:my-0 prose-pre:bg-transparent prose-pre:p-0 prose-code:text-foreground prose-code:before:content-none prose-code:after:content-none prose-strong:text-foreground [&_li:has(>input[type=checkbox])]:list-none [&_ul:has(li>input[type=checkbox])]:list-none [&_ul:has(li>input[type=checkbox])]:pl-0">
+                <div className="prose prose-sm max-w-none text-foreground dark:prose-invert prose-p:my-2 prose-hr:my-3 prose-pre:my-0 prose-pre:bg-transparent prose-pre:p-0 prose-code:text-foreground prose-code:before:content-none prose-code:after:content-none prose-strong:text-foreground [&_.graphite__hidden]:hidden [&_li:has(>input[type=checkbox])]:list-none [&_ul:has(li>input[type=checkbox])]:list-none [&_ul:has(li>input[type=checkbox])]:pl-0">
                     <ReactMarkdown
                         remarkPlugins={remarkPlugins}
                         rehypePlugins={rehypePlugins}

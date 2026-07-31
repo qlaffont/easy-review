@@ -35,6 +35,7 @@ import {
     FILE_LIST_WIDTH_MAX,
     FILE_LIST_WIDTH_MIN,
     fileViewState,
+    mergeViewedFileMarksFromGithub,
     readViewedFileMarks,
     useDiffPreferences,
     writeViewedFileMarks,
@@ -117,8 +118,16 @@ export function ReviewChanges({
     const fileListSelectedPath = showFileDiff ? selectedPath : null;
 
     useEffect(() => {
-        setViewedMarks(readViewedFileMarks(repository, number, headSha));
-    }, [repository, number, headSha]);
+        const local = readViewedFileMarks(repository, number, headSha);
+        if (isolatingRange || files.status !== "ready" || !headSha) {
+            setViewedMarks(local);
+            return;
+        }
+
+        const merged = mergeViewedFileMarksFromGithub(local, files.items, headSha, baseSha);
+        setViewedMarks(merged);
+        writeViewedFileMarks(repository, number, merged);
+    }, [repository, number, headSha, baseSha, files.status, files.items, files.lastLoadedAt, isolatingRange]);
 
     useEffect(() => {
         if (commitRange.mode !== "range") {
@@ -513,6 +522,7 @@ export function ReviewChanges({
                                     layout={preferences.layout}
                                     hideWhitespace={preferences.hideWhitespace}
                                     compactLineHeight={preferences.compactLineHeight}
+                                    wrapLines={preferences.wrapLines}
                                     viewed={selectedViewState === "viewed"}
                                     onViewedChange={(viewed) => setPathViewed(selectedPath, viewed)}
                                     previewBaseUrl={

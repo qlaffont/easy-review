@@ -102,6 +102,7 @@ export function FileDiffViewer({
     layout,
     hideWhitespace,
     compactLineHeight,
+    wrapLines,
     viewed,
     canApplySuggestions,
     onViewedChange,
@@ -130,6 +131,7 @@ export function FileDiffViewer({
     layout: DiffLayout;
     hideWhitespace: boolean;
     compactLineHeight: boolean;
+    wrapLines: boolean;
     viewed: boolean;
     onViewedChange: (viewed: boolean) => void;
     onLoadAnyway: () => void;
@@ -333,6 +335,7 @@ export function FileDiffViewer({
                         path={path}
                         layout={layout}
                         lineHeight={lineHeight}
+                        wrapLines={wrapLines}
                         syntax={syntax}
                         pendingComments={pendingComments}
                         threads={threads}
@@ -869,11 +872,13 @@ function DiffCodeCell({
     path,
     target,
     markSearchActive,
+    wrapLines = false,
     children,
 }: {
     path: string;
     target: LineTarget | null;
     markSearchActive?: boolean;
+    wrapLines?: boolean;
     children: ReactNode;
 }) {
     return (
@@ -887,7 +892,10 @@ function DiffCodeCell({
                   }
                 : {})}
             {...(markSearchActive ? { "data-diff-search-active": "true" } : {})}
-            className="select-text whitespace-pre px-2 text-foreground"
+            className={cn(
+                "block select-text px-2 text-foreground",
+                wrapLines ? "whitespace-pre-wrap wrap-anywhere" : "whitespace-pre",
+            )}
         >
             {children}
         </span>
@@ -1274,6 +1282,7 @@ function VirtualDiffLines({
     path,
     layout,
     lineHeight,
+    wrapLines,
     syntax,
     pendingComments,
     threads,
@@ -1306,6 +1315,7 @@ function VirtualDiffLines({
     path: string;
     layout: DiffLayout;
     lineHeight: number;
+    wrapLines: boolean;
     syntax: FileSyntaxMaps;
     pendingComments: Array<PendingLineComment>;
     threads: Array<ReviewThread>;
@@ -1364,6 +1374,10 @@ function VirtualDiffLines({
     const unifiedTrackWidth = scrollTrackWidthPx(measuredWidths.unified);
 
     useLayoutEffect(() => {
+        if (wrapLines) {
+            return;
+        }
+
         const root = splitRootRef.current;
         if (!root) {
             return;
@@ -1382,7 +1396,7 @@ function VirtualDiffLines({
                 measurePaneContentWidth(longestUnified, UNIFIED_LINE_NUMBERS_PX, font, "+"),
             ),
         });
-    }, [longestLeft, longestRight, longestUnified, lineHeight, layout, splitLeftRatio]);
+    }, [longestLeft, longestRight, longestUnified, lineHeight, layout, splitLeftRatio, wrapLines]);
 
     const virtualizer = useVirtualizer({
         count: virtualRows.length,
@@ -1488,7 +1502,9 @@ function VirtualDiffLines({
         }
         parentRef.current?.scrollTo({ top: 0, left: 0 });
         virtualizer.scrollToOffset(0, { align: "start" });
-    }, [path, virtualizer]);
+        // Reset scroll position only when switching files — not when comments/virtual rows change.
+        // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional
+    }, [path]);
 
     useEffect(() => {
         setLeftScroll(0);
@@ -1503,11 +1519,15 @@ function VirtualDiffLines({
         if (unifiedScrollRef.current) {
             unifiedScrollRef.current.scrollLeft = 0;
         }
-    }, [layout, lines]);
+    }, [layout, lines, wrapLines]);
 
     // Horizontal trackpad/shift-wheel over the code area: the row viewport is overflow-x-hidden
     // (virtualized), so scroll must be forwarded to the bottom pane scrollbars.
     useEffect(() => {
+        if (wrapLines) {
+            return;
+        }
+
         const scroller = parentRef.current;
         if (!scroller) {
             return;
@@ -1527,6 +1547,15 @@ function VirtualDiffLines({
                     return;
                 }
             }
+
+            const editableTarget =
+                event.target instanceof Element
+                    ? event.target.closest("textarea, [contenteditable='true'], [contenteditable=true]")
+                    : null;
+            if (editableTarget && !shiftAsHorizontal && absY > absX) {
+                return;
+            }
+
             const dx = shiftAsHorizontal ? event.deltaY : event.deltaX;
             if (dx === 0) {
                 return;
@@ -1582,9 +1611,9 @@ function VirtualDiffLines({
             }
         };
 
-        scroller.addEventListener("wheel", onWheel, { passive: false });
-        return () => scroller.removeEventListener("wheel", onWheel);
-    }, [layout, splitLeftRatio, measuredWidths]);
+        scroller.addEventListener("wheel", onWheel, { passive: false, capture: true });
+        return () => scroller.removeEventListener("wheel", onWheel, { capture: true });
+    }, [layout, splitLeftRatio, measuredWidths, wrapLines]);
 
     useEffect(() => {
         if (!selected) {
@@ -1600,7 +1629,7 @@ function VirtualDiffLines({
 
     return (
         <div
-            key={`${layout}-${lineHeight}-${lines.length}-${pendingComments.length}-${threads.length}`}
+            key={`${path}-${layout}-${lineHeight}-${wrapLines}-${lines.length}`}
             ref={splitRootRef}
             className="relative flex min-h-0 flex-1 flex-col font-mono text-xs"
             style={{
@@ -1619,13 +1648,12 @@ function VirtualDiffLines({
                 <div className="relative w-full" style={{ height: virtualizer.getTotalSize() }}>
                     {virtualizer.getVirtualItems().map((item) => {
                         const row = virtualRows[item.index]!;
-                        const overlaysSplit = row.kind === "notes" || row.kind === "compose";
                         return (
                             <div
                                 key={item.key}
                                 data-index={item.index}
                                 ref={virtualizer.measureElement}
-                                className={cn("absolute top-0 left-0 w-full overflow-hidden", overlaysSplit && "z-20")}
+                                className={cn("absolute top-0 left-0 w-full", !wrapLines && "overflow-hidden")}
                                 style={{ transform: `translateY(${item.start}px)` }}
                             >
                                 {row.kind === "notes" ? (
@@ -1670,6 +1698,7 @@ function VirtualDiffLines({
                                         row={row.row}
                                         path={path}
                                         lineHeight={lineHeight}
+                                        wrapLines={wrapLines}
                                         syntax={syntax}
                                         pendingByLine={pendingByLine}
                                         disabled={disabled}
@@ -1687,6 +1716,7 @@ function VirtualDiffLines({
                                         lineIndex={row.lineIndex}
                                         path={path}
                                         lineHeight={lineHeight}
+                                        wrapLines={wrapLines}
                                         syntax={syntax}
                                         pendingByLine={pendingByLine}
                                         disabled={disabled}
@@ -1704,35 +1734,37 @@ function VirtualDiffLines({
                 </div>
             </div>
 
-            {layout === "split" ? (
-                <div
-                    className="grid shrink-0 border-t bg-muted/20 font-mono text-xs"
-                    style={{ gridTemplateColumns: "var(--diff-split-left) minmax(0,1fr)" }}
-                >
+            {!wrapLines ? (
+                layout === "split" ? (
                     <div
-                        ref={leftScrollRef}
-                        className="h-3 overflow-x-scroll border-r border-border"
-                        onScroll={(event) => setLeftScroll(event.currentTarget.scrollLeft)}
+                        className="grid shrink-0 border-t bg-muted/20 font-mono text-xs"
+                        style={{ gridTemplateColumns: "var(--diff-split-left) minmax(0,1fr)" }}
                     >
-                        <div aria-hidden="true" style={{ width: leftTrackWidth, height: 1 }} />
+                        <div
+                            ref={leftScrollRef}
+                            className="h-3 overflow-x-scroll border-r border-border"
+                            onScroll={(event) => setLeftScroll(event.currentTarget.scrollLeft)}
+                        >
+                            <div aria-hidden="true" style={{ width: leftTrackWidth, height: 1 }} />
+                        </div>
+                        <div
+                            ref={rightScrollRef}
+                            className="h-3 overflow-x-scroll"
+                            onScroll={(event) => setRightScroll(event.currentTarget.scrollLeft)}
+                        >
+                            <div aria-hidden="true" style={{ width: rightTrackWidth, height: 1 }} />
+                        </div>
                     </div>
+                ) : (
                     <div
-                        ref={rightScrollRef}
-                        className="h-3 overflow-x-scroll"
-                        onScroll={(event) => setRightScroll(event.currentTarget.scrollLeft)}
+                        ref={unifiedScrollRef}
+                        className="h-3 shrink-0 overflow-x-scroll border-t bg-muted/20 font-mono text-xs"
+                        onScroll={(event) => setUnifiedScroll(event.currentTarget.scrollLeft)}
                     >
-                        <div aria-hidden="true" style={{ width: rightTrackWidth, height: 1 }} />
+                        <div aria-hidden="true" style={{ width: unifiedTrackWidth, height: 1 }} />
                     </div>
-                </div>
-            ) : (
-                <div
-                    ref={unifiedScrollRef}
-                    className="h-3 shrink-0 overflow-x-scroll border-t bg-muted/20 font-mono text-xs"
-                    onScroll={(event) => setUnifiedScroll(event.currentTarget.scrollLeft)}
-                >
-                    <div aria-hidden="true" style={{ width: unifiedTrackWidth, height: 1 }} />
-                </div>
-            )}
+                )
+            ) : null}
 
             {selectionPopup ? (
                 <DiffSelectionCommentPopup
@@ -1746,22 +1778,24 @@ function VirtualDiffLines({
                 />
             ) : null}
 
-            <div aria-hidden className="pointer-events-none fixed top-0 -left-[10000px] opacity-0">
-                {longestLeft ? (
-                    <DiffLineWidthProbe text={longestLeft} lineHeight={lineHeight} probeRef={leftProbeRef} />
-                ) : null}
-                {longestRight ? (
-                    <DiffLineWidthProbe text={longestRight} lineHeight={lineHeight} probeRef={rightProbeRef} />
-                ) : null}
-                {longestUnified ? (
-                    <DiffLineWidthProbe
-                        text={longestUnified}
-                        unified
-                        lineHeight={lineHeight}
-                        probeRef={unifiedProbeRef}
-                    />
-                ) : null}
-            </div>
+            {!wrapLines ? (
+                <div aria-hidden className="pointer-events-none fixed top-0 -left-[10000px] opacity-0">
+                    {longestLeft ? (
+                        <DiffLineWidthProbe text={longestLeft} lineHeight={lineHeight} probeRef={leftProbeRef} />
+                    ) : null}
+                    {longestRight ? (
+                        <DiffLineWidthProbe text={longestRight} lineHeight={lineHeight} probeRef={rightProbeRef} />
+                    ) : null}
+                    {longestUnified ? (
+                        <DiffLineWidthProbe
+                            text={longestUnified}
+                            unified
+                            lineHeight={lineHeight}
+                            probeRef={unifiedProbeRef}
+                        />
+                    ) : null}
+                </div>
+            ) : null}
         </div>
     );
 }
@@ -1907,6 +1941,7 @@ function UnifiedRow({
     lineIndex,
     path,
     lineHeight,
+    wrapLines,
     syntax,
     pendingByLine,
     disabled,
@@ -1921,6 +1956,7 @@ function UnifiedRow({
     lineIndex: number;
     path: string;
     lineHeight: number;
+    wrapLines: boolean;
     syntax: FileSyntaxMaps;
     pendingByLine: Set<string>;
     disabled?: boolean;
@@ -1971,11 +2007,17 @@ function UnifiedRow({
             line={line}
             scroll={scroll}
             lineHeight={lineHeight}
+            wrapLines={wrapLines}
             isSelected={isRowSelected}
             hasPending={Boolean(hasPending)}
         >
             <div
-                className="grid h-full grid-cols-[3.5rem_3.5rem_minmax(0,max-content)]"
+                className={cn(
+                    "grid h-full w-full",
+                    wrapLines
+                        ? "grid-cols-[3.5rem_3.5rem_minmax(0,1fr)] items-start"
+                        : "grid-cols-[3.5rem_3.5rem_minmax(0,max-content)]",
+                )}
                 style={{ minHeight: lineHeight }}
             >
                 <DiffLineNumber
@@ -1992,7 +2034,7 @@ function UnifiedRow({
                     selected={isRightSelected}
                     onSelect={onSelect}
                 />
-                <DiffCodeCell path={path} target={target} markSearchActive={markSearchActive}>
+                <DiffCodeCell path={path} target={target} markSearchActive={markSearchActive} wrapLines={wrapLines}>
                     {prefix(line)}
                     <DiffCodeText
                         text={line.text}
@@ -2010,6 +2052,7 @@ function SplitRowView({
     row,
     path,
     lineHeight,
+    wrapLines,
     syntax,
     pendingByLine,
     disabled,
@@ -2024,6 +2067,7 @@ function SplitRowView({
     row: SplitRow;
     path: string;
     lineHeight: number;
+    wrapLines: boolean;
     syntax: FileSyntaxMaps;
     pendingByLine: Set<string>;
     disabled?: boolean;
@@ -2075,6 +2119,7 @@ function SplitRowView({
                 line={left}
                 scroll={leftScroll}
                 lineHeight={lineHeight}
+                wrapLines={wrapLines}
                 borderRight
                 isSelected={leftChrome.isSelected}
                 hasPending={leftChrome.hasPending}
@@ -2084,6 +2129,7 @@ function SplitRowView({
                     lineIndex={row.kind === "pair" ? row.leftLineIndex : null}
                     path={path}
                     side="LEFT"
+                    wrapLines={wrapLines}
                     syntax={syntax}
                     wordDiff={wordDiff}
                     disabled={disabled}
@@ -2097,6 +2143,7 @@ function SplitRowView({
                 line={right}
                 scroll={rightScroll}
                 lineHeight={lineHeight}
+                wrapLines={wrapLines}
                 isSelected={rightChrome.isSelected}
                 hasPending={rightChrome.hasPending}
             >
@@ -2105,6 +2152,7 @@ function SplitRowView({
                     lineIndex={row.kind === "pair" ? row.rightLineIndex : null}
                     path={path}
                     side="RIGHT"
+                    wrapLines={wrapLines}
                     syntax={syntax}
                     wordDiff={wordDiff}
                     disabled={disabled}
@@ -2123,6 +2171,7 @@ function SplitCell({
     lineIndex,
     path,
     side,
+    wrapLines,
     syntax,
     wordDiff,
     disabled,
@@ -2135,6 +2184,7 @@ function SplitCell({
     lineIndex: number | null;
     path: string;
     side: DiffSide;
+    wrapLines: boolean;
     syntax: FileSyntaxMaps;
     wordDiff: ReturnType<typeof diffWords> | null;
     disabled?: boolean;
@@ -2182,7 +2232,12 @@ function SplitCell({
     const markSearchActive = searchHighlights.some((highlight) => highlight.active);
 
     return (
-        <div className="grid h-full grid-cols-[3rem_minmax(0,max-content)]">
+        <div
+            className={cn(
+                "grid h-full w-full",
+                wrapLines ? "grid-cols-[3rem_minmax(0,1fr)] items-start" : "grid-cols-[3rem_minmax(0,max-content)]",
+            )}
+        >
             <DiffLineNumber
                 number={number}
                 target={usableTarget}
@@ -2190,7 +2245,7 @@ function SplitCell({
                 selected={Boolean(isSelected)}
                 onSelect={onSelect}
             />
-            <DiffCodeCell path={path} target={usableTarget} markSearchActive={markSearchActive}>
+            <DiffCodeCell path={path} target={usableTarget} markSearchActive={markSearchActive} wrapLines={wrapLines}>
                 <DiffCodeText
                     text={line.text}
                     tokens={tokens}
@@ -2286,6 +2341,7 @@ function DiffLineViewport({
     line,
     scroll,
     lineHeight,
+    wrapLines = false,
     borderRight,
     isSelected = false,
     hasPending = false,
@@ -2294,6 +2350,7 @@ function DiffLineViewport({
     line: DiffLine | null;
     scroll: number;
     lineHeight: number;
+    wrapLines?: boolean;
     borderRight?: boolean;
     isSelected?: boolean;
     hasPending?: boolean;
@@ -2302,7 +2359,8 @@ function DiffLineViewport({
     return (
         <div
             className={cn(
-                "relative min-w-0 overflow-hidden",
+                "relative min-w-0",
+                wrapLines ? "overflow-visible" : "overflow-hidden",
                 borderRight && "border-r border-border",
                 !line && "bg-muted/20",
                 line && diffLineSelectionClass(isSelected, hasPending),
@@ -2311,8 +2369,8 @@ function DiffLineViewport({
         >
             {line ? <div className={cn("pointer-events-none absolute inset-0", lineClass(line))} aria-hidden /> : null}
             <div
-                className="relative min-w-full w-max"
-                style={{ transform: scroll > 0 ? `translateX(-${scroll}px)` : undefined }}
+                className={cn("relative", wrapLines ? "w-full" : "min-w-full w-max")}
+                style={wrapLines ? undefined : { transform: scroll > 0 ? `translateX(-${scroll}px)` : undefined }}
             >
                 {children}
             </div>

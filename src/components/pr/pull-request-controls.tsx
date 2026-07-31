@@ -16,6 +16,7 @@ import type { MergeMethod, PullRequestDetail } from "#/lib/session/types.ts";
 import {
     checksStatusLabel,
     defaultMergeCommitFields,
+    hasMergeConflicts,
     isMergeBlockedByRequirements,
     isReviewBlocking,
     mergeFooterHint,
@@ -204,7 +205,7 @@ export function PullRequestControls({ detail }: { detail: PullRequestDetail }) {
     }
 
     const requirementsBlocked = isMergeBlockedByRequirements(detail);
-    const conflictBlocked = detail.mergeable === "conflicting";
+    const conflictBlocked = hasMergeConflicts(detail);
     const draftBlocked = detail.isDraft;
     const canBypass = detail.viewerCanMergeAsAdmin;
     const mergeBlocked =

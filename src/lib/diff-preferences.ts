@@ -1,5 +1,7 @@
 import { useEffect, useState } from "react";
 
+import type { GithubFileViewedState } from "#/lib/session/types.ts";
+
 export type DiffLayout = "unified" | "split";
 
 export type FileListLayout = "flat" | "tree";
@@ -8,6 +10,8 @@ export type DiffPreferences = {
     layout: DiffLayout;
     hideWhitespace: boolean;
     compactLineHeight: boolean;
+    /** Soft-wrap long lines instead of horizontal scrolling. */
+    wrapLines: boolean;
     minimizeComments: boolean;
     /** When false, the changed-files sidebar is hidden so the diff can use full width. */
     showFileList: boolean;
@@ -38,6 +42,7 @@ const DEFAULT_PREFERENCES: DiffPreferences = {
     layout: "split",
     hideWhitespace: false,
     compactLineHeight: false,
+    wrapLines: false,
     minimizeComments: false,
     showFileList: true,
     fullWidth: false,
@@ -62,6 +67,7 @@ function readPreferences(): DiffPreferences {
             layout: parsed.layout === "split" ? "split" : "unified",
             hideWhitespace: Boolean(parsed.hideWhitespace),
             compactLineHeight: Boolean(parsed.compactLineHeight),
+            wrapLines: Boolean(parsed.wrapLines),
             minimizeComments: Boolean(parsed.minimizeComments),
             showFileList: parsed.showFileList !== false,
             fullWidth: Boolean(parsed.fullWidth),
@@ -198,6 +204,47 @@ export function fileViewState(marks: ViewedFileMarks, path: string, headSha: str
         return "viewed";
     }
     return "updated";
+}
+
+/**
+ * Merge GitHub's per-file viewed state into local marks when opening a PR.
+ * GitHub wins on conflict so marks from github.com or another client are reflected here.
+ */
+export function mergeViewedFileMarksFromGithub(
+    local: ViewedFileMarks,
+    files: ReadonlyArray<{ path: string; viewerViewedState?: GithubFileViewedState }>,
+    headSha: string,
+    baseSha: string,
+): ViewedFileMarks {
+    const next = { ...local };
+
+    for (const file of files) {
+        const state = file.viewerViewedState;
+        if (!state) {
+            continue;
+        }
+
+        switch (state) {
+            case "VIEWED":
+                if (headSha) {
+                    next[file.path] = headSha;
+                }
+                break;
+            case "DISMISSED": {
+                const existing = next[file.path];
+                if (existing && headSha && existing !== headSha) {
+                    break;
+                }
+                next[file.path] = baseSha || existing || "dismissed";
+                break;
+            }
+            case "UNVIEWED":
+                delete next[file.path];
+                break;
+        }
+    }
+
+    return next;
 }
 
 /** @deprecated Prefer `readViewedFileMarks` — kept for any stray callers. */

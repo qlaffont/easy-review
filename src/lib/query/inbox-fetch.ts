@@ -39,6 +39,8 @@ function mergePullRequestSummary(previous: PullRequestSummary, incoming: PullReq
         commentCount: previous.commentCount > 0 ? previous.commentCount : incoming.commentCount,
         reviewDecision: previous.reviewDecision ?? incoming.reviewDecision,
         mergeable: previous.mergeable !== "unknown" ? previous.mergeable : incoming.mergeable,
+        mergeStateStatus:
+            previous.mergeStateStatus !== "unknown" ? previous.mergeStateStatus : incoming.mergeStateStatus,
         assignees: previous.assignees.length > 0 ? previous.assignees : incoming.assignees,
         labels: previous.labels.length > 0 ? previous.labels : incoming.labels,
     };

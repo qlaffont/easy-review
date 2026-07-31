@@ -39,6 +39,7 @@ function pullRequest(overrides: Partial<PullRequestSummary> = {}): PullRequestSu
         changedFiles: 0,
         commentCount: 0,
         mergeable: "mergeable",
+        mergeStateStatus: "unknown",
         assignees: [],
         labels: [],
         ...overrides,

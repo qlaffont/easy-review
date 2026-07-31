@@ -1,4 +1,4 @@
-import type { MergeCommitSettings, MergeMethod, PullRequestDetail } from "#/lib/session/types.ts";
+import type { MergeCommitSettings, MergeMethod, PullRequestDetail, PullRequestSummary } from "#/lib/session/types.ts";
 
 export function reviewRequiredDescription(detail: PullRequestDetail): string {
     const count = detail.requiredApprovingReviewCount;
@@ -10,6 +10,20 @@ export function reviewRequiredDescription(detail: PullRequestDetail): string {
 
 export function isReviewBlocking(detail: PullRequestDetail): boolean {
     return detail.reviewDecision === "review-required" || detail.reviewDecision === "changes-requested";
+}
+
+/** True when GitHub reports merge conflicts with the base branch. */
+export function hasMergeConflicts(pullRequest: Pick<PullRequestDetail, "mergeable" | "mergeStateStatus">): boolean {
+    return pullRequest.mergeable === "conflicting" || pullRequest.mergeStateStatus === "dirty";
+}
+
+export function pullRequestHasMergeConflicts(
+    pullRequest: Pick<PullRequestSummary, "state" | "isDraft" | "mergeable" | "mergeStateStatus">,
+): boolean {
+    if (pullRequest.state !== "open" || pullRequest.isDraft) {
+        return false;
+    }
+    return hasMergeConflicts(pullRequest);
 }
 
 export function isMergeBlockedByRequirements(detail: PullRequestDetail): boolean {
@@ -51,7 +65,7 @@ export function mergeFooterHint(detail: PullRequestDetail, mergeOptionsLength: n
     if (mergeOptionsLength === 0) {
         return "No merge methods are enabled for this repository.";
     }
-    if (detail.mergeable === "conflicting") {
+    if (hasMergeConflicts(detail)) {
         return `Conflicts with ${detail.baseRefName} — resolve them before merging.`;
     }
     if (detail.isDraft) {

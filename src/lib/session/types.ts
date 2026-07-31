@@ -57,6 +57,8 @@ export type PullRequestSummary = {
     commentCount: number;
     /** Whether GitHub can merge head into base — used for inbox conflict signals. */
     mergeable: MergeableState;
+    /** GitHub merge readiness — `dirty` means conflicts with the base branch. */
+    mergeStateStatus: MergeStateStatus;
     /** Assignees (logins) — needed for section filters. */
     assignees: Array<string>;
     /** Labels on the pull request — needed for section filters. */
@@ -226,6 +228,8 @@ export type FileChangeStatus = "added" | "removed" | "modified" | "renamed";
 export type FileStubReason = "binary" | "huge" | "generated";
 
 /** One entry in the Review Changes file list. Deliberately without patch text. */
+export type GithubFileViewedState = "VIEWED" | "UNVIEWED" | "DISMISSED";
+
 export type PullRequestFile = {
     path: string;
     previousPath: string | null;
@@ -234,6 +238,8 @@ export type PullRequestFile = {
     deletions: number;
     /** Set when the path alone is enough to refuse an automatic load. */
     stub: FileStubReason | null;
+    /** Per-viewer viewed state from GitHub (`PullRequestChangedFile.viewerViewedState`). */
+    viewerViewedState?: GithubFileViewedState;
 };
 
 export type DiffLineKind = "context" | "add" | "del" | "hunk" | "gap";

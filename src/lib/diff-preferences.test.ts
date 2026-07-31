@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import {
     fileViewState,
+    mergeViewedFileMarksFromGithub,
     readViewedFileMarks,
     viewedFileMarksStorageKey,
     viewedFilesStorageKey,
@@ -50,6 +51,35 @@ describe("fileViewState", () => {
 
     it("treats older head as updated since viewed", () => {
         expect(fileViewState({ "a.ts": "sha1" }, "a.ts", "sha2")).toBe("updated");
+    });
+});
+
+describe("mergeViewedFileMarksFromGithub", () => {
+    it("marks GitHub VIEWED files with the current head", () => {
+        expect(
+            mergeViewedFileMarksFromGithub({}, [{ path: "a.ts", viewerViewedState: "VIEWED" }], "head", "base"),
+        ).toEqual({ "a.ts": "head" });
+    });
+
+    it("clears local marks when GitHub reports UNVIEWED", () => {
+        expect(
+            mergeViewedFileMarksFromGithub(
+                { "a.ts": "head" },
+                [{ path: "a.ts", viewerViewedState: "UNVIEWED" }],
+                "head",
+                "base",
+            ),
+        ).toEqual({});
+    });
+
+    it("maps DISMISSED to an older sha for updated state", () => {
+        const marks = mergeViewedFileMarksFromGithub(
+            {},
+            [{ path: "a.ts", viewerViewedState: "DISMISSED" }],
+            "head",
+            "base",
+        );
+        expect(fileViewState(marks, "a.ts", "head")).toBe("updated");
     });
 });
 

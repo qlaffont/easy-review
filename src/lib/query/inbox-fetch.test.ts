@@ -34,6 +34,7 @@ function cachedSummary(title: string): PullRequestSummary {
         changedFiles: 0,
         commentCount: 0,
         mergeable: "unknown",
+        mergeStateStatus: "unknown",
         assignees: [],
         labels: [],
     };

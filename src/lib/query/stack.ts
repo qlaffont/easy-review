@@ -97,7 +97,9 @@ export function usePullRequestStackQuery(
         .flatMap(([, data]) => {
             const detail = data?.detail;
             return detail?.repository === repository
-                ? [`${detail.updatedAt}:${detail.reviewDecision ?? ""}:${detail.checks}`]
+                ? [
+                      `${detail.updatedAt}:${detail.reviewDecision ?? ""}:${detail.checks}:${detail.mergeable}:${detail.mergeStateStatus}`,
+                  ]
                 : [];
         })
         .join("|");

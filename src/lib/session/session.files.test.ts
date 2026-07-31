@@ -201,4 +201,14 @@ describe("applySuggestions", () => {
             "setPullRequestFileViewed",
         ]);
     });
+
+    it("returns GitHub viewed state when listing pull request files", async () => {
+        const session = await connectedSession();
+        await session.setPullRequestFileViewed("acme/api", 1, "src/a.ts", true);
+
+        const files = await github.listPullRequestFiles(TOKEN, "acme/api", 1);
+
+        expect(files.find((file) => file.path === "src/a.ts")?.viewerViewedState).toBe("VIEWED");
+        expect(files.find((file) => file.path === "src/b.ts")?.viewerViewedState).toBe("UNVIEWED");
+    });
 });

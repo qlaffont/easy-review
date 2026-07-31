@@ -11,6 +11,7 @@ import {
     RemoveFormatting,
     Rows2,
     Workflow,
+    WrapText,
 } from "lucide-react";
 
 import {
@@ -115,6 +116,13 @@ export function PrSettingsEditor({ open, onOpenChange }: { open: boolean; onOpen
                             description="Tighten spacing between diff lines."
                             checked={preferences.compactLineHeight}
                             onCheckedChange={(compactLineHeight) => setPreferences({ compactLineHeight })}
+                        />
+                        <SettingsPreferenceRow
+                            icon={WrapText}
+                            title="Wrap long lines"
+                            description="Break long lines to fit the pane instead of scrolling horizontally."
+                            checked={preferences.wrapLines}
+                            onCheckedChange={(wrapLines) => setPreferences({ wrapLines })}
                         />
                         <SettingsPreferenceRow
                             icon={MessageSquareOff}

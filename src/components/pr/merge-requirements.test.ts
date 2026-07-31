@@ -4,6 +4,7 @@ import type { PullRequestDetail } from "#/lib/session/types.ts";
 
 import {
     defaultMergeCommitFields,
+    hasMergeConflicts,
     isMergeBlockedByRequirements,
     mergeFooterHint,
     mergingBlockedDescription,
@@ -75,6 +76,16 @@ describe("merge requirements", () => {
         expect(mergeFooterHint(detail({ reviewDecision: "review-required" }), 1, true)).toBe(
             "Merging is blocked until requirements are met.",
         );
+    });
+
+    it("treats dirty merge state as conflicts even when mergeable is unknown", () => {
+        expect(hasMergeConflicts(detail({ mergeable: "unknown", mergeStateStatus: "dirty" }))).toBe(true);
+    });
+
+    it("does not treat approved reviews as mergeable when conflicts exist", () => {
+        const blocked = detail({ reviewDecision: "approved", mergeStateStatus: "dirty", mergeable: "unknown" });
+        expect(hasMergeConflicts(blocked)).toBe(true);
+        expect(isMergeBlockedByRequirements(blocked)).toBe(true);
     });
 });
 

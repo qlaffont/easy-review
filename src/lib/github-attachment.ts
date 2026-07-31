@@ -1,10 +1,18 @@
 /** GitHub upload CDN — images and videos share this host/path with no file extension. */
 const USER_ATTACHMENT_PATH = /^\/user-attachments\/assets\/[0-9a-f-]+\/?$/i;
 
+/** Graphite upload CDN — separate host from GitHub (`app.graphite.com/user-attachments/...`). */
+const GRAPHITE_HOST = /^(?:[\w-]+\.)*graphite\.(?:com|dev)$/i;
+const GRAPHITE_ATTACHMENT_PATH = /^\/user-attachments\/(video|image|images)\/(.+)$/i;
+
 /** Easy Review PR media: `…/blob/<sha>/<path>?raw=true` (often private — needs auth to render). */
 const REPO_BLOB_RAW_PATH = /^\/([^/]+)\/([^/]+)\/blob\/([0-9a-f]{7,40})\/(.+)$/i;
 
 const VIDEO_PATH_EXTENSION = /\.(mp4|webm|mov|m4v|ogv)$/i;
+
+/** Video/image extensions in link labels (Graphite: `clip.mov (uploaded via Graphite)`). */
+const VIDEO_IN_LINK_LABEL = /\.(mp4|webm|mov|m4v|ogv)(?:\s|\)|$)/i;
+const IMAGE_IN_LINK_LABEL = /\.(png|jpe?g|gif|webp|svg)(?:\s|\)|$)/i;
 
 export type ResolvedGithubAttachment = {
     kind: "image" | "video";
@@ -36,6 +44,10 @@ export function isGithubUserAttachmentUrl(src: string | undefined): boolean {
     } catch {
         return false;
     }
+}
+
+export function isGraphiteUserAttachmentUrl(src: string | undefined): boolean {
+    return parseGraphiteUserAttachmentUrl(src) != null;
 }
 
 /**
@@ -85,13 +97,76 @@ export function mediaKindFromPath(path: string): "image" | "video" {
     return VIDEO_PATH_EXTENSION.test(path) ? "video" : "image";
 }
 
+/** Guess media kind from Graphite-style or filename link text before GitHub resolves the asset. */
+export function mediaKindFromLinkText(text: string): "image" | "video" | null {
+    const trimmed = text.trim();
+    if (VIDEO_IN_LINK_LABEL.test(trimmed) || VIDEO_PATH_EXTENSION.test(trimmed)) {
+        return "video";
+    }
+    if (IMAGE_IN_LINK_LABEL.test(trimmed)) {
+        return "image";
+    }
+    return null;
+}
+
+/** Strip Graphite upload metadata from visible link labels. */
+export function attachmentLabelFromLinkText(text: string): string {
+    return text
+        .replace(/\s*\(uploaded via Graphite\)\s*/gi, " ")
+        .replace(/\s+/g, " ")
+        .trim();
+}
+
+/** Parse Graphite `user-attachments` video/image URLs from PR descriptions. */
+export function parseGraphiteUserAttachmentUrl(src: string | undefined): ResolvedGithubAttachment | null {
+    if (!src) {
+        return null;
+    }
+
+    try {
+        const url = new URL(src);
+        if (url.protocol !== "https:" && url.protocol !== "http:") {
+            return null;
+        }
+        if (!GRAPHITE_HOST.test(url.hostname.toLowerCase())) {
+            return null;
+        }
+
+        const match = GRAPHITE_ATTACHMENT_PATH.exec(url.pathname);
+        if (!match) {
+            return null;
+        }
+
+        const section = match[1]!.toLowerCase();
+        const filename = decodeURIComponent(match[2]!);
+        const kind =
+            section === "video" || (section !== "image" && section !== "images" && VIDEO_PATH_EXTENSION.test(filename))
+                ? "video"
+                : VIDEO_PATH_EXTENSION.test(filename)
+                  ? "video"
+                  : "image";
+
+        return {
+            kind,
+            src: url.href,
+            ...(filename ? { name: filename } : {}),
+        };
+    } catch {
+        return null;
+    }
+}
+
+export function shouldEmbedGraphiteAttachment(href: string | undefined): boolean {
+    return parseGraphiteUserAttachmentUrl(href) != null;
+}
+
 export function isGithubPrivateMediaUrl(src: string | undefined): boolean {
     return isGithubUserAttachmentUrl(src) || isGithubRepoBlobRawUrl(src);
 }
 
 /**
- * GitHub auto-embeds bare `user-attachments` URLs (autolinks). Named links stay links.
- * Link text may be the full URL or the same URL without a scheme (GFM).
+ * GitHub auto-embeds bare `user-attachments` URLs (autolinks). Named links with a media
+ * filename or Graphite’s “(uploaded via Graphite)” label are embedded too.
  */
 export function shouldEmbedGithubAttachment(href: string | undefined, linkText: string): boolean {
     if (!isGithubUserAttachmentUrl(href) || !href) {
@@ -109,10 +184,22 @@ export function shouldEmbedGithubAttachment(href: string | undefined, linkText: 
 
     try {
         const url = new URL(href);
-        return text === `${url.host}${url.pathname}`.replace(/\/$/, "") || text === url.href.replace(/\/$/, "");
+        if (text === `${url.host}${url.pathname}`.replace(/\/$/, "") || text === url.href.replace(/\/$/, "")) {
+            return true;
+        }
     } catch {
-        return false;
+        /* fall through */
     }
+
+    if (/\(uploaded via Graphite\)/i.test(text)) {
+        return true;
+    }
+
+    if (VIDEO_IN_LINK_LABEL.test(text) || IMAGE_IN_LINK_LABEL.test(text)) {
+        return true;
+    }
+
+    return false;
 }
 
 /** `https://github.com/{owner}/{repo}/…` → `owner/repo`. */
