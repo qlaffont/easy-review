@@ -356,7 +356,16 @@ export function useFileDiffQuery(
         enabled: Boolean(login && path && (options?.enabled ?? true)),
         staleTime: CACHE_POLICY.pullRequest.diff.staleTime,
         gcTime: CACHE_POLICY.pullRequest.diff.gcTime,
-        placeholderData: (previous) => previous,
+        placeholderData: (previousData, previousQuery) => {
+            if (!path || !previousData || !previousQuery) {
+                return undefined;
+            }
+            const previousPath = previousQuery.queryKey[3];
+            if (previousPath !== path) {
+                return undefined;
+            }
+            return previousData;
+        },
     });
 
     const refresh = useCallback(async () => {

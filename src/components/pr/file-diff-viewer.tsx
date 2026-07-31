@@ -156,6 +156,7 @@ export function FileDiffViewer({
 
     const noteValue = draftBody ?? "";
     const effectiveShowFullFile = showFullFile;
+    const resolvedDiff = diff?.path === path ? diff : null;
 
     useEffect(() => {
         setShowFullFile(false);
@@ -167,16 +168,16 @@ export function FileDiffViewer({
     }, [path, hideWhitespace]);
 
     const rendered = useMemo(() => {
-        if (!diff || diff.stub || diff.beforeText === null || diff.afterText === null) {
-            return diff;
+        if (!resolvedDiff || resolvedDiff.stub || resolvedDiff.beforeText === null || resolvedDiff.afterText === null) {
+            return resolvedDiff;
         }
 
-        return materializeFileDiff(path, diff.beforeText, diff.afterText, {
+        return materializeFileDiff(path, resolvedDiff.beforeText, resolvedDiff.afterText, {
             ignoreWhitespace: hideWhitespace,
             showFullFile: effectiveShowFullFile,
             expansions: effectiveShowFullFile ? {} : expansions,
         });
-    }, [diff, path, hideWhitespace, effectiveShowFullFile, expansions]);
+    }, [resolvedDiff, path, hideWhitespace, effectiveShowFullFile, expansions]);
 
     const searchMatches = useMemo(
         () => (rendered?.lines ? collectDiffSearchMatches(rendered.lines, searchQuery, layout) : []),
@@ -319,10 +320,10 @@ export function FileDiffViewer({
 
             {error ? (
                 <p className="p-4 text-sm text-destructive">{error}</p>
-            ) : isLoading && !diff ? (
+            ) : isLoading && !resolvedDiff ? (
                 <DiffLoadingSkeleton path={path} />
-            ) : diff?.stub ? (
-                <StubPanel stub={diff.stub} onLoadAnyway={onLoadAnyway} />
+            ) : resolvedDiff?.stub ? (
+                <StubPanel stub={resolvedDiff.stub} onLoadAnyway={onLoadAnyway} />
             ) : !rendered || rendered.lines.length === 0 ? (
                 <p className="p-4 text-sm text-muted-foreground">No textual changes in this file.</p>
             ) : (

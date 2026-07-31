@@ -229,6 +229,7 @@ export function ReviewChanges({
     const fileCount = filesStatus === "ready" ? filesItems.length : null;
     const selectedFile = filesItems.find((file) => file.path === selectedPath) ?? null;
     const activeDiff = isolatingRange ? rangeDiff : (selectedDiff?.diff ?? null);
+    const displayDiff = activeDiff && selectedPath && activeDiff.path === selectedPath ? activeDiff : null;
     const diffPending = isolatingRange
         ? rangeDiffStatus === "idle" || rangeDiffStatus === "loading"
         : selectedDiff === null ||
@@ -504,9 +505,10 @@ export function ReviewChanges({
                         {showFileDiff && selectedPath ? (
                             <Suspense fallback={<DiffLoadingSkeleton path={selectedPath} />}>
                                 <FileDiffViewer
+                                    key={selectedPath}
                                     path={selectedPath}
                                     file={selectedFile}
-                                    diff={activeDiff}
+                                    diff={displayDiff}
                                     isLoading={diffPending}
                                     error={activeDiffError}
                                     pendingComments={pendingOnFile}

@@ -163,14 +163,19 @@ export function FileListLoadingSkeleton() {
 
 export function DiffLoadingSkeleton({ path }: { path: string }) {
     return (
-        <div role="status" aria-label={`Loading ${path}`} className="flex min-h-0 flex-1 flex-col gap-2 p-3">
-            <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                <LoadingIcon label={`Loading ${path}`} className="size-6" />
-                <span className="truncate">Loading {path}…</span>
+        <div
+            role="status"
+            aria-label={`Loading ${path}`}
+            className="flex min-h-[min(60vh,28rem)] flex-1 flex-col gap-3 p-4"
+        >
+            <div className="flex items-center gap-2.5 text-sm text-muted-foreground">
+                <LoadingIcon label={`Loading ${path}`} className="size-7" />
+                <span className="truncate font-medium">Loading diff…</span>
             </div>
+            <p className="truncate text-xs text-muted-foreground">{path}</p>
             <SkeletonGrid
-                count={12}
-                className="grid-cols-1"
+                count={14}
+                className="grid-cols-1 flex-1"
                 renderItem={(index) => (
                     <div className="grid grid-cols-[3rem_minmax(0,1fr)] gap-2">
                         <Skeleton className="h-3.5 w-8 justify-self-end" />
