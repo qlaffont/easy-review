@@ -45,7 +45,8 @@ describe("token-crypto.server", () => {
 
     it("rejects tampered ciphertext", () => {
         const sealed = sealGithubSessionPayload('{"v":1}');
-        const tampered = `${sealed.slice(0, -1)}x`;
+        const last = sealed.at(-1)!;
+        const tampered = `${sealed.slice(0, -1)}${last === "A" ? "B" : "A"}`;
         expect(openGithubSessionPayload(tampered)).toBeNull();
     });
 });
