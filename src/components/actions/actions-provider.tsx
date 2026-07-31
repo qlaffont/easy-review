@@ -96,6 +96,10 @@ export function ActionsProvider({ children }: { children: React.ReactNode }) {
             goToInbox: () => {
                 void navigate({ to: "/" });
             },
+            goToInboxFresh: () => {
+                session.invalidateInbox();
+                void navigate({ to: "/" });
+            },
             openPullRequest,
             openReviewChanges,
             copyText: async (text) => {

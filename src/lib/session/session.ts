@@ -2043,6 +2043,7 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
 
         await persistDraft(emptyDraft(repository, number, detail.headSha));
         await refreshAfterMutation(repository, number, { reloadReviewSurfaces: true, reloadStack: true });
+        invalidateInbox();
     }
 
     /** Publish one line comment immediately as a Comment review (does not touch the staged draft). */

@@ -34,6 +34,7 @@ function context(overrides: Partial<ActionContext> = {}): ActionContext {
         pullRequestDetail: null,
         openRepoPicker: vi.fn(),
         goToInbox: vi.fn(),
+        goToInboxFresh: vi.fn(),
         openPullRequest: vi.fn(),
         openReviewChanges: vi.fn(),
         copyText: vi.fn(),

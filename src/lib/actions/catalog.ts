@@ -29,6 +29,8 @@ export type ActionContext = {
     pullRequestDetail: PullRequestDetail | null;
     openRepoPicker: () => void;
     goToInbox: () => void;
+    /** Navigate to Inbox and refetch every section from GitHub (after review, merge, etc.). */
+    goToInboxFresh: () => void;
     openPullRequest: (repository: string, number: number) => void;
     openReviewChanges: (repository: string, number: number) => void;
     copyText: (text: string) => Promise<void>;
@@ -322,7 +324,7 @@ export const APP_ACTIONS: ReadonlyArray<AppAction> = [
                 },
                 {
                     returnToInbox: shouldReturnToInboxAfterReviewOrMerge(),
-                    onGoToInbox: context.goToInbox,
+                    onGoToInbox: context.goToInboxFresh,
                 },
             );
         },
@@ -351,7 +353,7 @@ export const APP_ACTIONS: ReadonlyArray<AppAction> = [
                 },
                 {
                     returnToInbox: shouldReturnToInboxAfterReviewOrMerge(),
-                    onGoToInbox: context.goToInbox,
+                    onGoToInbox: context.goToInboxFresh,
                 },
             );
         },
@@ -380,7 +382,7 @@ export const APP_ACTIONS: ReadonlyArray<AppAction> = [
                 },
                 {
                     returnToInbox: shouldReturnToInboxAfterReviewOrMerge(),
-                    onGoToInbox: context.goToInbox,
+                    onGoToInbox: context.goToInboxFresh,
                 },
             );
         },
@@ -409,7 +411,7 @@ export const APP_ACTIONS: ReadonlyArray<AppAction> = [
                 },
                 {
                     returnToInbox: shouldReturnToInboxAfterReviewOrMerge(),
-                    onGoToInbox: context.goToInbox,
+                    onGoToInbox: context.goToInboxFresh,
                 },
             );
         },
@@ -479,7 +481,7 @@ export const APP_ACTIONS: ReadonlyArray<AppAction> = [
                 },
                 {
                     returnToInbox: shouldReturnToInboxAfterReviewOrMerge(),
-                    onGoToInbox: context.goToInbox,
+                    onGoToInbox: context.goToInboxFresh,
                 },
             );
         },
@@ -503,7 +505,7 @@ export const APP_ACTIONS: ReadonlyArray<AppAction> = [
                 },
                 {
                     returnToInbox: shouldReturnToInboxAfterReviewOrMerge(),
-                    onGoToInbox: context.goToInbox,
+                    onGoToInbox: context.goToInboxFresh,
                 },
             );
         },

@@ -110,6 +110,13 @@ export function InboxBoard() {
         }
     }, [session.queryClient, login, selectedCount]);
 
+    // After review / merge, return navigation marks the inbox stale — reload every section from GitHub.
+    useEffect(() => {
+        if (inboxUi.stale && selectedCount > 0 && !inboxUi.refreshing) {
+            void session.refreshInbox();
+        }
+    }, [inboxUi.stale, inboxUi.refreshing, selectedCount, session]);
+
     useQuietRevalidate(() => {
         void revalidate({ background: true });
     });

@@ -52,12 +52,21 @@ describe("default section filters", () => {
         expect(matchSectionFilter(subject, defaultFilterForPreset("needs-your-review"), VIEWER)).toBe(true);
     });
 
-    it("puts a re-requested review back in Needs your review even after you reviewed", () => {
+    it("puts a re-requested review back in Needs your review when the prior approval was dismissed", () => {
+        const subject = pullRequest({
+            reviewRequests: [VIEWER],
+            reviewers: [{ login: VIEWER, state: "dismissed", reviewId: 1 }],
+        });
+        expect(matchSectionFilter(subject, defaultFilterForPreset("needs-your-review"), VIEWER)).toBe(true);
+    });
+
+    it("does not keep a pull request in Needs your review after you approved when reviewRequests lag", () => {
         const subject = pullRequest({
             reviewRequests: [VIEWER],
             reviewers: [{ login: VIEWER, state: "approved", reviewId: 1 }],
         });
-        expect(matchSectionFilter(subject, defaultFilterForPreset("needs-your-review"), VIEWER)).toBe(true);
+        expect(matchSectionFilter(subject, defaultFilterForPreset("needs-your-review"), VIEWER)).toBe(false);
+        expect(matchSectionFilter(subject, defaultFilterForPreset("waiting-for-author"), VIEWER)).toBe(true);
     });
 
     it("puts a pull request you already reviewed in Waiting for author", () => {

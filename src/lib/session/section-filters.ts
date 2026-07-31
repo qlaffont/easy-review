@@ -124,10 +124,17 @@ export function involvementFor(pullRequest: PullRequestSummary, viewerLogin: str
         }
         return "my-waiting-for-reviewers";
     }
+    const viewerReview = pullRequest.reviewers.find((reviewer) => reviewer.login === viewerLogin);
+    if (
+        viewerReview &&
+        (viewerReview.state === "approved" || viewerReview.state === "changes-requested") &&
+        pullRequest.author !== viewerLogin
+    ) {
+        return "i-have-reviewed";
+    }
     if (pullRequest.reviewRequests.includes(viewerLogin)) {
         return "review-requested-of-me";
     }
-    const viewerReview = pullRequest.reviewers.find((reviewer) => reviewer.login === viewerLogin);
     if (viewerReview && viewerReview.state !== "pending") {
         return "i-have-reviewed";
     }
@@ -341,6 +348,8 @@ export function defaultFilterForPreset(id: string): SectionFilter {
                 condition("state", "is", "open"),
                 condition("isDraft", "is", false),
                 condition("reviewRequests", "includes", VIEWER_PERSON),
+                condition("viewerReviewState", "is_not", "approved"),
+                condition("viewerReviewState", "is_not", "changes-requested"),
             ]);
         case "returned-to-you":
             return singleCaseFilter("My PR, changes requested", [
@@ -389,7 +398,6 @@ export function defaultFilterForPreset(id: string): SectionFilter {
                 condition("state", "is", "open"),
                 condition("isDraft", "is", false),
                 condition("author", "is_not", VIEWER_PERSON),
-                condition("reviewRequests", "does_not_include", VIEWER_PERSON),
                 condition("involvement", "is", "i-have-reviewed"),
             ]);
         default:
@@ -853,16 +861,22 @@ export function sectionFilterToSearchQuery(filter: SectionFilter, viewerLogin: s
     }
 
     const tokens: Array<string> = ["is:pr"];
+    let searchableConditions = 0;
 
     for (const condition of conditions) {
         const token = conditionToSearchToken(condition, viewerLogin);
         if (token === null) {
-            return null;
+            continue;
         }
+        searchableConditions += 1;
         if (token.startsWith("repo:")) {
             continue;
         }
         tokens.push(token);
+    }
+
+    if (searchableConditions === 0) {
+        return null;
     }
 
     return tokens.join(" ");

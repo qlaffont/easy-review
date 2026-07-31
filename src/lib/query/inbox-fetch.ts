@@ -125,8 +125,16 @@ export async function fetchInboxSections(params: {
                     repositories: [...selected],
                     limit: INBOX_SECTION_LOAD_SIZE,
                 });
+                const pullRequests = page.pullRequests.filter((pullRequest) =>
+                    matchSectionFilter(pullRequest, definition.filter, viewerLogin),
+                );
                 successes += 1;
-                results.push({ id: definition.id, ...page });
+                results.push({
+                    id: definition.id,
+                    pullRequests,
+                    totalCount: page.totalCount,
+                    pageInfo: page.pageInfo,
+                });
                 continue;
             }
 

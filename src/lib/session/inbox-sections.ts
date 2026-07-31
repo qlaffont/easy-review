@@ -357,24 +357,55 @@ function migratePresetFilter(id: InboxSectionId, filter: SectionFilter): Section
         return defaultFilterForPreset("drafts");
     }
 
-    if (id !== "waiting-for-reviewers") {
-        return filter;
+    if (id === "waiting-for-reviewers") {
+        if (filter.cases.length !== 1) {
+            return filter;
+        }
+        const fingerprints = new Set(filter.cases[0]!.conditions.map(conditionFingerprint));
+        const legacy = new Set([
+            "author|is_not|@me",
+            "state|is|open",
+            "isDraft|is|false",
+            "reviewDecision|is_not|changes-requested",
+            "reviewDecision|is_not|approved",
+        ]);
+        if (fingerprints.size !== legacy.size || [...legacy].some((entry) => !fingerprints.has(entry))) {
+            return filter;
+        }
+        return defaultFilterForPreset("waiting-for-reviewers");
     }
-    if (filter.cases.length !== 1) {
-        return filter;
+
+    if (id === "needs-your-review") {
+        if (filter.cases.length !== 1) {
+            return filter;
+        }
+        const fingerprints = new Set(filter.cases[0]!.conditions.map(conditionFingerprint));
+        const legacy = new Set(["state|is|open", "isDraft|is|false", "reviewRequests|includes|@me"]);
+        if (fingerprints.size !== legacy.size || [...legacy].some((entry) => !fingerprints.has(entry))) {
+            return filter;
+        }
+        return defaultFilterForPreset("needs-your-review");
     }
-    const fingerprints = new Set(filter.cases[0]!.conditions.map(conditionFingerprint));
-    const legacy = new Set([
-        "author|is_not|@me",
-        "state|is|open",
-        "isDraft|is|false",
-        "reviewDecision|is_not|changes-requested",
-        "reviewDecision|is_not|approved",
-    ]);
-    if (fingerprints.size !== legacy.size || [...legacy].some((entry) => !fingerprints.has(entry))) {
-        return filter;
+
+    if (id === "waiting-for-author") {
+        if (filter.cases.length !== 1) {
+            return filter;
+        }
+        const fingerprints = new Set(filter.cases[0]!.conditions.map(conditionFingerprint));
+        const legacy = new Set([
+            "state|is|open",
+            "isDraft|is|false",
+            "author|is_not|@me",
+            "reviewRequests|does_not_include|@me",
+            "involvement|is|i-have-reviewed",
+        ]);
+        if (fingerprints.size !== legacy.size || [...legacy].some((entry) => !fingerprints.has(entry))) {
+            return filter;
+        }
+        return defaultFilterForPreset("waiting-for-author");
     }
-    return defaultFilterForPreset("waiting-for-reviewers");
+
+    return filter;
 }
 
 /**

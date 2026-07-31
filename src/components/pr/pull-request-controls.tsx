@@ -195,6 +195,7 @@ export function PullRequestControls({ detail }: { detail: PullRequestDetail }) {
                 {
                     returnToInbox: preferences.returnToInboxAfterReviewOrMerge,
                     onGoToInbox: () => {
+                        session.invalidateInbox();
                         void navigate({ to: "/" });
                     },
                 },

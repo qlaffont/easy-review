@@ -83,6 +83,7 @@ export function ReviewChangesMenu({ repository, number }: { repository: string; 
                 {
                     returnToInbox: preferences.returnToInboxAfterReviewOrMerge,
                     onGoToInbox: () => {
+                        session.invalidateInbox();
                         void navigate({ to: "/" });
                     },
                 },
