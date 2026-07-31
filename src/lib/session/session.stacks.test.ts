@@ -148,4 +148,53 @@ This stack of pull requests is managed by Graphite.`;
             "feat: add invoice badge in patient search",
         );
     });
+
+    it("merges open pull requests in a stack bottom-up", async () => {
+        github.addPullRequest(TOKEN, {
+            repository: "acme/api",
+            number: 196,
+            headRefName: "feat-c",
+            baseRefName: "feat-b",
+            reviewDecision: "approved",
+        });
+        github.patchPullRequest(TOKEN, "acme/api", 195, {
+            reviewDecision: "approved",
+            mergeable: "mergeable",
+            mergeStateStatus: "clean",
+        });
+
+        const session = await connectedSession();
+        await session.loadInbox();
+        await session.loadRepoStackIndex("acme/api");
+
+        await session.mergePullRequestStack("acme/api", 196, "squash");
+
+        const mergedBottom = await github.getPullRequest(TOKEN, "acme/api", 195);
+        const mergedTop = await github.getPullRequest(TOKEN, "acme/api", 196);
+        expect(mergedBottom.state).toBe("merged");
+        expect(mergedTop.state).toBe("merged");
+    });
+
+    it("refuses to merge a stack when a downstack pull request is blocked", async () => {
+        github.addPullRequest(TOKEN, {
+            repository: "acme/api",
+            number: 196,
+            headRefName: "feat-c",
+            baseRefName: "feat-b",
+            reviewDecision: "approved",
+        });
+        github.patchPullRequest(TOKEN, "acme/api", 195, {
+            reviewDecision: "approved",
+            mergeable: "conflicting",
+            mergeStateStatus: "dirty",
+        });
+
+        const session = await connectedSession();
+        await session.loadInbox();
+        await session.loadRepoStackIndex("acme/api");
+
+        await expect(session.mergePullRequestStack("acme/api", 196, "squash")).rejects.toMatchObject({
+            message: expect.stringContaining("#195"),
+        });
+    });
 });

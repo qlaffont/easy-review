@@ -25,7 +25,7 @@ Permissions are set on the app (not classic OAuth scopes). After changing permis
 | **GitHub App name** | e.g. `Easy Review local` (must be unique on GitHub) | e.g. `Easy Review` |
 | **Homepage URL** | `http://localhost:3000` | `https://your-domain.example` |
 | **Callback URL** | `http://localhost:3000/api/auth/github/callback` | `https://your-domain.example/api/auth/github/callback` |
-| **Expire user authorization tokens** | Optional — leave checked (GitHub default). You may need to sign in again when the token expires. | Prefer checked |
+| **Expire user authorization tokens** | Recommended: checked (8h access + 6mo refresh; Easy Review renews automatically) | Checked |
 | **Request user authorization (OAuth) during installation** | Recommended: checked | Checked |
 | **Webhook → Active** | Uncheck for local solo use (Easy Review does not need webhooks) | Optional |
 | **Where can this GitHub App be installed?** | **Any account** if you need org repos (required to install on orgs). **Only on this account** = personal repos only | As needed |
@@ -74,6 +74,12 @@ These are **server-only** — never use a `VITE_` prefix. Restart after editing:
 ```bash
 pnpm dev
 ```
+
+### Session encryption (optional)
+
+When **Expire user authorization tokens** is enabled on your GitHub App, Easy Review stores the refresh token in an **AES-256-GCM encrypted httpOnly cookie** (no database). The access token is renewed automatically before it expires (~every 8 hours).
+
+Set `GITHUB_SESSION_SECRET` to a long random string (32+ characters) so refresh tokens are not encrypted with the OAuth client secret. If unset, the client secret is used as a fallback.
 
 ---
 

@@ -214,7 +214,7 @@ export function PullRequestOverview({
                 {activeTab === "conversation" ? (
                     <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_16rem]">
                         <div id="conversation" className="flex min-w-0 scroll-mt-20 flex-col gap-5">
-                            <PullRequestStackPanel repository={repository} number={number} />
+                            <PullRequestStackPanel repository={repository} number={number} detail={page.detail} />
                             <Description
                                 detail={page.detail}
                                 headline={headline}

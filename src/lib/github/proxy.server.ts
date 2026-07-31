@@ -1,4 +1,4 @@
-import { readGithubAccessToken } from "#/lib/github/auth-cookies.server.ts";
+import { ensureGithubAccessToken, forceRefreshGithubAccessToken } from "#/lib/github/auth-cookies.server.ts";
 import { isAllowedGithubProxyRequest } from "#/lib/github/proxy-allowlist.server.ts";
 
 const GITHUB_API = "https://api.github.com";
@@ -68,7 +68,7 @@ function forwardResponseHeaders(upstream: Headers): Headers {
  * Only allowlisted REST paths / EasyReview GraphQL operations are forwarded.
  */
 export async function proxyGithubRequest(request: Request, githubPath: string): Promise<Response> {
-    const accessToken = readGithubAccessToken();
+    let accessToken = await ensureGithubAccessToken();
 
     if (!accessToken) {
         return Response.json({ message: "Not signed in with GitHub." }, { status: 401 });
@@ -94,6 +94,19 @@ export async function proxyGithubRequest(request: Request, githubPath: string): 
         upstream = await fetch(target, { method, headers, body, redirect: "manual" });
     } catch {
         return Response.json({ message: "Could not reach GitHub." }, { status: 502 });
+    }
+
+    if (upstream.status === 401) {
+        const refreshed = await forceRefreshGithubAccessToken();
+        if (refreshed && refreshed !== accessToken) {
+            accessToken = refreshed;
+            headers.set("authorization", `Bearer ${accessToken}`);
+            try {
+                upstream = await fetch(target, { method, headers, body, redirect: "manual" });
+            } catch {
+                return Response.json({ message: "Could not reach GitHub." }, { status: 502 });
+            }
+        }
     }
 
     return new Response(upstream.body, {

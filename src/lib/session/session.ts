@@ -98,6 +98,7 @@ import {
     normalizeSectionFilter,
     recipeById,
 } from "#/lib/session/section-filters.ts";
+import { evaluateStackMerge } from "#/lib/session/stack-merge.ts";
 import { areStacksEnabled, getStackPreferences } from "#/lib/stack-preferences.ts";
 
 /** Pre-OAuth localStorage key — removed on restore/disconnect so leftovers cannot leak. */
@@ -3157,6 +3158,36 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
         await refreshAfterMutation(repository, number, { reloadStack: true });
     }
 
+    async function mergePullRequestStack(
+        repository: string,
+        number: number,
+        method: Extract<MergeMethod, "merge" | "squash">,
+    ): Promise<void> {
+        const stackState = getPullRequestStack(repository, number);
+        if (stackState.status !== "ready" || !stackState.stack) {
+            throw new EasyReviewError("unknown", "Stack is not ready to merge.");
+        }
+
+        const stack = withFreshStackSummaries(stackState.stack, repository);
+        const evaluation = evaluateStackMerge(stack);
+
+        if (!evaluation.canMerge) {
+            throw new EasyReviewError("unknown", evaluation.blockMessage ?? "This stack cannot be merged.");
+        }
+
+        const token = requireToken();
+
+        for (let index = 0; index < evaluation.mergeOrder.length; index++) {
+            const pullRequest = evaluation.mergeOrder[index]!;
+            await github.mergePullRequest(token, repository, pullRequest.number, method);
+            if (index < evaluation.mergeOrder.length - 1) {
+                await loadRepoStackIndex(repository);
+            }
+        }
+
+        await refreshAfterMutation(repository, number, { reloadStack: true });
+    }
+
     async function closePullRequest(repository: string, number: number): Promise<void> {
         await github.closePullRequest(requireToken(), repository, number);
         await refreshAfterMutation(repository, number, { reloadStack: true });
@@ -3365,6 +3396,7 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
         toggleIssueCommentReaction,
         toggleReviewCommentReaction,
         mergePullRequest,
+        mergePullRequestStack,
         closePullRequest,
         uploadPullRequestMedia,
         resolveUserAttachment,

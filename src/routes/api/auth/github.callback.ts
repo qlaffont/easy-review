@@ -3,9 +3,9 @@ import { createFileRoute } from "@tanstack/react-router";
 import {
     assertGithubOAuthConfigured,
     clearOAuthStateCookie,
+    persistGithubOAuthTokens,
     readOAuthStateCookie,
     redirectTo,
-    setGithubAccessTokenCookie,
 } from "#/lib/github/auth-cookies.server.ts";
 import { exchangeGithubOAuthCode } from "#/lib/github/oauth.server.ts";
 
@@ -38,9 +38,9 @@ export const Route = createFileRoute("/api/auth/github/callback")({
                 }
 
                 try {
-                    const accessToken = await exchangeGithubOAuthCode(code);
+                    const tokens = await exchangeGithubOAuthCode(code);
                     clearOAuthStateCookie();
-                    setGithubAccessTokenCookie(accessToken);
+                    persistGithubOAuthTokens(tokens);
                     return redirectTo(`${origin}/`);
                 } catch (cause) {
                     clearOAuthStateCookie();

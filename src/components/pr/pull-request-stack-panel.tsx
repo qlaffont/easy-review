@@ -12,13 +12,19 @@ import {
     Link2,
     Terminal,
 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import type { PullRequestStackState } from "#/lib/session/session.ts";
-import type { PullRequestSummary, ReviewDecision } from "#/lib/session/types.ts";
+import type { StackMergeRowStatus } from "#/lib/session/stack-merge.ts";
+import type { PullRequestDetail, PullRequestSummary, ReviewDecision } from "#/lib/session/types.ts";
 
 import { ChecksDot } from "#/components/pr/checks-dot.tsx";
 import { pullRequestHasMergeConflicts } from "#/components/pr/merge-requirements.ts";
+import {
+    evaluateStackMerge,
+    StackMergeControls,
+    stackMergeStatusLabel,
+} from "#/components/pr/stack-merge-controls.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import {
     DropdownMenu,
@@ -139,10 +145,29 @@ function usePullRequestStackState(repository: string, number: number): PullReque
 }
 
 /** Same-repo stack from branch names, with Graphite comment fallback when branches no longer chain. */
-export function PullRequestStackPanel({ repository, number }: { repository: string; number: number }) {
+export function PullRequestStackPanel({
+    repository,
+    number,
+    detail,
+}: {
+    repository: string;
+    number: number;
+    detail: PullRequestDetail | null;
+}) {
     const stackPreferences = useStackPreferences()[0];
     const stackState = usePullRequestStackState(repository, number);
     const [expanded, setExpanded] = useState(true);
+    const stackMergeEvaluation = useMemo(
+        () => (stackState.stack ? evaluateStackMerge(stackState.stack) : null),
+        [stackState.stack],
+    );
+    const mergeStatusByNumber = useMemo(
+        () =>
+            stackMergeEvaluation
+                ? new Map(stackMergeEvaluation.rows.map((row) => [row.pullRequest.number, row.status]))
+                : null,
+        [stackMergeEvaluation],
+    );
 
     if (!stackPreferences.enabled) {
         return null;
@@ -152,7 +177,7 @@ export function PullRequestStackPanel({ repository, number }: { repository: stri
         return <StackPanelLoading />;
     }
 
-    if (!stackState.stack) {
+    if (!stackState.stack || !stackMergeEvaluation || !mergeStatusByNumber) {
         return null;
     }
 
@@ -260,7 +285,10 @@ export function PullRequestStackPanel({ repository, number }: { repository: stri
                                                 "border-primary/30 bg-primary/5",
                                             )}
                                         >
-                                            <StackRowContent pullRequest={pullRequest} />
+                                            <StackRowContent
+                                                pullRequest={pullRequest}
+                                                mergeStatus={mergeStatusByNumber.get(pullRequest.number) ?? null}
+                                            />
                                         </div>
                                     ) : (
                                         <Link
@@ -268,7 +296,10 @@ export function PullRequestStackPanel({ repository, number }: { repository: stri
                                             params={{ owner, repo, number: String(pullRequest.number) }}
                                             className="block rounded-lg border px-3 py-2 no-underline transition-colors hover:bg-muted/60"
                                         >
-                                            <StackRowContent pullRequest={pullRequest} />
+                                            <StackRowContent
+                                                pullRequest={pullRequest}
+                                                mergeStatus={mergeStatusByNumber.get(pullRequest.number) ?? null}
+                                            />
                                         </Link>
                                     )}
                                 </div>
@@ -277,6 +308,8 @@ export function PullRequestStackPanel({ repository, number }: { repository: stri
                     })}
                 </ol>
             ) : null}
+
+            {detail && expanded ? <StackMergeControls detail={detail} stack={stack} /> : null}
         </section>
     );
 }
@@ -290,10 +323,17 @@ function StackPanelLoading() {
     );
 }
 
-function StackRowContent({ pullRequest }: { pullRequest: PullRequestSummary }) {
+function StackRowContent({
+    pullRequest,
+    mergeStatus,
+}: {
+    pullRequest: PullRequestSummary;
+    mergeStatus: StackMergeRowStatus | null;
+}) {
     const reviewStatus = stackReviewStatus(pullRequest);
     const showChecks = pullRequest.state === "open" && !pullRequest.isDraft;
     const hasConflicts = pullRequestHasMergeConflicts(pullRequest);
+    const mergeLabel = mergeStatus ? stackMergeStatusLabel(mergeStatus) : null;
 
     return (
         <div className="flex min-w-0 flex-col gap-1">
@@ -304,6 +344,17 @@ function StackRowContent({ pullRequest }: { pullRequest: PullRequestSummary }) {
                     <span className="inline-flex shrink-0 items-center gap-1 text-xs font-medium text-amber-700 dark:text-amber-400">
                         <AlertTriangle className="size-3" aria-hidden="true" />
                         Conflicts
+                    </span>
+                ) : mergeLabel ? (
+                    <span
+                        className={cn(
+                            "shrink-0 text-xs font-medium",
+                            mergeLabel === "Blocked downstack"
+                                ? "text-amber-700 dark:text-amber-400"
+                                : "text-muted-foreground",
+                        )}
+                    >
+                        {mergeLabel}
                     </span>
                 ) : null}
                 <span className="shrink-0 text-xs text-muted-foreground tabular-nums">#{pullRequest.number}</span>

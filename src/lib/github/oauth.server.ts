@@ -1,9 +1,21 @@
 import { getRequestUrl } from "@tanstack/react-start/server";
 
+import type { GithubOAuthTokens } from "#/lib/github/oauth-types.ts";
+
 import { getGithubServerEnv } from "#/lib/github/env.server.ts";
 import { GITHUB_OAUTH_SCOPES } from "#/lib/github/oauth-scopes.ts";
 
 export { GITHUB_OAUTH_SCOPES } from "#/lib/github/oauth-scopes.ts";
+
+type GithubOAuthTokenPayload = {
+    access_token?: string;
+    refresh_token?: string;
+    expires_in?: number;
+    refresh_token_expires_in?: number;
+    token_type?: string;
+    error?: string;
+    error_description?: string;
+};
 
 export function githubOAuthCallbackUrl(): string {
     const url = getRequestUrl();
@@ -21,7 +33,7 @@ export function githubAuthorizeUrl(state: string): string {
     return `https://github.com/login/oauth/authorize?${params}`;
 }
 
-export async function exchangeGithubOAuthCode(code: string): Promise<string> {
+async function requestGithubOAuthTokens(body: Record<string, string>): Promise<GithubOAuthTokens> {
     const { GITHUB_CLIENT_ID, GITHUB_CLIENT_SECRET } = getGithubServerEnv();
 
     const response = await fetch("https://github.com/login/oauth/access_token", {
@@ -33,29 +45,48 @@ export async function exchangeGithubOAuthCode(code: string): Promise<string> {
         body: JSON.stringify({
             client_id: GITHUB_CLIENT_ID,
             client_secret: GITHUB_CLIENT_SECRET,
-            code,
-            redirect_uri: githubOAuthCallbackUrl(),
+            ...body,
         }),
     });
 
     if (!response.ok) {
-        throw new Error(`GitHub token exchange failed (${response.status}).`);
+        throw new Error(`GitHub token request failed (${response.status}).`);
     }
 
     const contentType = response.headers.get("content-type") ?? "";
     const payload = contentType.includes("application/json")
-        ? ((await response.json()) as {
-              access_token?: string;
-              error?: string;
-              error_description?: string;
-          })
-        : Object.fromEntries(new URLSearchParams(await response.text()));
+        ? ((await response.json()) as GithubOAuthTokenPayload)
+        : (Object.fromEntries(new URLSearchParams(await response.text())) as GithubOAuthTokenPayload);
 
-    if (!payload.access_token) {
-        throw new Error(payload.error_description ?? payload.error ?? "GitHub did not return an access token.");
+    if (payload.error) {
+        throw new Error(payload.error_description ?? payload.error);
     }
 
-    return payload.access_token;
+    if (!payload.access_token) {
+        throw new Error("GitHub did not return an access token.");
+    }
+
+    return {
+        accessToken: payload.access_token,
+        refreshToken: payload.refresh_token,
+        expiresIn: payload.expires_in,
+        refreshTokenExpiresIn: payload.refresh_token_expires_in,
+        tokenType: payload.token_type,
+    };
+}
+
+export async function exchangeGithubOAuthCode(code: string): Promise<GithubOAuthTokens> {
+    return requestGithubOAuthTokens({
+        code,
+        redirect_uri: githubOAuthCallbackUrl(),
+    });
+}
+
+export async function refreshGithubAccessToken(refreshToken: string): Promise<GithubOAuthTokens> {
+    return requestGithubOAuthTokens({
+        grant_type: "refresh_token",
+        refresh_token: refreshToken,
+    });
 }
 
 export function newOAuthState(): string {
