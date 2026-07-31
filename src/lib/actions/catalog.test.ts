@@ -31,6 +31,7 @@ function context(overrides: Partial<ActionContext> = {}): ActionContext {
         } as unknown as EasyReviewSession,
         surface: "pull-request",
         target: target(),
+        pullRequestDetail: null,
         openRepoPicker: vi.fn(),
         goToInbox: vi.fn(),
         openPullRequest: vi.fn(),

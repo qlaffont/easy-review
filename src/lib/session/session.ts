@@ -32,6 +32,7 @@ import type {
     FileDiff,
     MergeMethod,
     MergePullRequestOptions,
+    StackMergePullRequestOptions,
     PendingLineComment,
     PullRequestComment,
     PullRequestCommit,
@@ -1767,6 +1768,78 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
      * the draft was staged before the PR detail arrived — bind it to the live tip, do not stale it.
      * Empty drafts (nothing pending) silently rebind to the new tip — no false “head moved” banner.
      */
+    async function mergeDraftWithGithubPendingReview(
+        detail: PullRequestDetail,
+        draft: ReviewDraft,
+    ): Promise<ReviewDraft> {
+        const login = viewerLogin();
+        if (!login || state.state.auth.status !== "authenticated") {
+            return draft;
+        }
+
+        try {
+            const token = requireToken();
+            const pending = await github.getViewerPendingReview(token, detail.repository, detail.number, login);
+            if (!pending) {
+                return draft.githubReviewId ? { ...draft, githubReviewId: undefined } : draft;
+            }
+
+            const remoteRows = await github.listPendingReviewComments(
+                token,
+                detail.repository,
+                detail.number,
+                pending.reviewId,
+            );
+            const remoteComments: Array<PendingLineComment> = remoteRows.map((row) => ({
+                id: `gh-${row.id}`,
+                path: row.path,
+                line: row.line,
+                side: row.side,
+                body: row.body,
+                githubCommentId: row.id,
+            }));
+            const localOnly = draft.comments.filter((comment) => !comment.githubCommentId);
+            const mergedComments = [
+                ...remoteComments,
+                ...localOnly.filter(
+                    (local) =>
+                        !remoteComments.some(
+                            (remote) =>
+                                remote.path === local.path && remote.line === local.line && remote.side === local.side,
+                        ),
+                ),
+            ];
+            const headMoved = pending.commitId !== detail.headSha;
+            const comments = mergedComments.length > 0 ? mergedComments : draft.comments;
+
+            return {
+                ...draft,
+                githubReviewId: pending.reviewId,
+                body: draft.body.trim() ? draft.body : pending.body,
+                headSha: headMoved && draftHasPendingWork({ ...draft, comments }) ? pending.commitId : detail.headSha,
+                stale: headMoved && draftHasPendingWork({ ...draft, comments }),
+                comments,
+            };
+        } catch {
+            return draft;
+        }
+    }
+
+    async function ensureGithubPendingReview(detail: PullRequestDetail, draft: ReviewDraft): Promise<ReviewDraft> {
+        if (draft.githubReviewId) {
+            return draft;
+        }
+
+        const reviewId = await github.createPendingReview(
+            requireToken(),
+            detail.repository,
+            detail.number,
+            detail.headSha,
+            draft.body,
+        );
+        return { ...draft, githubReviewId: reviewId };
+    }
+
     async function syncDraftWithHead(detail: PullRequestDetail): Promise<void> {
         const key = pullRequestKey(detail.repository, detail.number);
         const login = viewerLogin();
@@ -1779,12 +1852,15 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
         const hasWork = draftHasPendingWork(base);
 
         if (headMoved && !hasWork) {
-            const draft = emptyDraft(detail.repository, detail.number, detail.headSha);
+            const draft = await mergeDraftWithGithubPendingReview(
+                detail,
+                emptyDraft(detail.repository, detail.number, detail.headSha),
+            );
             await persistDraft(draft);
             return;
         }
 
-        const draft: ReviewDraft = {
+        let draft: ReviewDraft = {
             ...base,
             repository: detail.repository,
             number: detail.number,
@@ -1792,9 +1868,11 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
             headSha: headMoved && hasWork ? stored!.headSha : boundHead ? stored!.headSha : detail.headSha,
         };
 
+        draft = await mergeDraftWithGithubPendingReview(detail, draft);
+
         state.setState((prev) => ({ ...prev, reviewDrafts: { ...prev.reviewDrafts, [key]: draft } }));
 
-        if (stored && !boundHead && draft.comments.length > 0) {
+        if ((stored && !boundHead && draft.comments.length > 0) || draft.githubReviewId) {
             await persistDraft(draft);
         }
     }
@@ -1852,7 +1930,8 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
         input: { path: string; line: number; side: DiffSide; body: string },
     ): Promise<PendingLineComment> {
         const draft = await ensureDraft(repository, number);
-        const headSha = resolvePullRequestDetail(repository, number)?.headSha ?? draft.headSha;
+        const detail = resolvePullRequestDetail(repository, number);
+        const headSha = detail?.headSha ?? draft.headSha;
         const comment: PendingLineComment = {
             id: crypto.randomUUID(),
             path: input.path,
@@ -1861,11 +1940,34 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
             body: input.body,
         };
 
-        await persistDraft({
+        let nextDraft: ReviewDraft = {
             ...draft,
             headSha: draft.comments.length === 0 && !draft.stale ? headSha : draft.headSha,
             comments: [...draft.comments, comment],
-        });
+        };
+
+        if (detail) {
+            nextDraft = await ensureGithubPendingReview(detail, nextDraft);
+            if (nextDraft.githubReviewId) {
+                const { commentId } = await github.addPendingReviewComment(requireToken(), repository, number, {
+                    reviewId: nextDraft.githubReviewId,
+                    headSha: detail.headSha,
+                    path: input.path,
+                    line: input.line,
+                    side: input.side,
+                    body: input.body,
+                });
+                comment.githubCommentId = commentId;
+                nextDraft = {
+                    ...nextDraft,
+                    comments: nextDraft.comments.map((entry) =>
+                        entry.id === comment.id ? { ...entry, githubCommentId: commentId } : entry,
+                    ),
+                };
+            }
+        }
+
+        await persistDraft(nextDraft);
 
         return comment;
     }
@@ -1877,15 +1979,28 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
         body: string,
     ): Promise<void> {
         const draft = await ensureDraft(repository, number);
-        await persistDraft({
+        const existing = draft.comments.find((comment) => comment.id === commentId);
+        const nextDraft: ReviewDraft = {
             ...draft,
             comments: draft.comments.map((comment) => (comment.id === commentId ? { ...comment, body } : comment)),
-        });
+        };
+
+        if (existing?.githubCommentId) {
+            await github.updateReviewComment(requireToken(), repository, existing.githubCommentId, body);
+        }
+
+        await persistDraft(nextDraft);
     }
 
     async function removePendingComment(repository: string, number: number, commentId: string): Promise<void> {
         const draft = await ensureDraft(repository, number);
+        const existing = draft.comments.find((comment) => comment.id === commentId);
         const comments = draft.comments.filter((comment) => comment.id !== commentId);
+
+        if (existing?.githubCommentId) {
+            await github.deleteReviewComment(requireToken(), repository, existing.githubCommentId);
+        }
+
         await persistDraft({ ...draft, comments });
     }
 
@@ -1920,7 +2035,10 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
             headSha: detail.headSha,
             event: draft.event,
             body: draft.body,
-            comments: draft.comments.map(({ path, line, side, body }) => ({ path, line, side, body })),
+            githubReviewId: draft.githubReviewId,
+            comments: draft.githubReviewId
+                ? []
+                : draft.comments.map(({ path, line, side, body }) => ({ path, line, side, body })),
         });
 
         await persistDraft(emptyDraft(repository, number, detail.headSha));
@@ -3154,14 +3272,26 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
         method: MergeMethod,
         options?: MergePullRequestOptions,
     ): Promise<void> {
-        await github.mergePullRequest(requireToken(), repository, number, method, options);
+        const token = requireToken();
+        const detail = resolvePullRequestDetail(repository, number);
+        await github.mergePullRequest(token, repository, number, method, options);
+
+        if (options?.deleteHeadBranch && detail?.headRefName) {
+            try {
+                await github.deleteHeadBranch(token, repository, detail.headRefName);
+            } catch {
+                // Branch may already be deleted or protected.
+            }
+        }
+
         await refreshAfterMutation(repository, number, { reloadStack: true });
     }
 
     async function mergePullRequestStack(
         repository: string,
         number: number,
-        method: Extract<MergeMethod, "merge" | "squash">,
+        method: MergeMethod,
+        options?: StackMergePullRequestOptions,
     ): Promise<void> {
         const stackState = getPullRequestStack(repository, number);
         if (stackState.status !== "ready" || !stackState.stack) {
@@ -3169,7 +3299,7 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
         }
 
         const stack = withFreshStackSummaries(stackState.stack, repository);
-        const evaluation = evaluateStackMerge(stack);
+        const evaluation = evaluateStackMerge(stack, { bypassRules: options?.bypassRules });
 
         if (!evaluation.canMerge) {
             throw new EasyReviewError("unknown", evaluation.blockMessage ?? "This stack cannot be merged.");
@@ -3180,12 +3310,116 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
         for (let index = 0; index < evaluation.mergeOrder.length; index++) {
             const pullRequest = evaluation.mergeOrder[index]!;
             await github.mergePullRequest(token, repository, pullRequest.number, method);
+
+            if (options?.deleteHeadBranch && pullRequest.headRefName) {
+                try {
+                    await github.deleteHeadBranch(token, repository, pullRequest.headRefName);
+                } catch {
+                    // Branch may already be deleted or protected.
+                }
+            }
+
             if (index < evaluation.mergeOrder.length - 1) {
                 await loadRepoStackIndex(repository);
             }
         }
 
         await refreshAfterMutation(repository, number, { reloadStack: true });
+    }
+
+    async function reopenPullRequest(repository: string, number: number): Promise<void> {
+        await github.reopenPullRequest(requireToken(), repository, number);
+        await refreshAfterMutation(repository, number, { reloadStack: true });
+    }
+
+    async function updatePullRequestBranch(repository: string, number: number): Promise<void> {
+        const detail = resolvePullRequestDetail(repository, number);
+        if (!detail) {
+            throw new EasyReviewError("unknown", "Load the pull request before updating the branch.");
+        }
+
+        await github.updatePullRequestBranch(requireToken(), detail.pullRequestNodeId, detail.headSha);
+        await refreshAfterMutation(repository, number, { reloadStack: true });
+    }
+
+    async function enablePullRequestAutoMerge(repository: string, number: number, method: MergeMethod): Promise<void> {
+        const detail = resolvePullRequestDetail(repository, number);
+        if (!detail) {
+            throw new EasyReviewError("unknown", "Load the pull request before enabling auto-merge.");
+        }
+
+        await github.enablePullRequestAutoMerge(requireToken(), detail.pullRequestNodeId, method);
+        await refreshAfterMutation(repository, number);
+    }
+
+    async function disablePullRequestAutoMerge(repository: string, number: number): Promise<void> {
+        const detail = resolvePullRequestDetail(repository, number);
+        if (!detail) {
+            throw new EasyReviewError("unknown", "Load the pull request before disabling auto-merge.");
+        }
+
+        await github.disablePullRequestAutoMerge(requireToken(), detail.pullRequestNodeId);
+        await refreshAfterMutation(repository, number);
+    }
+
+    async function updateIssueComment(
+        repository: string,
+        number: number,
+        commentId: number,
+        body: string,
+    ): Promise<void> {
+        const trimmed = body.trim();
+        if (!trimmed) {
+            throw new EasyReviewError("unknown", "Comment body is required.");
+        }
+
+        const updated = await github.updateIssueComment(requireToken(), repository, commentId, trimmed);
+        const key = pullRequestKey(repository, number);
+        const conversationItems = resolveConversationItems(key);
+
+        state.setState((prev) => {
+            const nextItems = conversationItems.map((entry) =>
+                entry.kind === "comment" && entry.databaseId === commentId
+                    ? {
+                          ...entry,
+                          body: updated.body,
+                          lastEditedAt: updated.lastEditedAt,
+                          editor: updated.editor,
+                          editCount: updated.editCount,
+                          edits: updated.edits,
+                      }
+                    : entry,
+            );
+            queryClient.setQueryData<ConversationQueryData>(queryKeys.pullRequest.conversation(key), {
+                items: nextItems,
+            });
+            return {
+                ...prev,
+                conversationComments: {
+                    ...prev.conversationComments,
+                    [key]: {
+                        status: "ready",
+                        items: nextItems,
+                        error: null,
+                    },
+                },
+            };
+        });
+    }
+
+    async function updateReviewComment(
+        repository: string,
+        number: number,
+        commentId: number,
+        body: string,
+    ): Promise<void> {
+        const trimmed = body.trim();
+        if (!trimmed) {
+            throw new EasyReviewError("unknown", "Comment body is required.");
+        }
+
+        await github.updateReviewComment(requireToken(), repository, commentId, trimmed);
+        await refreshAfterMutation(repository, number, { reloadReviewSurfaces: true });
     }
 
     async function closePullRequest(repository: string, number: number): Promise<void> {
@@ -3397,6 +3631,12 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
         toggleReviewCommentReaction,
         mergePullRequest,
         mergePullRequestStack,
+        reopenPullRequest,
+        updatePullRequestBranch,
+        enablePullRequestAutoMerge,
+        disablePullRequestAutoMerge,
+        updateIssueComment,
+        updateReviewComment,
         closePullRequest,
         uploadPullRequestMedia,
         resolveUserAttachment,

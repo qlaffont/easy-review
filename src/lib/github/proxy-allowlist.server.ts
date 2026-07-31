@@ -42,9 +42,18 @@ const REST_RULES: Array<Rule> = [
     { methods: new Set(["DELETE"]), pattern: /^\/repos\/[^/]+\/[^/]+\/pulls\/comments\/\d+\/reactions\/\d+$/ },
     { methods: new Set(["POST"]), pattern: /^\/repos\/[^/]+\/[^/]+\/pulls\/\d+\/reviews$/ },
     {
+        methods: new Set(["POST"]),
+        pattern: /^\/repos\/[^/]+\/[^/]+\/pulls\/\d+\/reviews\/\d+\/events$/,
+    },
+    {
         methods: new Set(["PUT"]),
         pattern: /^\/repos\/[^/]+\/[^/]+\/pulls\/\d+\/reviews\/\d+\/dismissals$/,
     },
+    { methods: GET, pattern: /^\/repos\/[^/]+\/[^/]+\/pulls\/\d+\/reviews$/ },
+    { methods: GET, pattern: /^\/repos\/[^/]+\/[^/]+\/pulls\/\d+\/comments$/ },
+    { methods: new Set(["POST"]), pattern: /^\/repos\/[^/]+\/[^/]+\/pulls\/\d+\/comments$/ },
+    { methods: new Set(["PATCH", "DELETE"]), pattern: /^\/repos\/[^/]+\/[^/]+\/pulls\/comments\/\d+$/ },
+    { methods: new Set(["PATCH"]), pattern: /^\/repos\/[^/]+\/[^/]+\/issues\/comments\/\d+$/ },
     { methods: GET, pattern: /^\/repos\/[^/]+\/[^/]+\/pulls\/\d+\/requested_reviewers$/ },
     { methods: new Set(["POST", "DELETE"]), pattern: /^\/repos\/[^/]+\/[^/]+\/pulls\/\d+\/requested_reviewers$/ },
     { methods: new Set(["PUT"]), pattern: /^\/repos\/[^/]+\/[^/]+\/pulls\/\d+\/merge$/ },
@@ -56,7 +65,7 @@ const REST_RULES: Array<Rule> = [
     { methods: new Set(["POST"]), pattern: /^\/repos\/[^/]+\/[^/]+\/git\/trees$/ },
     { methods: new Set(["POST"]), pattern: /^\/repos\/[^/]+\/[^/]+\/git\/commits$/ },
     { methods: new Set(["POST"]), pattern: /^\/repos\/[^/]+\/[^/]+\/git\/refs$/ },
-    { methods: new Set(["PATCH"]), pattern: /^\/repos\/[^/]+\/[^/]+\/git\/refs\/.+$/ },
+    { methods: new Set(["PATCH", "DELETE"]), pattern: /^\/repos\/[^/]+\/[^/]+\/git\/refs\/.+$/ },
 ];
 
 const NAMED_OPERATION = /\b(?:query|mutation)\s+([A-Za-z_][A-Za-z0-9_]*)/g;

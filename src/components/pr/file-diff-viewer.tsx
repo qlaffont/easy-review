@@ -110,6 +110,7 @@ export function FileDiffViewer({
     onAddComment,
     onAddSingleComment,
     onRemovePending,
+    onUpdatePending,
     onReplyToThread,
 }: {
     path: string;
@@ -138,6 +139,7 @@ export function FileDiffViewer({
     onAddComment: (target: LineTarget, body: string) => Promise<void>;
     onAddSingleComment: (target: LineTarget, body: string) => Promise<void>;
     onRemovePending: (commentId: string) => Promise<void>;
+    onUpdatePending: (commentId: string, body: string) => Promise<void>;
     onReplyToThread: (threadId: string, body: string) => Promise<void>;
 }) {
     const [compose, setCompose] = useState<LineTarget | null>(null);
@@ -371,6 +373,7 @@ export function FileDiffViewer({
                             setExpansions((current) => expandDiffGap(current, gapId, direction));
                         }}
                         onRemovePending={onRemovePending}
+                        onUpdatePending={onUpdatePending}
                         onReplyToThread={onReplyToThread}
                         searchMatches={searchMatches}
                         activeMatchId={activeMatchId}
@@ -1307,6 +1310,7 @@ function VirtualDiffLines({
     onSelect,
     onExpandGap,
     onRemovePending,
+    onUpdatePending,
     onReplyToThread,
     searchMatches,
     activeMatchId,
@@ -1340,6 +1344,7 @@ function VirtualDiffLines({
     onSelect: (target: LineTarget) => void;
     onExpandGap: (gapId: string, direction: "up" | "down" | "all" | "full") => void;
     onRemovePending: (commentId: string) => Promise<void>;
+    onUpdatePending: (commentId: string, body: string) => Promise<void>;
     onReplyToThread: (threadId: string, body: string) => Promise<void>;
     searchMatches: ReadonlyArray<DiffSearchMatch>;
     activeMatchId: number;
@@ -1672,6 +1677,7 @@ function VirtualDiffLines({
                                         mentionUsers={mentionUsers}
                                         disabled={disabled}
                                         onRemovePending={onRemovePending}
+                                        onUpdatePending={onUpdatePending}
                                         onReply={onReplyToThread}
                                     />
                                 ) : row.kind === "compose" ? (

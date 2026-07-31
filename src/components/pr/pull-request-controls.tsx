@@ -7,6 +7,8 @@ import {
     CircleX,
     GitMerge,
     GitPullRequestDraft,
+    RefreshCw,
+    RotateCcw,
     Users,
 } from "lucide-react";
 import { useMemo, useRef, useState } from "react";
@@ -94,6 +96,7 @@ export function PullRequestControls({ detail }: { detail: PullRequestDetail }) {
     const [error, setError] = useState<string | null>(null);
     const [busy, setBusy] = useState(false);
     const [bypassRules, setBypassRules] = useState(false);
+    const [deleteHeadBranch, setDeleteHeadBranch] = useState(true);
     const [mergeDialogOpen, setMergeDialogOpen] = useState(false);
     const [commitTitle, setCommitTitle] = useState("");
     const [commitMessage, setCommitMessage] = useState("");
@@ -103,6 +106,38 @@ export function PullRequestControls({ detail }: { detail: PullRequestDetail }) {
         () => detail.defaultMergeMethod ?? mergeOptions[0]?.value ?? "squash",
     );
     const [mergeMenuOpen, setMergeMenuOpen] = useState(false);
+
+    if (detail.state === "closed") {
+        return (
+            <section className="overflow-hidden rounded-lg border">
+                <h2 className="sr-only">Manage</h2>
+                <div className="flex flex-wrap items-center justify-end gap-2 bg-muted/20 px-4 py-3">
+                    <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={busy}
+                        className="gap-1.5"
+                        onClick={() =>
+                            void run(
+                                async () => {
+                                    await session.reopenPullRequest(detail.repository, detail.number);
+                                },
+                                {
+                                    loading: "Reopening pull request…",
+                                    success: "Pull request reopened",
+                                    error: "Could not reopen the pull request.",
+                                },
+                            )
+                        }
+                    >
+                        <RotateCcw className="size-3.5" aria-hidden="true" />
+                        Reopen pull request
+                    </Button>
+                    {error ? <p className="w-full text-sm text-destructive">{error}</p> : null}
+                </div>
+            </section>
+        );
+    }
 
     if (detail.state !== "open") {
         return null;
@@ -146,7 +181,10 @@ export function PullRequestControls({ detail }: { detail: PullRequestDetail }) {
 
             await notifyActionWithInboxPrompt(
                 async () => {
-                    await session.mergePullRequest(detail.repository, detail.number, method, mergeOptions);
+                    await session.mergePullRequest(detail.repository, detail.number, method, {
+                        ...mergeOptions,
+                        deleteHeadBranch,
+                    });
                 },
                 {
                     loading: "Merging pull request…",
@@ -230,6 +268,36 @@ export function PullRequestControls({ detail }: { detail: PullRequestDetail }) {
     return (
         <section className="overflow-hidden rounded-lg border">
             <h2 className="sr-only">Manage</h2>
+
+            {detail.viewerCanUpdateBranch && detail.mergeStateStatus === "behind" ? (
+                <StatusRow
+                    icon={<RefreshCw className="size-4" aria-hidden="true" />}
+                    iconClassName="bg-muted text-muted-foreground"
+                    title="This branch is out-of-date with the base branch"
+                    description={`Merge the latest changes from ${detail.baseRefName} into this branch.`}
+                    action={
+                        <Button
+                            size="sm"
+                            variant="outline"
+                            disabled={busy}
+                            onClick={() =>
+                                void run(
+                                    async () => {
+                                        await session.updatePullRequestBranch(detail.repository, detail.number);
+                                    },
+                                    {
+                                        loading: "Updating branch…",
+                                        success: "Branch updated",
+                                        error: "Could not update the branch.",
+                                    },
+                                )
+                            }
+                        >
+                            Update branch
+                        </Button>
+                    }
+                />
+            ) : null}
 
             {conflictBlocked ? (
                 <StatusRow
@@ -359,6 +427,60 @@ export function PullRequestControls({ detail }: { detail: PullRequestDetail }) {
                         Merge without waiting for requirements (bypass rules)
                     </label>
                 ) : null}
+                {detail.autoMergeEnabled ? (
+                    <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={busy}
+                        onClick={() =>
+                            void run(
+                                async () => {
+                                    await session.disablePullRequestAutoMerge(detail.repository, detail.number);
+                                },
+                                {
+                                    loading: "Cancelling auto-merge…",
+                                    success: "Auto-merge cancelled",
+                                    error: "Could not cancel auto-merge.",
+                                },
+                            )
+                        }
+                    >
+                        Cancel auto-merge
+                    </Button>
+                ) : mergeOptions.length > 0 && !conflictBlocked && !draftBlocked ? (
+                    <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                            <Button size="sm" variant="outline" disabled={busy}>
+                                Enable auto-merge
+                            </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end" className="w-72">
+                            {mergeOptions.map((method) => (
+                                <DropdownMenuItem
+                                    key={method.value}
+                                    onSelect={() =>
+                                        void run(
+                                            async () => {
+                                                await session.enablePullRequestAutoMerge(
+                                                    detail.repository,
+                                                    detail.number,
+                                                    method.value,
+                                                );
+                                            },
+                                            {
+                                                loading: "Enabling auto-merge…",
+                                                success: "Auto-merge enabled",
+                                                error: "Could not enable auto-merge.",
+                                            },
+                                        )
+                                    }
+                                >
+                                    <span className="font-medium">{method.label}</span>
+                                </DropdownMenuItem>
+                            ))}
+                        </DropdownMenuContent>
+                    </DropdownMenu>
+                ) : null}
                 {unresolvedThreads.length > 0 ? (
                     <Button size="sm" variant="outline" disabled={busy} onClick={() => void resolveAllThreads()}>
                         Resolve all threads
@@ -432,6 +554,14 @@ export function PullRequestControls({ detail }: { detail: PullRequestDetail }) {
                                         ) : null}
                                     </div>
                                 ) : null}
+                                <label className="flex cursor-pointer items-center gap-2 text-sm">
+                                    <Checkbox
+                                        checked={deleteHeadBranch}
+                                        onCheckedChange={(checked) => setDeleteHeadBranch(checked === true)}
+                                        disabled={busy}
+                                    />
+                                    Delete branch after merge
+                                </label>
                                 <AlertDialogFooter>
                                     <AlertDialogCancel disabled={busy}>Cancel</AlertDialogCancel>
                                     <AlertDialogAction

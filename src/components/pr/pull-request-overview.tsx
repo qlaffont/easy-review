@@ -25,7 +25,11 @@ import { useRef, useState, useEffect, lazy, Suspense, type ReactNode } from "rea
 import type { PullRequestPage } from "#/lib/session/session.ts";
 import type { PullRequestDetail, PullRequestSummary } from "#/lib/session/types.ts";
 
-import { targetFromSummary, useSetActionTarget } from "#/components/actions/actions-provider.tsx";
+import {
+    targetFromSummary,
+    useSetActionTarget,
+    useSetPullRequestDetail,
+} from "#/components/actions/actions-provider.tsx";
 import { CommentActionsMenu, quoteMarkdown } from "#/components/pr/comment-actions.tsx";
 import { EditedMeta } from "#/components/pr/edited-meta.tsx";
 import { MarkdownComposer } from "#/components/pr/markdown-composer.tsx";
@@ -125,6 +129,7 @@ export function PullRequestOverview({
         typeof window === "undefined" ? "conversation" : tabFromHash(window.location.hash),
     );
     useSetActionTarget(headline ? targetFromSummary(headline) : null);
+    useSetPullRequestDetail(page.detail);
 
     const [owner = repository, repo = repository] = repository.split("/");
     usePageSeo(

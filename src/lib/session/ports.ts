@@ -1,5 +1,6 @@
 import type { SuggestionChange } from "#/lib/session/apply-suggestion.ts";
 import type {
+    DiffSide,
     FileDiff,
     MergeMethod,
     MergePullRequestOptions,
@@ -186,6 +187,8 @@ export type GithubClient = {
             event: ReviewEvent;
             body: string;
             comments: ReadonlyArray<Pick<PendingLineComment, "path" | "line" | "side" | "body">>;
+            /** When set, submit an existing GitHub pending review instead of creating a new one. */
+            githubReviewId?: number;
         },
     ): Promise<void>;
     /** Reply inside an existing thread. `threadId` is the GraphQL node id. */
@@ -316,6 +319,80 @@ export type GithubClient = {
     ): Promise<void>;
     /** Close an open pull request without merging. */
     closePullRequest(token: string, repository: string, number: number): Promise<void>;
+    /** Reopen a closed pull request. */
+    reopenPullRequest(token: string, repository: string, number: number): Promise<void>;
+    /** Merge the base branch into the PR head (GitHub “Update branch”). */
+    updatePullRequestBranch(token: string, pullRequestNodeId: string, expectedHeadOid?: string): Promise<void>;
+    /** Enable auto-merge when requirements are met. */
+    enablePullRequestAutoMerge(token: string, pullRequestNodeId: string, method: MergeMethod): Promise<void>;
+    /** Cancel a scheduled auto-merge. */
+    disablePullRequestAutoMerge(token: string, pullRequestNodeId: string): Promise<void>;
+    /** Delete a branch ref after merge. */
+    deleteHeadBranch(token: string, repository: string, headRefName: string): Promise<void>;
+    /** Edit a conversation (issue) comment body. */
+    updateIssueComment(token: string, repository: string, commentId: number, body: string): Promise<PullRequestComment>;
+    /** Edit a review (diff) comment body. */
+    updateReviewComment(
+        token: string,
+        repository: string,
+        commentId: number,
+        body: string,
+    ): Promise<ReviewThreadComment>;
+    /** Load the viewer’s GitHub pending review, if any. */
+    getViewerPendingReview(
+        token: string,
+        repository: string,
+        number: number,
+        viewerLogin: string,
+    ): Promise<{ reviewId: number; body: string; commitId: string } | null>;
+    /** Create an empty GitHub pending review to hold line comments cross-device. */
+    createPendingReview(
+        token: string,
+        repository: string,
+        number: number,
+        headSha: string,
+        body?: string,
+    ): Promise<number>;
+    /** Submit or update a pending review on GitHub. */
+    submitPendingReview(
+        token: string,
+        repository: string,
+        number: number,
+        reviewId: number,
+        event: ReviewEvent,
+        body: string,
+    ): Promise<void>;
+    /** Add a line comment to a GitHub pending review. */
+    addPendingReviewComment(
+        token: string,
+        repository: string,
+        number: number,
+        input: {
+            reviewId: number;
+            headSha: string;
+            path: string;
+            line: number;
+            side: DiffSide;
+            body: string;
+        },
+    ): Promise<{ commentId: number }>;
+    /** List line comments on a pending review. */
+    listPendingReviewComments(
+        token: string,
+        repository: string,
+        number: number,
+        reviewId: number,
+    ): Promise<
+        Array<{
+            id: number;
+            path: string;
+            line: number;
+            side: DiffSide;
+            body: string;
+        }>
+    >;
+    /** Remove a pending review line comment on GitHub. */
+    deleteReviewComment(token: string, repository: string, commentId: number): Promise<void>;
     /**
      * Upload an image/video for a PR comment composer. Stores the file on a hidden git ref
      * (`refs/uploads/pr/{number}`) so it never lands on the PR branch, then returns a raw blob URL.

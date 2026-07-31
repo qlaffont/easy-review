@@ -68,7 +68,10 @@ export function stackMergeStatusLabel(status: StackMergeRowStatus): string | nul
     }
 }
 
-function ownBlockReason(pullRequest: PullRequestSummary): StackMergeBlockReason | null {
+function ownBlockReason(
+    pullRequest: PullRequestSummary,
+    options?: { bypassRules?: boolean },
+): StackMergeBlockReason | null {
     if (pullRequest.state !== "open") {
         return null;
     }
@@ -79,6 +82,10 @@ function ownBlockReason(pullRequest: PullRequestSummary): StackMergeBlockReason 
 
     if (hasMergeConflicts(pullRequest)) {
         return "conflicts";
+    }
+
+    if (options?.bypassRules) {
+        return null;
     }
 
     if (pullRequest.reviewDecision === "review-required") {
@@ -105,8 +112,11 @@ function ownBlockReason(pullRequest: PullRequestSummary): StackMergeBlockReason 
 }
 
 /** Bottom → top merge readiness for every pull request in the stack. */
-export function computeStackMergeRows(pullRequests: ReadonlyArray<PullRequestSummary>): Array<StackMergeRow> {
-    const ownBlocks = pullRequests.map((pullRequest) => ownBlockReason(pullRequest));
+export function computeStackMergeRows(
+    pullRequests: ReadonlyArray<PullRequestSummary>,
+    options?: { bypassRules?: boolean },
+): Array<StackMergeRow> {
+    const ownBlocks = pullRequests.map((pullRequest) => ownBlockReason(pullRequest, options));
     let bottleneckIndex = -1;
 
     for (let index = 0; index < pullRequests.length; index++) {
@@ -142,8 +152,11 @@ export function computeStackMergeRows(pullRequests: ReadonlyArray<PullRequestSum
     });
 }
 
-export function evaluateStackMerge(stack: ResolvedPullRequestStack): StackMergeEvaluation {
-    const rows = computeStackMergeRows(stack.pullRequests);
+export function evaluateStackMerge(
+    stack: ResolvedPullRequestStack,
+    options?: { bypassRules?: boolean },
+): StackMergeEvaluation {
+    const rows = computeStackMergeRows(stack.pullRequests, options);
     const openPullRequests = rows
         .map((row) => row.pullRequest)
         .filter((pullRequest) => pullRequest.state === "open" && !pullRequest.isDraft);
@@ -184,11 +197,15 @@ function stackMergeBlockMessage(rows: Array<StackMergeRow>, openCount: number): 
     return `#${blocked.pullRequest.number}: ${BLOCK_REASON_DETAIL[blocked.status.reason]}`;
 }
 
-export function stackMergeMethodDescription(method: "merge" | "squash", branchCount: number): string {
+export function stackMergeMethodDescription(method: "merge" | "squash" | "rebase", branchCount: number): string {
     const branches = branchCount === 1 ? "this branch" : `these ${branchCount} branches`;
 
     if (method === "merge") {
         return `All commits from ${branches} will be added to the base branch via merge commits.`;
+    }
+
+    if (method === "rebase") {
+        return `All commits from ${branches} will be rebased onto the base branch.`;
     }
 
     return `The commits from ${branches} will be combined into one commit per branch in the base branch.`;

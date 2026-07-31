@@ -20,11 +20,7 @@ import type { PullRequestDetail, PullRequestSummary, ReviewDecision } from "#/li
 
 import { ChecksDot } from "#/components/pr/checks-dot.tsx";
 import { pullRequestHasMergeConflicts } from "#/components/pr/merge-requirements.ts";
-import {
-    evaluateStackMerge,
-    StackMergeControls,
-    stackMergeStatusLabel,
-} from "#/components/pr/stack-merge-controls.tsx";
+import { StackMergeControls } from "#/components/pr/stack-merge-controls.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import {
     DropdownMenu,
@@ -41,6 +37,7 @@ import {
     formatStackGhCheckoutCommands,
     formatStackUrls,
 } from "#/lib/session/pull-request-stacks.ts";
+import { evaluateStackMerge, stackMergeStatusLabel } from "#/lib/session/stack-merge.ts";
 import { useStackPreferences } from "#/lib/stack-preferences.ts";
 import { notifyCopied } from "#/lib/toast.ts";
 import { cn } from "#/lib/utils.ts";

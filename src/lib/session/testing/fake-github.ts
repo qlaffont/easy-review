@@ -203,6 +203,10 @@ function buildPullRequest(input: PullRequestInput): PullRequestDetail {
                       ? "dirty"
                       : "clean"),
         viewerCanMergeAsAdmin: input.viewerCanMergeAsAdmin ?? false,
+        pullRequestNodeId: input.pullRequestNodeId ?? `PR_${input.repository}#${input.number}`,
+        viewerCanUpdateBranch: input.viewerCanUpdateBranch ?? false,
+        autoMergeEnabled: input.autoMergeEnabled ?? false,
+        autoMergeMethod: input.autoMergeMethod ?? null,
     };
 }
 
@@ -1175,7 +1179,7 @@ export function createFakeGithub(): FakeGithub {
                 });
             });
         },
-        mergePullRequest(token, repository, number, method: MergeMethod, options?: MergePullRequestOptions) {
+        mergePullRequest(token, repository, number, _method: MergeMethod, _options?: MergePullRequestOptions) {
             return respond("mergePullRequest", () => {
                 authenticate(token);
                 const pullRequest = requirePullRequest(token, repository, number);
@@ -1202,6 +1206,100 @@ export function createFakeGithub(): FakeGithub {
                     reviewRequests: [],
                 });
             });
+        },
+        reopenPullRequest(token, repository, number) {
+            return respond("reopenPullRequest", () => {
+                authenticate(token);
+                const pullRequest = requirePullRequest(token, repository, number);
+                if (pullRequest.state !== "closed") {
+                    throw new EasyReviewError("unknown", "Only closed pull requests can be reopened.");
+                }
+                patchPullRequest(token, repository, number, { state: "open" });
+            });
+        },
+        updatePullRequestBranch(_token, _pullRequestNodeId, _expectedHeadOid) {
+            return respond("updatePullRequestBranch", () => {});
+        },
+        enablePullRequestAutoMerge(token, pullRequestNodeId, method) {
+            return respond("enablePullRequestAutoMerge", () => {
+                authenticate(token);
+                const pullRequests = pullRequestsByToken.get(token) ?? [];
+                const pullRequest = pullRequests.find((entry) => entry.pullRequestNodeId === pullRequestNodeId);
+                if (pullRequest) {
+                    patchPullRequest(token, pullRequest.repository, pullRequest.number, {
+                        autoMergeEnabled: true,
+                        autoMergeMethod: method,
+                    });
+                }
+            });
+        },
+        disablePullRequestAutoMerge(token, pullRequestNodeId) {
+            return respond("disablePullRequestAutoMerge", () => {
+                authenticate(token);
+                const pullRequests = pullRequestsByToken.get(token) ?? [];
+                const pullRequest = pullRequests.find((entry) => entry.pullRequestNodeId === pullRequestNodeId);
+                if (pullRequest) {
+                    patchPullRequest(token, pullRequest.repository, pullRequest.number, {
+                        autoMergeEnabled: false,
+                        autoMergeMethod: null,
+                    });
+                }
+            });
+        },
+        deleteHeadBranch(_token, _repository, _headRefName) {
+            return respond("deleteHeadBranch", () => {});
+        },
+        updateIssueComment(token, _repository, commentId, body) {
+            return respond("updateIssueComment", () => {
+                const account = authenticate(token);
+                return {
+                    id: String(commentId),
+                    databaseId: commentId,
+                    author: account.login,
+                    authorAvatarUrl: null,
+                    body,
+                    createdAt: new Date().toISOString(),
+                    url: `https://github.com/acme/api/issues/comments/${commentId}`,
+                    lastEditedAt: new Date().toISOString(),
+                    editor: null,
+                    editCount: 1,
+                    edits: [],
+                    reactionGroups: [],
+                };
+            });
+        },
+        updateReviewComment(token, _repository, commentId, body) {
+            return respond("updateReviewComment", () => {
+                const account = authenticate(token);
+                return {
+                    id: String(commentId),
+                    databaseId: commentId,
+                    author: account.login,
+                    authorAvatarUrl: null,
+                    body,
+                    createdAt: new Date().toISOString(),
+                    url: `https://github.com/acme/api/pull/1#discussion_r${commentId}`,
+                    reactionGroups: [],
+                };
+            });
+        },
+        getViewerPendingReview(_token, _repository, _number, _viewerLogin) {
+            return respond("getViewerPendingReview", () => null);
+        },
+        createPendingReview(_token, _repository, _number, _headSha, _body) {
+            return respond("createPendingReview", () => 1);
+        },
+        submitPendingReview(_token, _repository, _number, _reviewId, _event, _body) {
+            return respond("submitPendingReview", () => {});
+        },
+        addPendingReviewComment(_token, _repository, _number, input) {
+            return respond("addPendingReviewComment", () => ({ commentId: input.reviewId * 1000 + 1 }));
+        },
+        listPendingReviewComments(_token, _repository, _number, _reviewId) {
+            return respond("listPendingReviewComments", () => []);
+        },
+        deleteReviewComment(_token, _repository, _commentId) {
+            return respond("deleteReviewComment", () => {});
         },
         uploadPullRequestMedia(token, input) {
             return respond("uploadPullRequestMedia", () => {

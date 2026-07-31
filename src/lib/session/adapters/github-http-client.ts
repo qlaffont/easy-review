@@ -31,6 +31,7 @@ import type {
     ReviewState,
     ReviewThread,
     ReviewThreadComment,
+    DiffSide,
 } from "#/lib/session/types.ts";
 
 import { mediaKindForNameAndType, mediaMarkdown, sanitizeMediaFileName } from "#/lib/composer-media.ts";
@@ -1064,6 +1065,19 @@ export function createGithubHttpClient(
             const [owner = "", name = ""] = input.repository.split("/");
             const event = toGithubReviewEvent(input.event);
 
+            if (input.githubReviewId) {
+                await restJson(
+                    token,
+                    "POST",
+                    `/repos/${owner}/${name}/pulls/${input.number}/reviews/${input.githubReviewId}/events`,
+                    {
+                        body: input.body,
+                        event,
+                    },
+                );
+                return;
+            }
+
             await restJson(token, "POST", `/repos/${owner}/${name}/pulls/${input.number}/reviews`, {
                 commit_id: input.headSha,
                 event,
@@ -1300,6 +1314,173 @@ export function createGithubHttpClient(
         async closePullRequest(token, repository, number) {
             const [owner = "", name = ""] = repository.split("/");
             await restJson(token, "PATCH", `/repos/${owner}/${name}/pulls/${number}`, { state: "closed" });
+        },
+
+        async reopenPullRequest(token, repository, number) {
+            const [owner = "", name = ""] = repository.split("/");
+            await restJson(token, "PATCH", `/repos/${owner}/${name}/pulls/${number}`, { state: "open" });
+        },
+
+        async updatePullRequestBranch(token, pullRequestNodeId, expectedHeadOid) {
+            await graphql(
+                token,
+                `
+                    mutation EasyReviewUpdatePullRequestBranch($pullRequestId: ID!, $expectedHeadOid: GitObjectID) {
+                        updatePullRequestBranch(
+                            input: { pullRequestId: $pullRequestId, expectedHeadOid: $expectedHeadOid }
+                        ) {
+                            clientMutationId
+                        }
+                    }
+                `,
+                { pullRequestId: pullRequestNodeId, expectedHeadOid: expectedHeadOid ?? null },
+            );
+        },
+
+        async enablePullRequestAutoMerge(token, pullRequestNodeId, method) {
+            await graphql(
+                token,
+                `
+                    mutation EasyReviewEnableAutoMerge($pullRequestId: ID!, $mergeMethod: PullRequestMergeMethod!) {
+                        enablePullRequestAutoMerge(
+                            input: { pullRequestId: $pullRequestId, mergeMethod: $mergeMethod }
+                        ) {
+                            clientMutationId
+                        }
+                    }
+                `,
+                { pullRequestId: pullRequestNodeId, mergeMethod: toGraphqlMergeMethod(method) },
+            );
+        },
+
+        async disablePullRequestAutoMerge(token, pullRequestNodeId) {
+            await graphql(
+                token,
+                `
+                    mutation EasyReviewDisableAutoMerge($pullRequestId: ID!) {
+                        disablePullRequestAutoMerge(input: { pullRequestId: $pullRequestId }) {
+                            clientMutationId
+                        }
+                    }
+                `,
+                { pullRequestId: pullRequestNodeId },
+            );
+        },
+
+        async deleteHeadBranch(token, repository, headRefName) {
+            const [owner = "", name = ""] = repository.split("/");
+            await restJson(token, "DELETE", `/repos/${owner}/${name}/git/refs/${encodePath(`heads/${headRefName}`)}`);
+        },
+
+        async updateIssueComment(token, repository, commentId, body) {
+            const [owner = "", name = ""] = repository.split("/");
+            const node = (await restJson(token, "PATCH", `/repos/${owner}/${name}/issues/comments/${commentId}`, {
+                body,
+            })) as RestIssueCommentNode;
+            return toPullRequestComment(node);
+        },
+
+        async updateReviewComment(token, repository, commentId, body) {
+            const [owner = "", name = ""] = repository.split("/");
+            const node = (await restJson(token, "PATCH", `/repos/${owner}/${name}/pulls/comments/${commentId}`, {
+                body,
+            })) as {
+                id: number;
+                node_id: string;
+                body: string;
+                created_at: string;
+                html_url: string;
+                user: { login: string; avatar_url: string | null } | null;
+            };
+            return {
+                id: node.node_id || String(node.id),
+                databaseId: node.id,
+                author: node.user?.login ?? "ghost",
+                authorAvatarUrl: node.user?.avatar_url ?? null,
+                body: node.body,
+                createdAt: node.created_at,
+                url: node.html_url,
+                reactionGroups: [],
+            };
+        },
+
+        async getViewerPendingReview(token, repository, number, viewerLogin) {
+            const [owner = "", name = ""] = repository.split("/");
+            const rows = (await restJson(
+                token,
+                "GET",
+                `/repos/${owner}/${name}/pulls/${number}/reviews?per_page=100`,
+            )) as Array<{
+                id: number;
+                user: { login: string } | null;
+                state: string;
+                body: string;
+                commit_id: string;
+            }>;
+            const pending = rows.find((row) => row.user?.login === viewerLogin && row.state === "PENDING");
+            if (!pending) {
+                return null;
+            }
+            return { reviewId: pending.id, body: pending.body ?? "", commitId: pending.commit_id };
+        },
+
+        async createPendingReview(token, repository, number, headSha, body = "") {
+            const [owner = "", name = ""] = repository.split("/");
+            const created = (await restJson(token, "POST", `/repos/${owner}/${name}/pulls/${number}/reviews`, {
+                commit_id: headSha,
+                body,
+            })) as { id: number };
+            return created.id;
+        },
+
+        async submitPendingReview(token, repository, number, reviewId, event, body) {
+            const [owner = "", name = ""] = repository.split("/");
+            await restJson(token, "POST", `/repos/${owner}/${name}/pulls/${number}/reviews/${reviewId}/events`, {
+                body,
+                event: toGithubReviewEvent(event),
+            });
+        },
+
+        async addPendingReviewComment(token, repository, number, input) {
+            const [owner = "", name = ""] = repository.split("/");
+            const created = (await restJson(token, "POST", `/repos/${owner}/${name}/pulls/${number}/comments`, {
+                body: input.body,
+                commit_id: input.headSha,
+                path: input.path,
+                line: input.line,
+                side: input.side,
+                pull_request_review_id: input.reviewId,
+            })) as { id: number };
+            return { commentId: created.id };
+        },
+
+        async listPendingReviewComments(token, repository, number, reviewId) {
+            const [owner = "", name = ""] = repository.split("/");
+            const rows = (await restJson(
+                token,
+                "GET",
+                `/repos/${owner}/${name}/pulls/${number}/comments?pull_request_review_id=${reviewId}&per_page=100`,
+            )) as Array<{
+                id: number;
+                path: string;
+                line: number | null;
+                side: string | null;
+                body: string;
+            }>;
+            return rows
+                .filter((row) => row.line != null)
+                .map((row) => ({
+                    id: row.id,
+                    path: row.path,
+                    line: row.line!,
+                    side: (row.side === "LEFT" ? "LEFT" : "RIGHT") as DiffSide,
+                    body: row.body,
+                }));
+        },
+
+        async deleteReviewComment(token, repository, commentId) {
+            const [owner = "", name = ""] = repository.split("/");
+            await restJson(token, "DELETE", `/repos/${owner}/${name}/pulls/comments/${commentId}`);
         },
 
         async uploadPullRequestMedia(token, input) {
@@ -2540,6 +2721,9 @@ type PullRequestDetailNode = Omit<PullRequestNode, "commits"> & {
     headRepositoryOwner: { login: string } | null;
     mergeStateStatus: string;
     viewerCanMergeAsAdmin: boolean;
+    viewerCanUpdateAutomatically: boolean;
+    id: string;
+    autoMergeRequest: { enabledAt: string; mergeMethod: string } | null;
     baseRef: {
         branchProtectionRule: {
             requiresApprovingReviews: boolean;
@@ -2649,6 +2833,12 @@ const PULL_REQUEST_QUERY = `
                 }
                 mergeStateStatus
                 viewerCanMergeAsAdmin
+                viewerCanUpdateAutomatically
+                autoMergeRequest {
+                    enabledAt
+                    mergeMethod
+                }
+                id
                 baseRef {
                     branchProtectionRule {
                         requiresApprovingReviews
@@ -3786,6 +3976,12 @@ function toPullRequestDetail(node: PullRequestDetailNode, settings: RepositoryMe
         mergeCommitSettings: toMergeCommitSettings(settings),
         mergeStateStatus: toMergeStateStatus(node.mergeStateStatus),
         viewerCanMergeAsAdmin: node.viewerCanMergeAsAdmin ?? false,
+        pullRequestNodeId: node.id,
+        viewerCanUpdateBranch: node.viewerCanUpdateAutomatically ?? false,
+        autoMergeEnabled: Boolean(node.autoMergeRequest?.enabledAt),
+        autoMergeMethod: node.autoMergeRequest?.mergeMethod
+            ? fromGraphqlMergeMethod(node.autoMergeRequest.mergeMethod)
+            : null,
     };
 }
 
@@ -4020,6 +4216,30 @@ function toGithubReviewEvent(event: ReviewEvent): "COMMENT" | "APPROVE" | "REQUE
             return "REQUEST_CHANGES";
         default:
             return "COMMENT";
+    }
+}
+
+function toGraphqlMergeMethod(method: MergeMethod): "MERGE" | "SQUASH" | "REBASE" {
+    switch (method) {
+        case "squash":
+            return "SQUASH";
+        case "rebase":
+            return "REBASE";
+        default:
+            return "MERGE";
+    }
+}
+
+function fromGraphqlMergeMethod(method: string): MergeMethod | null {
+    switch (method) {
+        case "SQUASH":
+            return "squash";
+        case "REBASE":
+            return "rebase";
+        case "MERGE":
+            return "merge";
+        default:
+            return null;
     }
 }
 

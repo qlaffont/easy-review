@@ -16,6 +16,7 @@ import {
     AlertDialogTrigger,
 } from "#/components/ui/alert-dialog.tsx";
 import { Button } from "#/components/ui/button.tsx";
+import { Checkbox } from "#/components/ui/checkbox.tsx";
 import {
     DropdownMenu,
     DropdownMenuContent,
@@ -31,11 +32,12 @@ import {
 import { notifyAction } from "#/lib/toast.ts";
 import { cn } from "#/lib/utils.ts";
 
-const STACK_MERGE_METHODS: Array<"merge" | "squash"> = ["merge", "squash"];
+const STACK_MERGE_METHODS: Array<MergeMethod> = ["merge", "squash", "rebase"];
 
-const STACK_MERGE_METHOD_LABEL: Record<"merge" | "squash", string> = {
+const STACK_MERGE_METHOD_LABEL: Record<MergeMethod, string> = {
     merge: "Create merge commits",
     squash: "Squash and merge",
+    rebase: "Rebase and merge",
 };
 
 function stackMergeMethodOptions(allowed: Array<MergeMethod>) {
@@ -47,17 +49,19 @@ function stackMergeMethodOptions(allowed: Array<MergeMethod>) {
     }));
 }
 
-function mergeMethodDescription(method: "merge" | "squash", branchCount: number): string {
+function mergeMethodDescription(method: MergeMethod, branchCount: number): string {
     return stackMergeMethodDescription(method, branchCount);
 }
 
 export function StackMergeControls({ detail, stack }: { detail: PullRequestDetail; stack: ResolvedPullRequestStack }) {
     const session = useSession();
-    const evaluation = useMemo(() => evaluateStackMerge(stack), [stack]);
+    const [bypassRules, setBypassRules] = useState(false);
+    const [deleteHeadBranch, setDeleteHeadBranch] = useState(true);
+    const evaluation = useMemo(() => evaluateStackMerge(stack, { bypassRules }), [stack, bypassRules]);
     const mergeOptions = stackMergeMethodOptions(detail.allowedMergeMethods);
-    const [mergeMethod, setMergeMethod] = useState<"merge" | "squash">(
+    const [mergeMethod, setMergeMethod] = useState<MergeMethod>(
         () =>
-            (detail.defaultMergeMethod === "merge" || detail.defaultMergeMethod === "squash"
+            (detail.defaultMergeMethod && mergeOptions.some((option) => option.value === detail.defaultMergeMethod)
                 ? detail.defaultMergeMethod
                 : mergeOptions[0]?.value) ?? "squash",
     );
@@ -66,6 +70,7 @@ export function StackMergeControls({ detail, stack }: { detail: PullRequestDetai
     const [error, setError] = useState<string | null>(null);
     const [busy, setBusy] = useState(false);
     const busyRef = useRef(false);
+    const canBypass = detail.viewerCanMergeAsAdmin;
 
     if (detail.state !== "open" || stack.total < 2 || mergeOptions.length === 0) {
         return null;
@@ -87,7 +92,10 @@ export function StackMergeControls({ detail, stack }: { detail: PullRequestDetai
         try {
             await notifyAction(
                 async () => {
-                    await session.mergePullRequestStack(detail.repository, detail.number, mergeMethod);
+                    await session.mergePullRequestStack(detail.repository, detail.number, mergeMethod, {
+                        bypassRules: canBypass && bypassRules,
+                        deleteHeadBranch,
+                    });
                 },
                 {
                     loading: `Merging stack (${branchCount} pull request${branchCount === 1 ? "" : "s"})…`,
@@ -111,6 +119,17 @@ export function StackMergeControls({ detail, stack }: { detail: PullRequestDetai
             ) : null}
 
             {error ? <p className="text-xs text-destructive">{error}</p> : null}
+
+            {canBypass ? (
+                <label className="flex cursor-pointer items-center gap-2 text-xs text-red-600 dark:text-red-400">
+                    <Checkbox
+                        checked={bypassRules}
+                        onCheckedChange={(checked) => setBypassRules(checked === true)}
+                        disabled={busy}
+                    />
+                    Merge stack without waiting for requirements (bypass rules)
+                </label>
+            ) : null}
 
             <div className="flex flex-wrap items-center gap-2">
                 <AlertDialog open={mergeDialogOpen} onOpenChange={setMergeDialogOpen}>
@@ -172,6 +191,14 @@ export function StackMergeControls({ detail, stack }: { detail: PullRequestDetai
                                 starting with #{evaluation.mergeOrder[0]?.number}.
                             </AlertDialogDescription>
                         </AlertDialogHeader>
+                        <label className="flex cursor-pointer items-center gap-2 text-sm">
+                            <Checkbox
+                                checked={deleteHeadBranch}
+                                onCheckedChange={(checked) => setDeleteHeadBranch(checked === true)}
+                                disabled={busy}
+                            />
+                            Delete branches after merge
+                        </label>
                         <AlertDialogFooter>
                             <AlertDialogCancel disabled={busy}>Cancel</AlertDialogCancel>
                             <AlertDialogAction disabled={busy} onClick={() => void mergeStack()}>
@@ -193,17 +220,14 @@ function StackMergeBlockedAlert({ evaluation, message }: { evaluation: StackMerg
     return (
         <div
             className={cn(
-                "flex gap-2 rounded-lg border px-3 py-2 text-xs",
+                "flex items-start gap-2 rounded-md border px-3 py-2 text-xs",
                 blockedDownstack
-                    ? "border-amber-200 bg-amber-50 text-amber-900 dark:border-amber-900/50 dark:bg-amber-950/40 dark:text-amber-200"
-                    : "border-rose-200 bg-rose-50 text-rose-900 dark:border-rose-900/50 dark:bg-rose-950/40 dark:text-rose-200",
+                    ? "border-amber-500/30 bg-amber-500/5 text-amber-900 dark:text-amber-100"
+                    : "border-destructive/30 bg-destructive/5 text-destructive",
             )}
-            role="status"
         >
             <AlertTriangle className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
-            <span>{message}</span>
+            <p>{message}</p>
         </div>
     );
 }
-
-export { evaluateStackMerge, stackMergeStatusLabel } from "#/lib/session/stack-merge.ts";

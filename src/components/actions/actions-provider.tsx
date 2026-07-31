@@ -2,6 +2,7 @@ import { useNavigate, useRouterState } from "@tanstack/react-router";
 import { createContext, use, useEffect, useState } from "react";
 
 import type { ActionContext, ActionSurface, ActionTarget } from "#/lib/actions/catalog.ts";
+import type { PullRequestDetail } from "#/lib/session/types.ts";
 
 import { useOpenRepoPicker } from "#/components/repos/repo-picker.tsx";
 import { useSession } from "#/lib/session/provider.tsx";
@@ -10,6 +11,8 @@ import { notifyCopied, notifyError } from "#/lib/toast.ts";
 type ActionsBridge = {
     target: ActionTarget | null;
     setTarget: (target: ActionTarget | null) => void;
+    pullRequestDetail: PullRequestDetail | null;
+    setPullRequestDetail: (detail: PullRequestDetail | null) => void;
     buildContext: () => ActionContext;
 };
 
@@ -21,6 +24,18 @@ export function useActionsBridge(): ActionsBridge {
         throw new Error("useActionsBridge must be used inside ActionsProvider.");
     }
     return bridge;
+}
+
+export function useSetPullRequestDetail(detail: PullRequestDetail | null) {
+    const { setPullRequestDetail } = useActionsBridge();
+    const serialized = detail ? JSON.stringify(detail) : null;
+
+    useEffect(() => {
+        setPullRequestDetail(serialized ? (JSON.parse(serialized) as PullRequestDetail) : null);
+        return () => {
+            setPullRequestDetail(null);
+        };
+    }, [setPullRequestDetail, serialized]);
 }
 
 /** PR pages and the Inbox push the focused target into the shared action context. */
@@ -45,6 +60,7 @@ export function ActionsProvider({ children }: { children: React.ReactNode }) {
     const navigate = useNavigate();
     const openRepoPicker = useOpenRepoPicker();
     const [target, setTarget] = useState<ActionTarget | null>(null);
+    const [pullRequestDetail, setPullRequestDetail] = useState<PullRequestDetail | null>(null);
     const surface = useRouterState({
         select: (state) => surfaceFromPathname(state.location.pathname),
     });
@@ -69,10 +85,13 @@ export function ActionsProvider({ children }: { children: React.ReactNode }) {
     const bridge: ActionsBridge = {
         target,
         setTarget,
+        pullRequestDetail,
+        setPullRequestDetail,
         buildContext: (): ActionContext => ({
             session,
             surface,
             target,
+            pullRequestDetail,
             openRepoPicker,
             goToInbox: () => {
                 void navigate({ to: "/" });

@@ -57,6 +57,10 @@ function detail(overrides: Partial<PullRequestDetail> = {}): PullRequestDetail {
         mergeCommitSettings: DEFAULT_MERGE_COMMIT_SETTINGS,
         mergeStateStatus: "blocked",
         viewerCanMergeAsAdmin: false,
+        pullRequestNodeId: "PR_test",
+        viewerCanUpdateBranch: false,
+        autoMergeEnabled: false,
+        autoMergeMethod: null,
         ...overrides,
     };
 }

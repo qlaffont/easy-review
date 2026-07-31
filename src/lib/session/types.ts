@@ -134,6 +134,14 @@ export type MergeCommitPreview = {
 export type MergePullRequestOptions = {
     commitTitle?: string;
     commitMessage?: string;
+    /** Delete the head branch after a successful merge (same as GitHub’s checkbox). */
+    deleteHeadBranch?: boolean;
+};
+
+export type StackMergePullRequestOptions = {
+    /** When true, non-conflict merge blockers are ignored (admin bypass). */
+    bypassRules?: boolean;
+    deleteHeadBranch?: boolean;
 };
 
 /** GitHub reaction content values used on issues and comments. */
@@ -205,6 +213,12 @@ export type PullRequestDetail = PullRequestSummary & {
     mergeStateStatus: MergeStateStatus;
     /** True when the signed-in viewer may bypass branch rules and merge anyway. */
     viewerCanMergeAsAdmin: boolean;
+    /** GraphQL node id — required for auto-merge and update-branch mutations. */
+    pullRequestNodeId: string;
+    /** GitHub shows “Update branch” when the PR head is behind the base. */
+    viewerCanUpdateBranch: boolean;
+    autoMergeEnabled: boolean;
+    autoMergeMethod: MergeMethod | null;
 };
 
 /** One commit on a pull request (the Commits tab list). */
@@ -297,6 +311,8 @@ export type PendingLineComment = {
     line: number;
     side: DiffSide;
     body: string;
+    /** Set when synced to a GitHub pending review comment. */
+    githubCommentId?: number;
 };
 
 /**
@@ -316,6 +332,8 @@ export type ReviewDraft = {
      * read it, but submit is blocked until they discard or the session rebuilds against the new tip.
      */
     stale: boolean;
+    /** GitHub pending review id when the draft is synced server-side. */
+    githubReviewId?: number;
 };
 
 export type ReviewThreadComment = {

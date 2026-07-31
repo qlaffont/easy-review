@@ -203,7 +203,7 @@ describe("staged review drafts", () => {
                 headSha: "sha-aaa",
                 event: "request-changes",
                 body: "Please fix naming.",
-                comments: [{ path: "src/a.ts", line: 1, side: "RIGHT", body: "rename me" }],
+                comments: [],
             },
         ]);
         expect(session.getReviewDraft("acme/api", 1).comments).toEqual([]);

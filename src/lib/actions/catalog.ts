@@ -1,5 +1,5 @@
 import type { EasyReviewSession } from "#/lib/session/session.ts";
-import type { PullRequestState } from "#/lib/session/types.ts";
+import type { PullRequestDetail, PullRequestState } from "#/lib/session/types.ts";
 
 import { shouldReturnToInboxAfterReviewOrMerge } from "#/lib/diff-preferences.ts";
 import { notifyAction, notifyActionWithInboxPrompt } from "#/lib/toast.ts";
@@ -25,6 +25,8 @@ export type ActionContext = {
     /** Which app surface the user is on — gates palette commands to what is relevant there. */
     surface: ActionSurface;
     target: ActionTarget | null;
+    /** Full PR detail when on a pull request page — powers merge/review commands. */
+    pullRequestDetail: PullRequestDetail | null;
     openRepoPicker: () => void;
     goToInbox: () => void;
     openPullRequest: (repository: string, number: number) => void;
@@ -62,6 +64,12 @@ function onInbox(context: ActionContext): boolean {
 
 function onPullRequest(context: ActionContext): boolean {
     return context.surface === "pull-request";
+}
+
+function onPullRequestWithDetail(
+    context: ActionContext,
+): context is ActionContext & { target: ActionTarget; pullRequestDetail: PullRequestDetail } {
+    return onPullRequest(context) && hasOpenTarget(context) && context.pullRequestDetail !== null;
 }
 
 /** Every command the palette (and later chords) can discover. */
@@ -260,6 +268,195 @@ export const APP_ACTIONS: ReadonlyArray<AppAction> = [
         },
     },
     {
+        id: "pr.reopen",
+        label: "Reopen pull request",
+        group: "Pull request",
+        when: (context) => onPullRequest(context) && hasTarget(context) && context.target.state === "closed",
+        run: async (context) => {
+            if (!context.target) return;
+            await notifyAction(
+                () => context.session.reopenPullRequest(context.target!.repository, context.target!.number),
+                {
+                    loading: "Reopening pull request…",
+                    success: "Pull request reopened",
+                    error: "Could not reopen the pull request.",
+                },
+            );
+        },
+    },
+    {
+        id: "pr.update-branch",
+        label: "Update branch",
+        group: "Pull request",
+        keywords: ["rebase", "merge base"],
+        when: (context) => onPullRequestWithDetail(context) && context.pullRequestDetail.viewerCanUpdateBranch,
+        run: async (context) => {
+            if (!context.target) return;
+            await notifyAction(
+                () => context.session.updatePullRequestBranch(context.target!.repository, context.target!.number),
+                {
+                    loading: "Updating branch…",
+                    success: "Branch updated",
+                    error: "Could not update the branch.",
+                },
+            );
+        },
+    },
+    {
+        id: "pr.approve",
+        label: "Approve pull request",
+        group: "Pull request",
+        keywords: ["review", "lgtm"],
+        when: onPullRequestWithDetail,
+        run: async (context) => {
+            if (!context.target) return;
+            await notifyActionWithInboxPrompt(
+                async () => {
+                    await context.session.setReviewEvent(context.target!.repository, context.target!.number, "approve");
+                    await context.session.submitReview(context.target!.repository, context.target!.number);
+                },
+                {
+                    loading: "Submitting approval…",
+                    success: "Pull request approved",
+                    error: "Could not approve the pull request.",
+                },
+                {
+                    returnToInbox: shouldReturnToInboxAfterReviewOrMerge(),
+                    onGoToInbox: context.goToInbox,
+                },
+            );
+        },
+    },
+    {
+        id: "pr.request-changes",
+        label: "Request changes",
+        group: "Pull request",
+        keywords: ["review", "block"],
+        when: onPullRequestWithDetail,
+        run: async (context) => {
+            if (!context.target) return;
+            await notifyActionWithInboxPrompt(
+                async () => {
+                    await context.session.setReviewEvent(
+                        context.target!.repository,
+                        context.target!.number,
+                        "request-changes",
+                    );
+                    await context.session.submitReview(context.target!.repository, context.target!.number);
+                },
+                {
+                    loading: "Submitting review…",
+                    success: "Changes requested",
+                    error: "Could not submit the review.",
+                },
+                {
+                    returnToInbox: shouldReturnToInboxAfterReviewOrMerge(),
+                    onGoToInbox: context.goToInbox,
+                },
+            );
+        },
+    },
+    {
+        id: "pr.merge-merge",
+        label: "Merge pull request (merge commit)",
+        group: "Pull request",
+        keywords: ["ship"],
+        when: (context) =>
+            onPullRequestWithDetail(context) && context.pullRequestDetail.allowedMergeMethods.includes("merge"),
+        run: async (context) => {
+            if (!context.target) return;
+            if (!context.confirm(`Merge ${context.target.repository}#${context.target.number} with a merge commit?`)) {
+                return;
+            }
+            await notifyActionWithInboxPrompt(
+                () =>
+                    context.session.mergePullRequest(context.target!.repository, context.target!.number, "merge", {
+                        deleteHeadBranch: true,
+                    }),
+                {
+                    loading: "Merging pull request…",
+                    success: "Pull request merged",
+                    error: "Could not merge the pull request.",
+                },
+                {
+                    returnToInbox: shouldReturnToInboxAfterReviewOrMerge(),
+                    onGoToInbox: context.goToInbox,
+                },
+            );
+        },
+    },
+    {
+        id: "pr.merge-rebase",
+        label: "Merge pull request (rebase)",
+        group: "Pull request",
+        keywords: ["ship", "rebase"],
+        when: (context) =>
+            onPullRequestWithDetail(context) && context.pullRequestDetail.allowedMergeMethods.includes("rebase"),
+        run: async (context) => {
+            if (!context.target) return;
+            if (!context.confirm(`Rebase-merge ${context.target.repository}#${context.target.number}?`)) {
+                return;
+            }
+            await notifyActionWithInboxPrompt(
+                () =>
+                    context.session.mergePullRequest(context.target!.repository, context.target!.number, "rebase", {
+                        deleteHeadBranch: true,
+                    }),
+                {
+                    loading: "Merging pull request…",
+                    success: "Pull request merged",
+                    error: "Could not merge the pull request.",
+                },
+                {
+                    returnToInbox: shouldReturnToInboxAfterReviewOrMerge(),
+                    onGoToInbox: context.goToInbox,
+                },
+            );
+        },
+    },
+    {
+        id: "pr.auto-merge-squash",
+        label: "Enable auto-merge (squash)",
+        group: "Pull request",
+        when: (context) =>
+            onPullRequestWithDetail(context) &&
+            !context.pullRequestDetail.autoMergeEnabled &&
+            context.pullRequestDetail.allowedMergeMethods.includes("squash"),
+        run: async (context) => {
+            if (!context.target) return;
+            await notifyAction(
+                () =>
+                    context.session.enablePullRequestAutoMerge(
+                        context.target!.repository,
+                        context.target!.number,
+                        "squash",
+                    ),
+                {
+                    loading: "Enabling auto-merge…",
+                    success: "Auto-merge enabled",
+                    error: "Could not enable auto-merge.",
+                },
+            );
+        },
+    },
+    {
+        id: "pr.cancel-auto-merge",
+        label: "Cancel auto-merge",
+        group: "Pull request",
+        when: (context) => onPullRequestWithDetail(context) && context.pullRequestDetail.autoMergeEnabled,
+        run: async (context) => {
+            if (!context.target) return;
+            await notifyAction(
+                () => context.session.disablePullRequestAutoMerge(context.target!.repository, context.target!.number),
+                {
+                    loading: "Cancelling auto-merge…",
+                    success: "Auto-merge cancelled",
+                    error: "Could not cancel auto-merge.",
+                },
+            );
+        },
+    },
+    {
         id: "pr.merge-squash",
         label: "Merge pull request (squash)",
         group: "Pull request",
@@ -271,7 +468,10 @@ export const APP_ACTIONS: ReadonlyArray<AppAction> = [
                 return;
             }
             await notifyActionWithInboxPrompt(
-                () => context.session.mergePullRequest(context.target!.repository, context.target!.number, "squash"),
+                () =>
+                    context.session.mergePullRequest(context.target!.repository, context.target!.number, "squash", {
+                        deleteHeadBranch: true,
+                    }),
                 {
                     loading: "Merging pull request…",
                     success: "Pull request merged",

@@ -23,6 +23,7 @@ import { CommentActionsMenu, quoteMarkdown } from "#/components/pr/comment-actio
 import { CommitChecksMenu } from "#/components/pr/commit-checks-menu.tsx";
 import { CommitVerifiedBadge } from "#/components/pr/commit-verified-badge.tsx";
 import { DiffHunkPreview, suggestionOriginalFromHunk } from "#/components/pr/diff-hunk-preview.tsx";
+import { EditableCommentBody } from "#/components/pr/editable-comment-body.tsx";
 import { EditedMeta } from "#/components/pr/edited-meta.tsx";
 import { MarkdownComposer } from "#/components/pr/markdown-composer.tsx";
 import { Markdown } from "#/components/pr/markdown.tsx";
@@ -44,7 +45,7 @@ import { ConversationLoadingSkeleton } from "#/components/ui/loading.tsx";
 import { RelativeTime } from "#/components/ui/relative-time.tsx";
 import { mentionCandidatesFromPullRequest } from "#/lib/composer-commands.ts";
 import { useConversationQuery, usePullRequestPage, useReviewThreadsQuery } from "#/lib/query/pull-request.ts";
-import { useSession } from "#/lib/session/provider.tsx";
+import { useSession, useSessionState } from "#/lib/session/provider.tsx";
 import { notifyAction } from "#/lib/toast.ts";
 import { cn } from "#/lib/utils.ts";
 
@@ -649,6 +650,94 @@ function TimelineReviewThread({
     );
 }
 
+function IssueTimelineComment({
+    item,
+    baseUrl,
+    repository,
+    number,
+    onQuote,
+}: {
+    item: Extract<PullRequestTimelineItem, { kind: "comment" }>;
+    baseUrl: string;
+    repository: string;
+    number: number;
+    onQuote?: (body: string) => void;
+}) {
+    const session = useSession();
+    const viewerLogin = useSessionState((state) => state.auth.viewer?.login);
+    const [editing, setEditing] = useState(false);
+    const isBot = /\[bot\]$/i.test(item.author);
+    const displayName = item.author.replace(/\[bot\]$/i, "");
+    const canEdit = Boolean(viewerLogin && viewerLogin === item.author);
+
+    return (
+        <>
+            <TimelineDot className="mt-2 bg-background">
+                <MessageSquare className="size-3.5" aria-hidden="true" />
+            </TimelineDot>
+            <article className="min-w-0 flex-1 overflow-hidden rounded-md border bg-background">
+                <header className="flex flex-wrap items-center gap-x-2 gap-y-1 border-b bg-muted/30 px-3 py-2 text-xs">
+                    <AvatarTiny login={displayName} avatarUrl={item.authorAvatarUrl} />
+                    <a href={item.url} target="_blank" rel="noreferrer" className="font-semibold hover:underline">
+                        {displayName}
+                    </a>
+                    {isBot ? (
+                        <span className="rounded border px-1 py-px text-[10px] font-medium text-muted-foreground">
+                            Bot
+                        </span>
+                    ) : null}
+                    <RelativeTime iso={item.createdAt} prefix="commented" className="text-muted-foreground" />
+                    <EditedMeta
+                        lastEditedAt={item.lastEditedAt}
+                        editor={item.editor}
+                        editCount={item.editCount}
+                        edits={item.edits}
+                        createdAt={item.createdAt}
+                        authorLogin={item.author}
+                        authorAvatarUrl={item.authorAvatarUrl}
+                    />
+                    <div className="ml-auto">
+                        <CommentActionsMenu
+                            url={item.url}
+                            body={item.body}
+                            canEdit={canEdit}
+                            onEdit={canEdit ? () => setEditing(true) : undefined}
+                            onQuote={item.body.trim() && onQuote ? () => onQuote(item.body) : undefined}
+                        />
+                    </div>
+                </header>
+                <div className="px-3 py-3">
+                    <EditableCommentBody
+                        body={item.body}
+                        baseUrl={baseUrl}
+                        repository={repository}
+                        number={number}
+                        canEdit={canEdit}
+                        editing={editing}
+                        onEditingChange={setEditing}
+                        onSave={(body) => session.updateIssueComment(repository, number, item.databaseId, body)}
+                    />
+                </div>
+                <div className="border-t px-3 py-2">
+                    <ReactionBar
+                        groups={item.reactionGroups}
+                        onToggle={(content) => {
+                            void notifyAction(
+                                () => session.toggleIssueCommentReaction(repository, number, item.databaseId, content),
+                                {
+                                    loading: "Updating reaction…",
+                                    success: "Reaction updated",
+                                    error: "Could not update the reaction.",
+                                },
+                            );
+                        }}
+                    />
+                </div>
+            </article>
+        </>
+    );
+}
+
 function TimelineItemRow({
     item,
     baseUrl,
@@ -662,72 +751,15 @@ function TimelineItemRow({
     number: number;
     onQuote?: (body: string) => void;
 }) {
-    const session = useSession();
-
     if (item.kind === "comment") {
-        const isBot = /\[bot\]$/i.test(item.author);
-        const displayName = item.author.replace(/\[bot\]$/i, "");
-
         return (
-            <>
-                <TimelineDot className="mt-2 bg-background">
-                    <MessageSquare className="size-3.5" aria-hidden="true" />
-                </TimelineDot>
-                <article className="min-w-0 flex-1 overflow-hidden rounded-md border bg-background">
-                    <header className="flex flex-wrap items-center gap-x-2 gap-y-1 border-b bg-muted/30 px-3 py-2 text-xs">
-                        <AvatarTiny login={displayName} avatarUrl={item.authorAvatarUrl} />
-                        <a href={item.url} target="_blank" rel="noreferrer" className="font-semibold hover:underline">
-                            {displayName}
-                        </a>
-                        {isBot ? (
-                            <span className="rounded border px-1 py-px text-[10px] font-medium text-muted-foreground">
-                                Bot
-                            </span>
-                        ) : null}
-                        <RelativeTime iso={item.createdAt} prefix="commented" className="text-muted-foreground" />
-                        <EditedMeta
-                            lastEditedAt={item.lastEditedAt}
-                            editor={item.editor}
-                            editCount={item.editCount}
-                            edits={item.edits}
-                            createdAt={item.createdAt}
-                            authorLogin={item.author}
-                            authorAvatarUrl={item.authorAvatarUrl}
-                        />
-                        <div className="ml-auto">
-                            <CommentActionsMenu
-                                url={item.url}
-                                body={item.body}
-                                onQuote={item.body.trim() && onQuote ? () => onQuote(item.body) : undefined}
-                            />
-                        </div>
-                    </header>
-                    <div className="px-3 py-3">
-                        <Markdown source={item.body} baseUrl={baseUrl} />
-                    </div>
-                    <div className="border-t px-3 py-2">
-                        <ReactionBar
-                            groups={item.reactionGroups}
-                            onToggle={(content) => {
-                                void notifyAction(
-                                    () =>
-                                        session.toggleIssueCommentReaction(
-                                            repository,
-                                            number,
-                                            item.databaseId,
-                                            content,
-                                        ),
-                                    {
-                                        loading: "Updating reaction…",
-                                        success: "Reaction updated",
-                                        error: "Could not update the reaction.",
-                                    },
-                                );
-                            }}
-                        />
-                    </div>
-                </article>
-            </>
+            <IssueTimelineComment
+                item={item}
+                baseUrl={baseUrl}
+                repository={repository}
+                number={number}
+                onQuote={onQuote}
+            />
         );
     }
 

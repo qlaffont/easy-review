@@ -1,4 +1,4 @@
-import { ChevronDown, ChevronRight, Trash2 } from "lucide-react";
+import { ChevronDown, ChevronRight, Pencil, Trash2 } from "lucide-react";
 import { useState } from "react";
 
 import type { MentionCandidate } from "#/components/pr/composer-autocomplete.tsx";
@@ -6,12 +6,14 @@ import type { DiffSide, PendingLineComment, ReviewThread } from "#/lib/session/t
 
 import { CommentActionsMenu, quoteMarkdown } from "#/components/pr/comment-actions.tsx";
 import { suggestionOriginalFromHunk } from "#/components/pr/diff-hunk-preview.tsx";
+import { EditableCommentBody } from "#/components/pr/editable-comment-body.tsx";
 import { MarkdownComposer } from "#/components/pr/markdown-composer.tsx";
 import { Markdown } from "#/components/pr/markdown.tsx";
 import { ReviewThreadCommentReactions } from "#/components/pr/reaction-bar.tsx";
 import { ReviewThreadStatusLabels } from "#/components/pr/review-thread-status.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import { RelativeTime } from "#/components/ui/relative-time.tsx";
+import { useSession } from "#/lib/session/provider.tsx";
 import { notifyAction } from "#/lib/toast.ts";
 import { cn } from "#/lib/utils.ts";
 
@@ -30,6 +32,7 @@ export function InlineDiffComments({
     disabled,
     canApplySuggestions,
     onRemovePending,
+    onUpdatePending,
     onReply,
 }: {
     side: DiffSide;
@@ -46,6 +49,7 @@ export function InlineDiffComments({
     disabled?: boolean;
     canApplySuggestions?: boolean;
     onRemovePending: (commentId: string) => Promise<void>;
+    onUpdatePending: (commentId: string, body: string) => Promise<void>;
     onReply: (threadId: string, body: string) => Promise<void>;
 }) {
     if (pending.length === 0 && threads.length === 0) {
@@ -67,8 +71,11 @@ export function InlineDiffComments({
                         previewBaseUrl={previewBaseUrl}
                         suggestionOriginal={lineText}
                         suggestionLine={line}
+                        repository={repository}
+                        number={number}
                         disabled={disabled}
                         onRemove={() => onRemovePending(comment.id)}
+                        onUpdate={(body) => onUpdatePending(comment.id, body)}
                     />
                 ))}
                 {threads.map((thread) => (
@@ -103,22 +110,30 @@ function PendingCommentCard({
     viewerLogin,
     viewerAvatarUrl,
     previewBaseUrl,
+    repository,
+    number,
     suggestionOriginal,
     suggestionLine,
     disabled,
     onRemove,
+    onUpdate,
 }: {
     label: string;
     comment: PendingLineComment;
     viewerLogin: string | null;
     viewerAvatarUrl: string | null;
     previewBaseUrl: string;
+    repository: string;
+    number: number;
     suggestionOriginal: string;
     suggestionLine: number;
     disabled?: boolean;
     onRemove: () => Promise<void>;
+    onUpdate: (body: string) => Promise<void>;
 }) {
     const [open, setOpen] = useState(true);
+    const [editing, setEditing] = useState(false);
+    const [draft, setDraft] = useState(comment.body);
     const [removing, setRemoving] = useState(false);
     const author = viewerLogin ?? "you";
 
@@ -156,6 +171,17 @@ function PendingCommentCard({
                                 variant="ghost"
                                 className="size-7 text-muted-foreground"
                                 disabled={disabled || removing}
+                                aria-label="Edit pending comment"
+                                onClick={() => setEditing(true)}
+                            >
+                                <Pencil className="size-3.5" aria-hidden="true" />
+                            </Button>
+                            <Button
+                                type="button"
+                                size="icon-sm"
+                                variant="ghost"
+                                className="size-7 text-muted-foreground"
+                                disabled={disabled || removing}
                                 aria-label="Remove pending comment"
                                 onClick={() => {
                                     setRemoving(true);
@@ -171,12 +197,64 @@ function PendingCommentCard({
                         </div>
                     </header>
                     <div className="text-sm">
-                        <Markdown
-                            source={comment.body}
-                            baseUrl={previewBaseUrl}
-                            suggestionOriginal={suggestionOriginal}
-                            suggestionLine={suggestionLine}
-                        />
+                        {editing ? (
+                            <MarkdownComposer
+                                compact
+                                autoFocus
+                                value={draft}
+                                onChange={setDraft}
+                                rows={4}
+                                disabled={disabled || removing}
+                                previewBaseUrl={previewBaseUrl}
+                                repository={repository}
+                                pullRequestNumber={number}
+                                suggestionOriginal={suggestionOriginal}
+                                suggestionLine={suggestionLine}
+                                footer={
+                                    <div className="flex justify-end gap-2">
+                                        <Button
+                                            type="button"
+                                            size="sm"
+                                            variant="outline"
+                                            disabled={disabled || removing}
+                                            onClick={() => {
+                                                setDraft(comment.body);
+                                                setEditing(false);
+                                            }}
+                                        >
+                                            Cancel
+                                        </Button>
+                                        <Button
+                                            type="button"
+                                            size="sm"
+                                            disabled={disabled || removing || !draft.trim()}
+                                            onClick={() => {
+                                                void notifyAction(
+                                                    async () => {
+                                                        await onUpdate(draft.trim());
+                                                        setEditing(false);
+                                                    },
+                                                    {
+                                                        loading: "Saving comment…",
+                                                        success: "Comment updated",
+                                                        error: "Could not update the comment.",
+                                                    },
+                                                );
+                                            }}
+                                        >
+                                            Save
+                                        </Button>
+                                    </div>
+                                }
+                            />
+                        ) : (
+                            <Markdown
+                                source={comment.body}
+                                baseUrl={previewBaseUrl}
+                                suggestionOriginal={suggestionOriginal}
+                                suggestionLine={suggestionLine}
+                            />
+                        )}
                     </div>
                 </div>
             ) : null}
@@ -266,69 +344,30 @@ function ThreadCommentCard({
             </button>
             {open ? (
                 <div className="px-3 pb-2">
-                    {thread.comments.map((comment, index) => {
-                        const isAuthor = viewerLogin !== null && comment.author === viewerLogin;
-                        return (
-                            <div key={comment.id} className={cn("py-3", index > 0 && "border-t border-border")}>
-                                <header className="mb-1.5 flex flex-wrap items-start justify-between gap-2">
-                                    <div className="flex min-w-0 items-center gap-2">
-                                        <AvatarTiny login={comment.author} avatarUrl={comment.authorAvatarUrl} />
-                                        <span className="truncate text-sm font-semibold">{comment.author}</span>
-                                        <RelativeTime
-                                            iso={comment.createdAt}
-                                            className="text-xs text-muted-foreground"
-                                        />
-                                        {isAuthor ? (
-                                            <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
-                                                Author
-                                            </span>
-                                        ) : null}
-                                    </div>
-                                    <CommentActionsMenu
-                                        url={comment.url}
-                                        body={comment.body}
-                                        onQuote={
-                                            !disabled && comment.body.trim()
-                                                ? () => {
-                                                      setReply((current) => {
-                                                          const quoted = quoteMarkdown(comment.body);
-                                                          return current.trim()
-                                                              ? `${current.replace(/\s*$/, "")}\n\n${quoted}`
-                                                              : quoted;
-                                                      });
-                                                      setReplyOpen(true);
-                                                  }
-                                                : undefined
-                                        }
-                                    />
-                                </header>
-                                <div className="text-sm">
-                                    <Markdown
-                                        source={comment.body}
-                                        baseUrl={previewBaseUrl}
-                                        suggestionOriginal={suggestionOriginal}
-                                        suggestionStartLine={suggestionStartLine}
-                                        suggestionLine={suggestionLine}
-                                        suggestionApply={
-                                            thread.path
-                                                ? {
-                                                      repository,
-                                                      number,
-                                                      path: thread.path,
-                                                      canApply: canApplySuggestions,
-                                                  }
-                                                : null
-                                        }
-                                    />
-                                </div>
-                                <ReviewThreadCommentReactions
-                                    repository={repository}
-                                    number={number}
-                                    comment={comment}
-                                />
-                            </div>
-                        );
-                    })}
+                    {thread.comments.map((comment, index) => (
+                        <ReviewThreadInlineComment
+                            key={comment.id}
+                            comment={comment}
+                            index={index}
+                            thread={thread}
+                            viewerLogin={viewerLogin}
+                            previewBaseUrl={previewBaseUrl}
+                            suggestionOriginal={suggestionOriginal}
+                            suggestionStartLine={suggestionStartLine}
+                            suggestionLine={suggestionLine}
+                            repository={repository}
+                            number={number}
+                            canApplySuggestions={canApplySuggestions}
+                            disabled={disabled}
+                            onQuote={(body) => {
+                                setReply((current) => {
+                                    const quoted = quoteMarkdown(body);
+                                    return current.trim() ? `${current.replace(/\s*$/, "")}\n\n${quoted}` : quoted;
+                                });
+                                setReplyOpen(true);
+                            }}
+                        />
+                    ))}
                     {!thread.isResolved ? (
                         <div className="border-t pt-2">
                             {replyOpen ? (
@@ -386,6 +425,90 @@ function ThreadCommentCard({
                 </div>
             ) : null}
         </article>
+    );
+}
+
+function ReviewThreadInlineComment({
+    comment,
+    index,
+    thread,
+    viewerLogin,
+    previewBaseUrl,
+    suggestionOriginal,
+    suggestionStartLine,
+    suggestionLine,
+    repository,
+    number,
+    canApplySuggestions,
+    disabled,
+    onQuote,
+}: {
+    comment: ReviewThread["comments"][number];
+    index: number;
+    thread: ReviewThread;
+    viewerLogin: string | null;
+    previewBaseUrl: string;
+    suggestionOriginal: string;
+    suggestionStartLine: number | null;
+    suggestionLine: number;
+    repository: string;
+    number: number;
+    canApplySuggestions: boolean;
+    disabled?: boolean;
+    onQuote: (body: string) => void;
+}) {
+    const session = useSession();
+    const [editing, setEditing] = useState(false);
+    const isAuthor = viewerLogin !== null && comment.author === viewerLogin;
+
+    return (
+        <div className={cn("py-3", index > 0 && "border-t border-border")}>
+            <header className="mb-1.5 flex flex-wrap items-start justify-between gap-2">
+                <div className="flex min-w-0 items-center gap-2">
+                    <AvatarTiny login={comment.author} avatarUrl={comment.authorAvatarUrl} />
+                    <span className="truncate text-sm font-semibold">{comment.author}</span>
+                    <RelativeTime iso={comment.createdAt} className="text-xs text-muted-foreground" />
+                    {isAuthor ? (
+                        <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
+                            Author
+                        </span>
+                    ) : null}
+                </div>
+                <CommentActionsMenu
+                    url={comment.url}
+                    body={comment.body}
+                    canEdit={isAuthor}
+                    onEdit={isAuthor ? () => setEditing(true) : undefined}
+                    onQuote={!disabled && comment.body.trim() ? () => onQuote(comment.body) : undefined}
+                />
+            </header>
+            <div className="text-sm">
+                <EditableCommentBody
+                    body={comment.body}
+                    baseUrl={previewBaseUrl}
+                    repository={repository}
+                    number={number}
+                    canEdit={isAuthor}
+                    editing={editing}
+                    onEditingChange={setEditing}
+                    onSave={(body) => session.updateReviewComment(repository, number, comment.databaseId, body)}
+                    markdownProps={{
+                        suggestionOriginal,
+                        suggestionStartLine,
+                        suggestionLine,
+                        suggestionApply: thread.path
+                            ? {
+                                  repository,
+                                  number,
+                                  path: thread.path,
+                                  canApply: canApplySuggestions,
+                              }
+                            : null,
+                    }}
+                />
+            </div>
+            <ReviewThreadCommentReactions repository={repository} number={number} comment={comment} />
+        </div>
     );
 }
 

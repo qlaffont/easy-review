@@ -572,6 +572,9 @@ export function ReviewChanges({
                                     onRemovePending={async (commentId) => {
                                         await session.removePendingComment(repository, number, commentId);
                                     }}
+                                    onUpdatePending={async (commentId, body) => {
+                                        await session.updatePendingComment(repository, number, commentId, body);
+                                    }}
                                     onReplyToThread={async (threadId, body) => {
                                         await session.replyToReviewThread(repository, number, threadId, body);
                                     }}
