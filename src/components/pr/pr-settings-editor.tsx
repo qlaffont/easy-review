@@ -4,6 +4,7 @@ import {
     FileDiff,
     Files,
     FolderTree,
+    GitBranch,
     Inbox,
     Maximize2,
     MessageSquareOff,
@@ -53,6 +54,13 @@ export function PrSettingsEditor({ open, onOpenChange }: { open: boolean; onOpen
                             onCheckedChange={(returnToInboxAfterReviewOrMerge) =>
                                 setPreferences({ returnToInboxAfterReviewOrMerge })
                             }
+                        />
+                        <SettingsPreferenceRow
+                            icon={GitBranch}
+                            title="Delete branch after merge"
+                            description="Default the merge confirmation checkbox to remove the head branch once merged."
+                            checked={preferences.deleteHeadBranchOnMerge}
+                            onCheckedChange={(deleteHeadBranchOnMerge) => setPreferences({ deleteHeadBranchOnMerge })}
                         />
                     </section>
 

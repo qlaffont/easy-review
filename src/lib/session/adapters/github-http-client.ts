@@ -2721,7 +2721,7 @@ type PullRequestDetailNode = Omit<PullRequestNode, "commits"> & {
     headRepositoryOwner: { login: string } | null;
     mergeStateStatus: string;
     viewerCanMergeAsAdmin: boolean;
-    viewerCanUpdateAutomatically: boolean;
+    viewerCanUpdateBranch: boolean;
     id: string;
     autoMergeRequest: { enabledAt: string; mergeMethod: string } | null;
     baseRef: {
@@ -2833,7 +2833,7 @@ const PULL_REQUEST_QUERY = `
                 }
                 mergeStateStatus
                 viewerCanMergeAsAdmin
-                viewerCanUpdateAutomatically
+                viewerCanUpdateBranch
                 autoMergeRequest {
                     enabledAt
                     mergeMethod
@@ -3977,7 +3977,7 @@ function toPullRequestDetail(node: PullRequestDetailNode, settings: RepositoryMe
         mergeStateStatus: toMergeStateStatus(node.mergeStateStatus),
         viewerCanMergeAsAdmin: node.viewerCanMergeAsAdmin ?? false,
         pullRequestNodeId: node.id,
-        viewerCanUpdateBranch: node.viewerCanUpdateAutomatically ?? false,
+        viewerCanUpdateBranch: node.viewerCanUpdateBranch ?? false,
         autoMergeEnabled: Boolean(node.autoMergeRequest?.enabledAt),
         autoMergeMethod: node.autoMergeRequest?.mergeMethod
             ? fromGraphqlMergeMethod(node.autoMergeRequest.mergeMethod)

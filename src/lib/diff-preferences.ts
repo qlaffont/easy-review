@@ -23,6 +23,8 @@ export type DiffPreferences = {
     fileListWidth: number;
     /** After submitting a review or merging, navigate back to the Inbox. */
     returnToInboxAfterReviewOrMerge: boolean;
+    /** Default for “Delete branch after merge” in merge dialogs and command palette actions. */
+    deleteHeadBranchOnMerge: boolean;
 };
 
 export const FILE_LIST_WIDTH_DEFAULT = 256;
@@ -49,6 +51,7 @@ const DEFAULT_PREFERENCES: DiffPreferences = {
     fileListLayout: "flat",
     fileListWidth: FILE_LIST_WIDTH_DEFAULT,
     returnToInboxAfterReviewOrMerge: false,
+    deleteHeadBranchOnMerge: true,
 };
 
 function readPreferences(): DiffPreferences {
@@ -76,6 +79,7 @@ function readPreferences(): DiffPreferences {
                 typeof parsed.fileListWidth === "number" ? parsed.fileListWidth : FILE_LIST_WIDTH_DEFAULT,
             ),
             returnToInboxAfterReviewOrMerge: Boolean(parsed.returnToInboxAfterReviewOrMerge),
+            deleteHeadBranchOnMerge: parsed.deleteHeadBranchOnMerge !== false,
         };
     } catch {
         return DEFAULT_PREFERENCES;
@@ -132,6 +136,11 @@ export function useDiffPreferences() {
 /** Sync read for command-palette / non-React callers. */
 export function shouldReturnToInboxAfterReviewOrMerge(): boolean {
     return getPreferences().returnToInboxAfterReviewOrMerge;
+}
+
+/** Sync read for merge dialogs and command-palette merge actions. */
+export function shouldDeleteHeadBranchOnMerge(): boolean {
+    return getPreferences().deleteHeadBranchOnMerge;
 }
 
 export function viewedFilesStorageKey(repository: string, number: number, headSha: string): string {

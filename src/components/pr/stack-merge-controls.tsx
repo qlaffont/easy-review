@@ -23,6 +23,7 @@ import {
     DropdownMenuItem,
     DropdownMenuTrigger,
 } from "#/components/ui/dropdown-menu.tsx";
+import { useDiffPreferences } from "#/lib/diff-preferences.ts";
 import { useSession } from "#/lib/session/provider.tsx";
 import {
     evaluateStackMerge,
@@ -55,8 +56,9 @@ function mergeMethodDescription(method: MergeMethod, branchCount: number): strin
 
 export function StackMergeControls({ detail, stack }: { detail: PullRequestDetail; stack: ResolvedPullRequestStack }) {
     const session = useSession();
+    const [preferences] = useDiffPreferences();
     const [bypassRules, setBypassRules] = useState(false);
-    const [deleteHeadBranch, setDeleteHeadBranch] = useState(true);
+    const [deleteHeadBranch, setDeleteHeadBranch] = useState(preferences.deleteHeadBranchOnMerge);
     const evaluation = useMemo(() => evaluateStackMerge(stack, { bypassRules }), [stack, bypassRules]);
     const mergeOptions = stackMergeMethodOptions(detail.allowedMergeMethods);
     const [mergeMethod, setMergeMethod] = useState<MergeMethod>(
@@ -132,7 +134,15 @@ export function StackMergeControls({ detail, stack }: { detail: PullRequestDetai
             ) : null}
 
             <div className="flex flex-wrap items-center gap-2">
-                <AlertDialog open={mergeDialogOpen} onOpenChange={setMergeDialogOpen}>
+                <AlertDialog
+                    open={mergeDialogOpen}
+                    onOpenChange={(open) => {
+                        if (open) {
+                            setDeleteHeadBranch(preferences.deleteHeadBranchOnMerge);
+                        }
+                        setMergeDialogOpen(open);
+                    }}
+                >
                     <div className="flex">
                         <AlertDialogTrigger asChild>
                             <Button size="sm" className="h-8 rounded-r-none gap-1.5" disabled={mergeDisabled}>

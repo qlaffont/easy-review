@@ -1,7 +1,7 @@
 import type { EasyReviewSession } from "#/lib/session/session.ts";
 import type { PullRequestDetail, PullRequestState } from "#/lib/session/types.ts";
 
-import { shouldReturnToInboxAfterReviewOrMerge } from "#/lib/diff-preferences.ts";
+import { shouldReturnToInboxAfterReviewOrMerge, shouldDeleteHeadBranchOnMerge } from "#/lib/diff-preferences.ts";
 import { notifyAction, notifyActionWithInboxPrompt } from "#/lib/toast.ts";
 
 /**
@@ -371,7 +371,7 @@ export const APP_ACTIONS: ReadonlyArray<AppAction> = [
             await notifyActionWithInboxPrompt(
                 () =>
                     context.session.mergePullRequest(context.target!.repository, context.target!.number, "merge", {
-                        deleteHeadBranch: true,
+                        deleteHeadBranch: shouldDeleteHeadBranchOnMerge(),
                     }),
                 {
                     loading: "Merging pull request…",
@@ -400,7 +400,7 @@ export const APP_ACTIONS: ReadonlyArray<AppAction> = [
             await notifyActionWithInboxPrompt(
                 () =>
                     context.session.mergePullRequest(context.target!.repository, context.target!.number, "rebase", {
-                        deleteHeadBranch: true,
+                        deleteHeadBranch: shouldDeleteHeadBranchOnMerge(),
                     }),
                 {
                     loading: "Merging pull request…",
@@ -470,7 +470,7 @@ export const APP_ACTIONS: ReadonlyArray<AppAction> = [
             await notifyActionWithInboxPrompt(
                 () =>
                     context.session.mergePullRequest(context.target!.repository, context.target!.number, "squash", {
-                        deleteHeadBranch: true,
+                        deleteHeadBranch: shouldDeleteHeadBranchOnMerge(),
                     }),
                 {
                     loading: "Merging pull request…",

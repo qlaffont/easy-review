@@ -46,6 +46,7 @@ import {
     DropdownMenuSeparator,
     DropdownMenuTrigger,
 } from "#/components/ui/dropdown-menu.tsx";
+import { HelpTooltip } from "#/components/ui/help-tooltip.tsx";
 import { Input } from "#/components/ui/input.tsx";
 import { Label } from "#/components/ui/label.tsx";
 import { Textarea } from "#/components/ui/textarea.tsx";
@@ -96,7 +97,7 @@ export function PullRequestControls({ detail }: { detail: PullRequestDetail }) {
     const [error, setError] = useState<string | null>(null);
     const [busy, setBusy] = useState(false);
     const [bypassRules, setBypassRules] = useState(false);
-    const [deleteHeadBranch, setDeleteHeadBranch] = useState(true);
+    const [deleteHeadBranch, setDeleteHeadBranch] = useState(preferences.deleteHeadBranchOnMerge);
     const [mergeDialogOpen, setMergeDialogOpen] = useState(false);
     const [commitTitle, setCommitTitle] = useState("");
     const [commitMessage, setCommitMessage] = useState("");
@@ -216,6 +217,7 @@ export function PullRequestControls({ detail }: { detail: PullRequestDetail }) {
     function handleMergeDialogOpenChange(open: boolean) {
         if (open) {
             applyMergeCommitDefaults(activeMergeMethod);
+            setDeleteHeadBranch(preferences.deleteHeadBranchOnMerge);
         }
         setMergeDialogOpen(open);
     }
@@ -428,32 +430,36 @@ export function PullRequestControls({ detail }: { detail: PullRequestDetail }) {
                     </label>
                 ) : null}
                 {detail.autoMergeEnabled ? (
-                    <Button
-                        size="sm"
-                        variant="outline"
-                        disabled={busy}
-                        onClick={() =>
-                            void run(
-                                async () => {
-                                    await session.disablePullRequestAutoMerge(detail.repository, detail.number);
-                                },
-                                {
-                                    loading: "Cancelling auto-merge…",
-                                    success: "Auto-merge cancelled",
-                                    error: "Could not cancel auto-merge.",
-                                },
-                            )
-                        }
-                    >
-                        Cancel auto-merge
-                    </Button>
+                    <HelpTooltip label={autoMergeHelpText(detail, mergeBlocked)}>
+                        <Button
+                            size="sm"
+                            variant="outline"
+                            disabled={busy}
+                            onClick={() =>
+                                void run(
+                                    async () => {
+                                        await session.disablePullRequestAutoMerge(detail.repository, detail.number);
+                                    },
+                                    {
+                                        loading: "Cancelling auto-merge…",
+                                        success: "Auto-merge cancelled",
+                                        error: "Could not cancel auto-merge.",
+                                    },
+                                )
+                            }
+                        >
+                            Cancel auto-merge
+                        </Button>
+                    </HelpTooltip>
                 ) : mergeOptions.length > 0 && !conflictBlocked && !draftBlocked ? (
                     <DropdownMenu>
-                        <DropdownMenuTrigger asChild>
-                            <Button size="sm" variant="outline" disabled={busy}>
-                                Enable auto-merge
-                            </Button>
-                        </DropdownMenuTrigger>
+                        <HelpTooltip label={autoMergeHelpText(detail, mergeBlocked)}>
+                            <DropdownMenuTrigger asChild>
+                                <Button size="sm" variant="outline" disabled={busy}>
+                                    Enable auto-merge
+                                </Button>
+                            </DropdownMenuTrigger>
+                        </HelpTooltip>
                         <DropdownMenuContent align="end" className="w-72">
                             {mergeOptions.map((method) => (
                                 <DropdownMenuItem
@@ -645,6 +651,18 @@ export function PullRequestControls({ detail }: { detail: PullRequestDetail }) {
             </div>
         </section>
     );
+}
+
+function autoMergeHelpText(detail: PullRequestDetail, mergeBlocked: boolean): string {
+    if (detail.autoMergeEnabled) {
+        return "A merge is queued on GitHub. It runs automatically once required reviews and checks pass. Cancel to merge manually instead.";
+    }
+
+    if (mergeBlocked) {
+        return "Queue a merge on GitHub that runs when required reviews and checks pass. You can enable this before requirements are met—pick squash, merge commit, or rebase from the menu.";
+    }
+
+    return "Merge automatically when this pull request is ready. Choose squash, merge commit, or rebase from the menu.";
 }
 
 function StatusRow({
