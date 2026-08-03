@@ -56,9 +56,15 @@ import {
     emptyInboxQueryData,
     fetchInboxSections,
     mergePullRequestSummaries,
+    mergeSectionResultsIntoInbox,
     patchInboxPullRequest,
 } from "#/lib/query/inbox-fetch.ts";
-import { getInboxQueryData, inboxQueryKey, setInboxQueryData } from "#/lib/query/inbox.ts";
+import {
+    getInboxQueryData,
+    inboxSectionQueryKey,
+    inboxSectionQueryPrefix,
+    setInboxQueryData,
+} from "#/lib/query/inbox.ts";
 import {
     invalidateInboxForRefresh,
     invalidatePullRequestSecondaryAfterMutation,
@@ -926,6 +932,25 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
             sectionLayout: inbox.sectionLayout,
             existing,
             sectionIds,
+            onSectionLoaded: (result) => {
+                if (attempt !== undefined && attempt !== latestInboxLoad) {
+                    return;
+                }
+
+                let merged = emptyInboxQueryData();
+                setInboxQueryData(queryClient, viewerLogin, (current) => {
+                    merged = mergeSectionResultsIntoInbox(current ?? emptyInboxQueryData(), [result]);
+                    return merged;
+                });
+                syncInboxQueryData(merged);
+                queryClient.setQueryData(inboxSectionQueryKey(viewerLogin, result.id), {
+                    sectionId: result.id,
+                    pullRequests: result.pullRequests,
+                    totalCount: result.totalCount,
+                    pageInfo: result.pageInfo,
+                    lastLoadedAt: merged.lastLoadedAt,
+                });
+            },
         });
 
         if (attempt !== undefined && attempt !== latestInboxLoad) {
@@ -979,27 +1004,16 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
         const keepPainted = state.state.inbox.status === "ready" || cached.pullRequests.length > 0;
         setInbox({ refreshing: true, status: keepPainted ? "ready" : "loading", error: null });
 
-        const key = inboxQueryKey(context.login);
-
         try {
-            await queryClient.invalidateQueries({ queryKey: key });
-            await queryClient.fetchQuery({
-                queryKey: key,
-                queryFn: async () => {
-                    const { successes, failure } = await loadInboxSections(undefined, attempt);
-                    if (attempt !== latestInboxLoad) {
-                        return readInboxQueryData();
-                    }
+            await queryClient.invalidateQueries({ queryKey: inboxSectionQueryPrefix(context.login) });
 
-                    if (successes === 0 && failure) {
-                        throw new EasyReviewError(failure.kind, failure.message, { retryAt: failure.retryAt });
-                    }
-
-                    return readInboxQueryData();
-                },
-            });
+            const { successes, failure } = await loadInboxSections(undefined, attempt);
 
             if (attempt !== latestInboxLoad) return;
+
+            if (successes === 0 && failure) {
+                throw new EasyReviewError(failure.kind, failure.message, { retryAt: failure.retryAt });
+            }
 
             const data = readInboxQueryData();
             await store.set(

@@ -7,7 +7,9 @@ export const queryKeys = {
         list: (login: string) => ["repos", "list", login] as const,
     },
     inbox: {
+        /** Merged aggregate written by section fetches — not fetched directly. */
         sections: (login: string) => ["inbox", "sections", login] as const,
+        section: (login: string, sectionId: string) => ["inbox", "section", login, sectionId] as const,
     },
     pullRequest: {
         detail: (key: string) => ["pullRequest", key, "detail"] as const,

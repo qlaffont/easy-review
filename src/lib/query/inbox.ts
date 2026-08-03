@@ -1,19 +1,28 @@
-import { useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
-import { useCallback } from "react";
+import { useQueries, useQueryClient, type QueryClient } from "@tanstack/react-query";
+import { useCallback, useMemo } from "react";
 
-import type { InboxQueryData } from "#/lib/query/types.ts";
-import type { EasyReviewSession } from "#/lib/session/session.ts";
+import type { InboxQueryData, InboxSectionQueryData } from "#/lib/query/types.ts";
+import type { InboxSectionDefinition } from "#/lib/session/inbox-sections.ts";
+import type { GithubClient } from "#/lib/session/ports.ts";
 
 import { CACHE_POLICY } from "#/lib/query/cache-policy.ts";
-import { fetchInboxSections, emptyInboxQueryData } from "#/lib/query/inbox-fetch.ts";
+import { emptyInboxQueryData, fetchInboxSection, mergeSectionResultsIntoInbox } from "#/lib/query/inbox-fetch.ts";
 import { revalidateInboxInBackground, invalidateInboxForRefresh } from "#/lib/query/invalidate.ts";
 import { queryKeys } from "#/lib/query/query-keys.ts";
-import { EasyReviewError } from "#/lib/session/errors.ts";
+import { EasyReviewError, toSessionError } from "#/lib/session/errors.ts";
 import { inboxSectionsFromLoaded, visibleSectionDefinitions } from "#/lib/session/inbox-sections.ts";
 import { useSession } from "#/lib/session/provider.tsx";
 
 export function inboxQueryKey(login: string) {
     return queryKeys.inbox.sections(login);
+}
+
+export function inboxSectionQueryKey(login: string, sectionId: string) {
+    return queryKeys.inbox.section(login, sectionId);
+}
+
+export function inboxSectionQueryPrefix(login: string) {
+    return ["inbox", "section", login] as const;
 }
 
 export function getInboxQueryData(queryClient: QueryClient, login: string): InboxQueryData | undefined {
@@ -30,35 +39,83 @@ export function setInboxQueryData(
     return queryClient.getQueryData(key) ?? emptyInboxQueryData();
 }
 
-async function fetchInboxForSession(session: EasyReviewSession, signal?: AbortSignal): Promise<InboxQueryData> {
-    const { auth, repos, inbox } = session.state.state;
-    const viewerLogin = auth.viewer?.login;
-
-    if (!viewerLogin || repos.selected.length === 0) {
-        return emptyInboxQueryData();
+function sectionDataFromAggregate(
+    aggregate: InboxQueryData | undefined,
+    sectionId: string,
+): InboxSectionQueryData | undefined {
+    if (!aggregate?.sectionPullRequests[sectionId]) {
+        return undefined;
     }
 
-    const existing = getInboxQueryData(session.queryClient, viewerLogin) ?? emptyInboxQueryData();
+    return {
+        sectionId,
+        pullRequests: aggregate.sectionPullRequests[sectionId] ?? [],
+        totalCount: aggregate.sectionCounts[sectionId] ?? 0,
+        pageInfo: aggregate.sectionPagination[sectionId] ?? { hasNextPage: false, endCursor: null },
+        lastLoadedAt: aggregate.lastLoadedAt,
+    };
+}
 
-    const { data, successes, failure } = await fetchInboxSections({
-        github: session.github,
-        token: session.requireToken(),
-        viewerLogin,
-        selected: repos.selected,
-        sectionLayout: inbox.sectionLayout,
-        existing,
-        signal,
-    });
+export async function fetchInboxSectionWithDeps(
+    deps: {
+        github: GithubClient;
+        queryClient: QueryClient;
+        requireToken: () => string;
+        syncInboxData: (data: InboxQueryData) => void;
+        viewerLogin: string;
+        selected: ReadonlyArray<string>;
+    },
+    definition: InboxSectionDefinition,
+    signal?: AbortSignal,
+): Promise<InboxSectionQueryData> {
+    const { github, queryClient, requireToken, syncInboxData, viewerLogin, selected } = deps;
 
-    if (successes === 0 && failure) {
-        throw new EasyReviewError(failure.kind, failure.message, { retryAt: failure.retryAt });
+    if (!viewerLogin || selected.length === 0) {
+        return {
+            sectionId: definition.id,
+            pullRequests: [],
+            totalCount: 0,
+            pageInfo: { hasNextPage: false, endCursor: null },
+            lastLoadedAt: null,
+        };
     }
 
-    if (successes > 0) {
-        session.syncInboxData(data);
-    }
+    const existing = getInboxQueryData(queryClient, viewerLogin) ?? emptyInboxQueryData();
 
-    return data;
+    try {
+        const result = await fetchInboxSection({
+            github,
+            token: requireToken(),
+            viewerLogin,
+            selected,
+            definition,
+            existing,
+            signal,
+        });
+
+        let merged = emptyInboxQueryData();
+        setInboxQueryData(queryClient, viewerLogin, (current) => {
+            merged = mergeSectionResultsIntoInbox(current ?? emptyInboxQueryData(), [result]);
+            return merged;
+        });
+        syncInboxData(merged);
+
+        return {
+            sectionId: result.id,
+            pullRequests: result.pullRequests,
+            totalCount: result.totalCount,
+            pageInfo: result.pageInfo,
+            lastLoadedAt: merged.lastLoadedAt,
+        };
+    } catch (error) {
+        const cached = sectionDataFromAggregate(existing, definition.id);
+        if (cached) {
+            return cached;
+        }
+        throw new EasyReviewError(toSessionError(error).kind, toSessionError(error).message, {
+            retryAt: toSessionError(error).retryAt,
+        });
+    }
 }
 
 export function useInboxQuery() {
@@ -67,30 +124,71 @@ export function useInboxQuery() {
     const login = session.state.state.auth.viewer?.login ?? "";
     const selected = session.state.state.repos.selected;
     const sectionLayout = session.state.state.inbox.sectionLayout;
-    const key = inboxQueryKey(login);
+    const definitions = useMemo(() => visibleSectionDefinitions(sectionLayout), [sectionLayout]);
 
-    const query = useQuery({
-        queryKey: key,
-        queryFn: ({ signal }) => fetchInboxForSession(session, signal),
-        enabled: Boolean(login) && selected.length > 0,
-        staleTime: CACHE_POLICY.inbox.staleTime,
-        gcTime: CACHE_POLICY.inbox.gcTime,
-        placeholderData: (previous) => previous,
+    const sectionFetchDeps = useMemo(
+        () => ({
+            github: session.github,
+            queryClient,
+            requireToken: () => session.requireToken(),
+            syncInboxData: session.syncInboxData.bind(session),
+            viewerLogin: login,
+            selected,
+        }),
+        [session, queryClient, login, selected],
+    );
+
+    const sectionQueries = useQueries({
+        queries: definitions.map((definition) => ({
+            queryKey: inboxSectionQueryKey(login, definition.id),
+            queryFn: ({ signal }: { signal: AbortSignal }) =>
+                fetchInboxSectionWithDeps(sectionFetchDeps, definition, signal),
+            enabled: Boolean(login) && selected.length > 0,
+            staleTime: CACHE_POLICY.inbox.staleTime,
+            gcTime: CACHE_POLICY.inbox.gcTime,
+            placeholderData: (previous: InboxSectionQueryData | undefined) =>
+                previous ?? sectionDataFromAggregate(getInboxQueryData(queryClient, login), definition.id),
+        })),
     });
+
+    const data = getInboxQueryData(queryClient, login) ?? emptyInboxQueryData();
+
+    const sectionFetching = useMemo(
+        () =>
+            Object.fromEntries(
+                definitions.map((definition, index) => [definition.id, sectionQueries[index]?.isFetching ?? false]),
+            ),
+        [definitions, sectionQueries],
+    );
+
+    const sectionErrors = useMemo(
+        () =>
+            Object.fromEntries(
+                definitions.map((definition, index) => {
+                    const query = sectionQueries[index];
+                    if (!query?.isError || !query.error) {
+                        return [definition.id, null];
+                    }
+                    return [definition.id, query.error instanceof Error ? query.error.message : "Could not load."];
+                }),
+            ),
+        [definitions, sectionQueries],
+    );
+
+    const isLoading = sectionQueries.some((query) => query.isLoading && !query.data);
+    const isFetching = sectionQueries.some((query) => query.isFetching);
+    const isError = sectionQueries.every((query) => query.isError) && !data.pullRequests.length;
+    const error = sectionQueries.find((query) => query.error)?.error ?? null;
 
     const selectedSet = new Set(selected);
     const filteredSectionPullRequests = Object.fromEntries(
-        Object.entries(query.data?.sectionPullRequests ?? {}).map(([sectionId, pullRequests]) => [
+        Object.entries(data.sectionPullRequests).map(([sectionId, pullRequests]) => [
             sectionId,
             pullRequests.filter((pullRequest) => selectedSet.has(pullRequest.repository)),
         ]),
     );
 
-    const sections = inboxSectionsFromLoaded(
-        visibleSectionDefinitions(sectionLayout),
-        filteredSectionPullRequests,
-        query.data?.sectionCounts ?? {},
-    );
+    const sections = inboxSectionsFromLoaded(definitions, filteredSectionPullRequests, data.sectionCounts);
 
     const refresh = useCallback(async () => {
         await invalidateInboxForRefresh(queryClient, login);
@@ -99,12 +197,12 @@ export function useInboxQuery() {
     const revalidate = useCallback(
         async (options?: { background?: boolean }) => {
             if (options?.background) {
-                revalidateInboxInBackground(queryClient, login, query.data?.lastLoadedAt);
+                revalidateInboxInBackground(queryClient, login, data.lastLoadedAt);
                 return;
             }
             await invalidateInboxForRefresh(queryClient, login);
         },
-        [queryClient, login, query.data?.lastLoadedAt],
+        [queryClient, login, data.lastLoadedAt],
     );
 
     const invalidate = useCallback(() => {
@@ -112,12 +210,14 @@ export function useInboxQuery() {
     }, [queryClient, login]);
 
     return {
-        data: query.data,
+        data,
         sections,
-        isLoading: query.isLoading,
-        isFetching: query.isFetching,
-        isError: query.isError,
-        error: query.error,
+        sectionFetching,
+        sectionErrors,
+        isLoading,
+        isFetching,
+        isError,
+        error,
         refresh,
         revalidate,
         invalidate,

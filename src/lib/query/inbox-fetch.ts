@@ -14,6 +14,8 @@ import {
 import { comparePullRequestsByUpdatedAtDesc } from "#/lib/session/pull-request-search.ts";
 import { sectionFilterToSearchQuery, matchSectionFilter } from "#/lib/session/section-filters.ts";
 
+const INBOX_SECTION_FETCH_CONCURRENCY = 4;
+
 function mergePullRequestSummary(previous: PullRequestSummary, incoming: PullRequestSummary): PullRequestSummary {
     const needsHydration = (pullRequest: PullRequestSummary) =>
         pullRequest.reviewers.length === 0 &&
@@ -74,12 +76,119 @@ export function emptyInboxQueryData(): InboxQueryData {
     };
 }
 
-type SectionFetchResult = {
+export type SectionFetchResult = {
     id: InboxSectionId;
     pullRequests: Array<PullRequestSummary>;
     totalCount: number;
     pageInfo: InboxPullRequestPageInfo;
 };
+
+export function mergeSectionResultsIntoInbox(
+    existing: InboxQueryData,
+    results: ReadonlyArray<SectionFetchResult>,
+): InboxQueryData {
+    const sectionPullRequests = { ...existing.sectionPullRequests };
+    const sectionCounts = { ...existing.sectionCounts };
+    const sectionPagination = { ...existing.sectionPagination };
+    let mergedPool = [...existing.pullRequests];
+
+    for (const result of results) {
+        sectionPullRequests[result.id] = result.pullRequests;
+        sectionCounts[result.id] = result.totalCount;
+        sectionPagination[result.id] = result.pageInfo;
+        mergedPool = mergePullRequestSummaries(mergedPool, result.pullRequests);
+    }
+
+    return {
+        pullRequests: mergedPool,
+        sectionPullRequests,
+        sectionCounts,
+        sectionPagination,
+        lastLoadedAt: new Date().toISOString(),
+    };
+}
+
+async function mapWithConcurrency<TItem, TResult>(
+    items: ReadonlyArray<TItem>,
+    concurrency: number,
+    fn: (item: TItem) => Promise<TResult>,
+): Promise<Array<TResult>> {
+    if (items.length === 0) {
+        return [];
+    }
+
+    const results: Array<TResult> = new Array(items.length);
+    let nextIndex = 0;
+
+    async function worker(): Promise<void> {
+        while (nextIndex < items.length) {
+            const index = nextIndex;
+            nextIndex += 1;
+            results[index] = await fn(items[index]!);
+        }
+    }
+
+    await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, () => worker()));
+
+    return results;
+}
+
+/** Load one inbox section from GitHub (or from the cached pool when the filter is client-only). */
+export async function fetchInboxSection(params: {
+    github: GithubClient;
+    token: string;
+    viewerLogin: string;
+    selected: ReadonlyArray<string>;
+    definition: InboxSectionDefinition;
+    existing: InboxQueryData;
+    signal?: AbortSignal;
+}): Promise<SectionFetchResult> {
+    const { github, token, viewerLogin, selected, definition, existing, signal } = params;
+
+    if (signal?.aborted) {
+        throw new DOMException("Aborted", "AbortError");
+    }
+
+    const selectedSet = new Set(selected);
+    const query = sectionFilterToSearchQuery(definition.filter, viewerLogin);
+
+    if (query) {
+        const page = await github.fetchSectionPullRequests(token, {
+            query,
+            repositories: [...selected],
+            limit: INBOX_SECTION_LOAD_SIZE,
+        });
+        const pullRequests = page.pullRequests.filter((pullRequest) =>
+            matchSectionFilter(pullRequest, definition.filter, viewerLogin),
+        );
+
+        return {
+            id: definition.id,
+            pullRequests,
+            totalCount: page.totalCount,
+            pageInfo: page.pageInfo,
+        };
+    }
+
+    const matched = existing.pullRequests
+        .filter(
+            (pullRequest) =>
+                selectedSet.has(pullRequest.repository) &&
+                matchSectionFilter(pullRequest, definition.filter, viewerLogin),
+        )
+        .sort(comparePullRequestsByUpdatedAtDesc);
+    const pullRequests = matched.slice(0, INBOX_SECTION_LOAD_SIZE);
+
+    return {
+        id: definition.id,
+        pullRequests,
+        totalCount: matched.length,
+        pageInfo: {
+            hasNextPage: matched.length > pullRequests.length,
+            endCursor: matched.length > pullRequests.length ? String(pullRequests.length) : null,
+        },
+    };
+}
 
 /**
  * Load inbox sections from GitHub. Always merges with `existing` so a partial refresh
@@ -94,106 +203,58 @@ export async function fetchInboxSections(params: {
     existing: InboxQueryData;
     sectionIds?: InboxSectionFetchScope;
     signal?: AbortSignal;
+    onSectionLoaded?: (result: SectionFetchResult) => void;
 }): Promise<InboxFetchResult> {
-    const { github, token, viewerLogin, selected, sectionLayout, existing, sectionIds, signal } = params;
+    const { github, token, viewerLogin, selected, sectionLayout, existing, sectionIds, signal, onSectionLoaded } =
+        params;
 
     if (selected.length === 0) {
         return { data: emptyInboxQueryData(), successes: 0, failure: null };
     }
 
-    const selectedSet = new Set(selected);
     const definitions: ReadonlyArray<InboxSectionDefinition> = sectionIds
         ? allSectionDefinitions(sectionLayout).filter((definition) => sectionIds.includes(definition.id))
         : visibleSectionDefinitions(sectionLayout);
 
     let failure: ReturnType<typeof toSessionError> | null = null;
-    let successes = 0;
     let stopFetching = false;
-    const results: Array<SectionFetchResult | null> = [];
 
-    for (const definition of definitions) {
+    const outcomes = await mapWithConcurrency(definitions, INBOX_SECTION_FETCH_CONCURRENCY, async (definition) => {
         if (stopFetching || signal?.aborted) {
-            break;
+            return null;
         }
 
-        const query = sectionFilterToSearchQuery(definition.filter, viewerLogin);
-
         try {
-            if (query) {
-                const page = await github.fetchSectionPullRequests(token, {
-                    query,
-                    repositories: [...selected],
-                    limit: INBOX_SECTION_LOAD_SIZE,
-                });
-                const pullRequests = page.pullRequests.filter((pullRequest) =>
-                    matchSectionFilter(pullRequest, definition.filter, viewerLogin),
-                );
-                successes += 1;
-                results.push({
-                    id: definition.id,
-                    pullRequests,
-                    totalCount: page.totalCount,
-                    pageInfo: page.pageInfo,
-                });
-                continue;
-            }
-
-            const matched = existing.pullRequests
-                .filter(
-                    (pullRequest) =>
-                        selectedSet.has(pullRequest.repository) &&
-                        matchSectionFilter(pullRequest, definition.filter, viewerLogin),
-                )
-                .sort(comparePullRequestsByUpdatedAtDesc);
-            const pullRequests = matched.slice(0, INBOX_SECTION_LOAD_SIZE);
-            successes += 1;
-            results.push({
-                id: definition.id,
-                pullRequests,
-                totalCount: matched.length,
-                pageInfo: {
-                    hasNextPage: matched.length > pullRequests.length,
-                    endCursor: matched.length > pullRequests.length ? String(pullRequests.length) : null,
-                },
+            const result = await fetchInboxSection({
+                github,
+                token,
+                viewerLogin,
+                selected,
+                definition,
+                existing,
+                signal,
             });
+            onSectionLoaded?.(result);
+            return result;
         } catch (error) {
             failure ??= toSessionError(error);
-            results.push(null);
             if (isRateLimitedError(error)) {
                 stopFetching = true;
             }
+            return null;
         }
-    }
+    });
+
+    const successes = outcomes.filter((result): result is SectionFetchResult => result !== null).length;
 
     if (successes === 0) {
         return { data: existing, successes, failure };
     }
 
-    // Always merge with existing — never start from empty on full refresh.
-    const sectionPullRequests = { ...existing.sectionPullRequests };
-    const sectionCounts = { ...existing.sectionCounts };
-    const sectionPagination = { ...existing.sectionPagination };
-    let mergedPool = [...existing.pullRequests];
-
-    for (const result of results) {
-        if (!result) {
-            continue;
-        }
-
-        sectionPullRequests[result.id] = result.pullRequests;
-        sectionCounts[result.id] = result.totalCount;
-        sectionPagination[result.id] = result.pageInfo;
-        mergedPool = mergePullRequestSummaries(mergedPool, result.pullRequests);
-    }
+    const successful = outcomes.filter((result): result is SectionFetchResult => result !== null);
 
     return {
-        data: {
-            pullRequests: mergedPool,
-            sectionPullRequests,
-            sectionCounts,
-            sectionPagination,
-            lastLoadedAt: new Date().toISOString(),
-        },
+        data: mergeSectionResultsIntoInbox(existing, successful),
         successes,
         failure,
     };

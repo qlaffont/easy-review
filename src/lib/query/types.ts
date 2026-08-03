@@ -75,6 +75,14 @@ export type PullRequestStackQueryData = {
     stack: ResolvedPullRequestStack;
 };
 
+export type InboxSectionQueryData = {
+    sectionId: InboxSectionId;
+    pullRequests: Array<PullRequestSummary>;
+    totalCount: number;
+    pageInfo: InboxPullRequestPageInfo;
+    lastLoadedAt: string | null;
+};
+
 export type InboxFetchResult = {
     data: InboxQueryData;
     successes: number;

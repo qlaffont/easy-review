@@ -6,6 +6,7 @@ import {
     GitPullRequest,
     GitPullRequestClosed,
     GitPullRequestDraft,
+    Layers,
     MessageSquare,
 } from "lucide-react";
 import { memo } from "react";
@@ -170,9 +171,11 @@ export { PullRequestStateIcon };
 export const PullRequestRow = memo(function PullRequestRow({
     pullRequest,
     selected = false,
+    stackBadge = null,
 }: {
     pullRequest: PullRequestSummary;
     selected?: boolean;
+    stackBadge?: { position: number; total: number } | null;
 }) {
     const [owner = "", repo = ""] = pullRequest.repository.split("/");
     const hasConflicts = pullRequestHasMergeConflicts(pullRequest);
@@ -194,6 +197,14 @@ export const PullRequestRow = memo(function PullRequestRow({
                 <span className="flex min-w-0 items-center gap-2">
                     <PullRequestStateIcon pullRequest={pullRequest} />
                     <span className="truncate font-medium text-foreground">{pullRequest.title}</span>
+                    {stackBadge ? (
+                        <HelpTooltip label={`${stackBadge.position} of ${stackBadge.total} in stack`}>
+                            <span className="inline-flex shrink-0 items-center gap-0.5 rounded-md bg-muted px-1.5 py-0.5 text-[10px] font-medium tabular-nums text-muted-foreground">
+                                <Layers className="size-3" aria-hidden="true" />
+                                {stackBadge.position}/{stackBadge.total}
+                            </span>
+                        </HelpTooltip>
+                    ) : null}
                     {hasConflicts ? (
                         <HelpTooltip label="This branch has conflicts that must be resolved">
                             <span className="inline-flex shrink-0 items-center gap-1 text-xs font-medium text-amber-700 dark:text-amber-400">

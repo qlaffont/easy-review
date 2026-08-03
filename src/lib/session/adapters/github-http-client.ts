@@ -142,6 +142,13 @@ function errorForStatus(response: Response): EasyReviewError {
         return new EasyReviewError("not-found", "GitHub could not find that resource, or this session cannot see it.");
     }
 
+    if (response.status === 422) {
+        return new EasyReviewError(
+            "unknown",
+            "GitHub rejected the request — the search query may be invalid or unsupported for these repositories.",
+        );
+    }
+
     if (response.status === 502 || response.status === 503 || response.status === 504) {
         return new EasyReviewError("unknown", "GitHub is temporarily unreachable. Try again in a moment.");
     }

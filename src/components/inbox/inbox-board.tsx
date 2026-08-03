@@ -18,6 +18,7 @@ import {
 } from "#/components/ui/dropdown-menu.tsx";
 import { InboxLoadingSkeleton, LazyChunkFallback } from "#/components/ui/loading.tsx";
 import { RelativeTime } from "#/components/ui/relative-time.tsx";
+import { useInboxStackBadges } from "#/lib/query/inbox-stack.ts";
 import { useInboxQuery } from "#/lib/query/inbox.ts";
 import { invalidateInboxAfterRepoSelection } from "#/lib/query/invalidate.ts";
 import { useSession, useSessionState } from "#/lib/session/provider.tsx";
@@ -42,7 +43,18 @@ export function InboxBoard() {
     const session = useSession();
     const navigate = useNavigate();
     const openRepoPicker = useOpenRepoPicker();
-    const { data, sections, isLoading, isFetching, isError, error, refresh, revalidate } = useInboxQuery();
+    const {
+        data,
+        sections,
+        sectionFetching,
+        sectionErrors,
+        isLoading,
+        isFetching,
+        isError,
+        error,
+        refresh,
+        revalidate,
+    } = useInboxQuery();
     const login = useSessionState((state) => state.auth.viewer?.login ?? "");
     const inboxUi = useSessionState((state) => state.inbox);
     const selectedCount = useSessionState((state) => state.repos.selected.length);
@@ -60,6 +72,7 @@ export function InboxBoard() {
     const flatRows = sections
         .filter((section) => inboxUi.expandedSections.includes(section.id))
         .flatMap((section) => section.pullRequests.slice(0, visibleCountFor(section.id)));
+    const stackBadges = useInboxStackBadges(flatRows);
     const selected = flatRows.find((pullRequest) => pullRequest.key === selectedKey) ?? flatRows[0] ?? null;
 
     useSetActionTarget(selected ? targetFromSummary(selected) : null);
@@ -260,6 +273,9 @@ export function InboxBoard() {
                                 icon={layoutEntry?.icon}
                                 selectedKey={selected?.key ?? null}
                                 isExpanded={isExpanded}
+                                isFetching={sectionFetching[section.id] ?? false}
+                                sectionError={sectionErrors[section.id] ?? null}
+                                stackBadges={stackBadges}
                                 visibleCount={visibleCount}
                                 onToggle={() => {
                                     if (isExpanded) {
@@ -331,6 +347,9 @@ function InboxSectionPanel({
     icon,
     selectedKey,
     isExpanded,
+    isFetching,
+    sectionError,
+    stackBadges,
     visibleCount,
     onToggle,
     onEditFilters,
@@ -346,6 +365,9 @@ function InboxSectionPanel({
     icon?: SectionIconId;
     selectedKey: string | null;
     isExpanded: boolean;
+    isFetching?: boolean;
+    sectionError?: string | null;
+    stackBadges: Map<string, { position: number; total: number }>;
     visibleCount: number;
     onToggle: () => void;
     onEditFilters: () => void;
@@ -393,10 +415,18 @@ function InboxSectionPanel({
                         />
                     </span>
                     <span className="min-w-0 truncate">{section.label}</span>
+                    {isFetching ? (
+                        <RefreshCw
+                            className="ml-auto size-3.5 shrink-0 animate-spin text-muted-foreground"
+                            aria-hidden="true"
+                        />
+                    ) : null}
                     <span
                         className={cn(
-                            "ml-auto rounded-full px-2 py-0.5 text-xs font-medium tabular-nums",
+                            "rounded-full px-2 py-0.5 text-xs font-medium tabular-nums",
                             count > 0 ? visual.countClass : "bg-muted/80 text-muted-foreground",
+                            !isFetching && "ml-auto",
+                            isFetching && "shrink-0",
                         )}
                         style={count > 0 ? visual.tones?.count : undefined}
                     >
@@ -423,7 +453,9 @@ function InboxSectionPanel({
             </h2>
 
             {isExpanded ? (
-                section.pullRequests.length === 0 ? (
+                sectionError && section.pullRequests.length === 0 ? (
+                    <p className="px-3 py-3 text-sm text-destructive">{sectionError}</p>
+                ) : section.pullRequests.length === 0 ? (
                     emptySectionRow
                 ) : (
                     <div className="flex flex-col">
@@ -432,6 +464,7 @@ function InboxSectionPanel({
                                 key={pullRequest.key}
                                 pullRequest={pullRequest}
                                 selected={pullRequest.key === selectedKey}
+                                stackBadge={stackBadges.get(pullRequest.key) ?? null}
                                 onSelect={onSelect}
                             />
                         ))}
@@ -462,15 +495,17 @@ function InboxSectionPanel({
 function SelectableRow({
     pullRequest,
     selected,
+    stackBadge,
     onSelect,
 }: {
     pullRequest: PullRequestSummary;
     selected: boolean;
+    stackBadge: { position: number; total: number } | null;
     onSelect: (key: string) => void;
 }) {
     return (
         <div onMouseEnter={() => onSelect(pullRequest.key)} onFocusCapture={() => onSelect(pullRequest.key)}>
-            <PullRequestRow pullRequest={pullRequest} selected={selected} />
+            <PullRequestRow pullRequest={pullRequest} selected={selected} stackBadge={stackBadge} />
         </div>
     );
 }

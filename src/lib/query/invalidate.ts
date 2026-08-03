@@ -1,7 +1,7 @@
 import type { QueryClient } from "@tanstack/react-query";
 
 import { CACHE_POLICY } from "#/lib/query/cache-policy.ts";
-import { inboxQueryKey } from "#/lib/query/inbox.ts";
+import { inboxSectionQueryPrefix } from "#/lib/query/inbox.ts";
 import { queryKeys } from "#/lib/query/query-keys.ts";
 import { pullRequestKey } from "#/lib/session/session.ts";
 
@@ -21,12 +21,12 @@ export function invalidateAllQueriesOnPageReload(queryClient: QueryClient): void
 
 /** User clicked Refresh or catalog action — force refetch visible data. */
 export async function invalidateInboxForRefresh(queryClient: QueryClient, login: string): Promise<void> {
-    await queryClient.invalidateQueries({ queryKey: inboxQueryKey(login), refetchType: "active" });
+    await queryClient.invalidateQueries({ queryKey: inboxSectionQueryPrefix(login), refetchType: "active" });
 }
 
 /** Repo allowlist changed — inbox classification may shift. */
 export function invalidateInboxAfterRepoSelection(queryClient: QueryClient, login: string): void {
-    void queryClient.invalidateQueries({ queryKey: inboxQueryKey(login), refetchType: "active" });
+    void queryClient.invalidateQueries({ queryKey: inboxSectionQueryPrefix(login), refetchType: "active" });
 }
 
 /** Tab focus / quiet interval — refetch only when outside the background window. */
@@ -39,7 +39,7 @@ export function revalidateInboxInBackground(
     if (lastLoadedAt && Date.now() - Date.parse(lastLoadedAt) < backgroundRevalidateMinMs) {
         return;
     }
-    void queryClient.invalidateQueries({ queryKey: inboxQueryKey(login), refetchType: "active" });
+    void queryClient.invalidateQueries({ queryKey: inboxSectionQueryPrefix(login), refetchType: "active" });
 }
 
 /** Manual PR refresh — detail + files (+ drop cached diffs). Awaits network completion. */
@@ -124,7 +124,7 @@ export function invalidatePullRequestSecondaryAfterMutation(
         void queryClient.invalidateQueries({ queryKey: queryKeys.pullRequest.threads(key), refetchType: "active" });
     }
     void queryClient.invalidateQueries({ queryKey: queryKeys.pullRequest.related(key), refetchType: "active" });
-    void queryClient.invalidateQueries({ queryKey: inboxQueryKey(login), refetchType: "active" });
+    void queryClient.invalidateQueries({ queryKey: inboxSectionQueryPrefix(login), refetchType: "active" });
 }
 
 /** After merge / label / review / close — refresh overview + timeline surfaces. */
