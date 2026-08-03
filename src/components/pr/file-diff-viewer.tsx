@@ -1659,7 +1659,11 @@ function VirtualDiffLines({
                                 key={item.key}
                                 data-index={item.index}
                                 ref={virtualizer.measureElement}
-                                className={cn("absolute top-0 left-0 w-full", !wrapLines && "overflow-hidden")}
+                                className={cn(
+                                    "absolute top-0 left-0 w-full",
+                                    !wrapLines && "overflow-hidden",
+                                    layout === "split" && (row.kind === "notes" || row.kind === "compose") && "z-[11]",
+                                )}
                                 style={{ transform: `translateY(${item.start}px)` }}
                             >
                                 {row.kind === "notes" ? (
