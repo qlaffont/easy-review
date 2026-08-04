@@ -164,16 +164,34 @@ export function isGithubPrivateMediaUrl(src: string | undefined): boolean {
     return isGithubUserAttachmentUrl(src) || isGithubRepoBlobRawUrl(src);
 }
 
+function looksLikeMediaLinkLabel(linkText: string): boolean {
+    const text = linkText.trim();
+    if (!text) {
+        return true;
+    }
+    if (/\(uploaded via Graphite\)/i.test(text)) {
+        return true;
+    }
+    return VIDEO_IN_LINK_LABEL.test(text) || IMAGE_IN_LINK_LABEL.test(text);
+}
+
 /**
  * GitHub auto-embeds bare `user-attachments` URLs (autolinks). Named links with a media
  * filename or Graphite’s “(uploaded via Graphite)” label are embedded too.
+ * After `bodyHTML` rewrite, the href may already be a signed `private-user-images` URL.
  */
 export function shouldEmbedGithubAttachment(href: string | undefined, linkText: string): boolean {
-    if (!isGithubUserAttachmentUrl(href) || !href) {
+    if (!href) {
         return false;
     }
 
     const text = linkText.trim();
+    const isUserAttachment = isGithubUserAttachmentUrl(href);
+    const isSignedMedia = !isUserAttachment && isAllowedResolvedAttachmentSrc(href);
+
+    if (!isUserAttachment && !isSignedMedia) {
+        return false;
+    }
 
     if (text === href) {
         return true;
@@ -188,16 +206,7 @@ export function shouldEmbedGithubAttachment(href: string | undefined, linkText: 
         /* fall through */
     }
 
-    if (/\(uploaded via Graphite\)/i.test(text)) {
-        return true;
-    }
-
-    if (VIDEO_IN_LINK_LABEL.test(text) || IMAGE_IN_LINK_LABEL.test(text)) {
-        return true;
-    }
-
-    // GitHub wraps uploaded media in `<a href="user-attachments/…"><img …></a>` with no link text.
-    if (!text) {
+    if (looksLikeMediaLinkLabel(text)) {
         return true;
     }
 

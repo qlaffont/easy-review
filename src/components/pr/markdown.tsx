@@ -25,6 +25,7 @@ import {
     attachmentLabelFromLinkText,
     isAllowedResolvedAttachmentSrc,
     isGithubPrivateMediaUrl,
+    isGithubRepoBlobRawUrl,
     isGithubUserAttachmentUrl,
     isGraphiteUserAttachmentUrl,
     mediaKindFromLinkText,
@@ -484,6 +485,20 @@ function GraphiteAttachmentMedia({ src, name, kind }: { src: string; name?: stri
  * `<img>`/`<video>`, so bare github.com URLs fail for private repos — wait for a signed URL
  * (or reuse one from GitHub HTML) before mounting media.
  */
+function alreadySignedAttachment(src: string, preferredKind?: "image" | "video"): ResolvedGithubAttachment | null {
+    if (isGithubUserAttachmentUrl(src) || isGithubPrivateMediaUrl(src)) {
+        return null;
+    }
+    if (!isAllowedResolvedAttachmentSrc(src)) {
+        return null;
+    }
+    return {
+        kind:
+            preferredKind ?? mediaKindFromLinkText(src) ?? (/\.(mp4|webm|mov)(?:\?|$)/i.test(src) ? "video" : "image"),
+        src,
+    };
+}
+
 function GithubAttachmentMedia({
     src,
     preferredKind,
@@ -496,32 +511,42 @@ function GithubAttachmentMedia({
 }) {
     const repository = useContext(MarkdownRepoContext);
     const session = useOptionalSession();
-    const [resolved, setResolved] = useState<ResolvedGithubAttachment | null>(initialResolved);
-    const canResolve = Boolean(session && (!isGithubUserAttachmentUrl(src) || repository));
+    const signed = initialResolved ?? alreadySignedAttachment(src, preferredKind);
+    const [resolved, setResolved] = useState<ResolvedGithubAttachment | null>(signed);
+    const isUserAttachment = isGithubUserAttachmentUrl(src);
+    const needsAuthResolve = isUserAttachment || isGithubRepoBlobRawUrl(src);
+    const canResolve = Boolean(session && (!isUserAttachment || repository));
     const [status, setStatus] = useState<"loading" | "ready" | "failed">(() => {
-        if (initialResolved) {
+        if (signed) {
             return "ready";
         }
-        return canResolve ? "loading" : "failed";
+        return canResolve && needsAuthResolve ? "loading" : "failed";
     });
     const [retried, setRetried] = useState(false);
-    const isUserAttachment = isGithubUserAttachmentUrl(src);
 
     useEffect(() => {
-        if (initialResolved && !retried) {
+        if (signed && !retried) {
+            return;
+        }
+        if (!needsAuthResolve) {
+            if (signed) {
+                setStatus("ready");
+            } else {
+                setStatus("failed");
+            }
             return;
         }
         if (!session) {
-            setStatus(initialResolved ? "ready" : "failed");
+            setStatus(signed ? "ready" : "failed");
             return;
         }
         if (isUserAttachment && !repository) {
-            setStatus(initialResolved ? "ready" : "failed");
+            setStatus(signed ? "ready" : "failed");
             return;
         }
 
         let cancelled = false;
-        if (!initialResolved || retried) {
+        if (!signed || retried) {
             setStatus("loading");
         }
         const resolve = isUserAttachment
@@ -538,12 +563,12 @@ function GithubAttachmentMedia({
                     setStatus("ready");
                     return;
                 }
-                if (!initialResolved) {
+                if (!signed) {
                     setStatus("failed");
                 }
             })
             .catch(() => {
-                if (!cancelled && !initialResolved) {
+                if (!cancelled && !signed) {
                     setStatus("failed");
                 }
             });
@@ -551,7 +576,7 @@ function GithubAttachmentMedia({
         return () => {
             cancelled = true;
         };
-    }, [session, repository, src, retried, isUserAttachment, initialResolved]);
+    }, [session, repository, src, retried, isUserAttachment, signed, needsAuthResolve]);
 
     if (status === "failed") {
         return <AttachmentFallback href={src} name={resolved?.name} />;

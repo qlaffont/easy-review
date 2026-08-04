@@ -41,6 +41,7 @@ import {
     parseGithubAttachmentMarkdownHtml,
     parseGithubRepoBlobRawUrl,
 } from "#/lib/github-attachment.ts";
+import { rewriteUserAttachmentsFromHtml } from "#/lib/rewrite-user-attachments.ts";
 import { applySuggestionsToFile, type SuggestionChange } from "#/lib/session/apply-suggestion.ts";
 import { buildFileDiff } from "#/lib/session/build-file-diff.ts";
 import { mapCheckRuns, type CheckContextInput } from "#/lib/session/check-runs.ts";
@@ -2776,6 +2777,7 @@ type UserContentEditsNode = {
 
 type PullRequestDetailNode = Omit<PullRequestNode, "commits"> & {
     body: string;
+    bodyHTML?: string | null;
     lastEditedAt: string | null;
     includesCreatedEdit: boolean;
     editor: ContentEditorNode;
@@ -2865,6 +2867,7 @@ const PULL_REQUEST_QUERY = `
             pullRequest(number: $number) {
                 ${PULL_REQUEST_SUMMARY_FIELDS}
                 body
+                bodyHTML
                 lastEditedAt
                 includesCreatedEdit
                 editor {
@@ -3105,6 +3108,7 @@ const PULL_REQUEST_TIMELINE_QUERY = `
                             id
                             databaseId
                             body
+                            bodyHTML
                             createdAt
                             url
                             lastEditedAt
@@ -3377,6 +3381,7 @@ type TimelineNode =
           id: string;
           databaseId: number | null;
           body: string;
+          bodyHTML?: string | null;
           createdAt: string;
           url: string;
           lastEditedAt: string | null;
@@ -3577,7 +3582,7 @@ function toTimelineItem(node: TimelineNode): PullRequestTimelineItem | null {
                 databaseId: node.databaseId,
                 author: node.author?.login ?? "ghost",
                 authorAvatarUrl: node.author?.avatarUrl ?? null,
-                body: node.body,
+                body: rewriteUserAttachmentsFromHtml(node.body, node.bodyHTML),
                 createdAt: node.createdAt,
                 url: node.url,
                 lastEditedAt: node.lastEditedAt ?? null,
@@ -4020,7 +4025,7 @@ function toPullRequestDetail(node: PullRequestDetailNode, settings: RepositoryMe
                     : [],
             },
         }),
-        body: node.body,
+        body: rewriteUserAttachmentsFromHtml(node.body, node.bodyHTML),
         lastEditedAt: node.lastEditedAt ?? null,
         editor: toContentEditor(node.editor),
         editCount,
@@ -4153,6 +4158,7 @@ type ReviewThreadCommentNode = {
     databaseId: number | null;
     url: string;
     body: string;
+    bodyHTML?: string | null;
     createdAt: string;
     diffHunk?: string | null;
     author: { login: string; avatarUrl: string | null } | null;
@@ -4200,6 +4206,7 @@ const REVIEW_THREADS_QUERY = `
                                 databaseId
                                 url
                                 body
+                                bodyHTML
                                 createdAt
                                 diffHunk
                                 author {
@@ -4234,6 +4241,7 @@ const REPLY_TO_THREAD_MUTATION = `
                 databaseId
                 url
                 body
+                bodyHTML
                 createdAt
                 author {
                     login
@@ -4333,7 +4341,7 @@ function toThreadComment(node: ReviewThreadCommentNode): ReviewThreadComment | n
         databaseId: node.databaseId,
         author: node.author?.login ?? "ghost",
         authorAvatarUrl: node.author?.avatarUrl ?? null,
-        body: node.body,
+        body: rewriteUserAttachmentsFromHtml(node.body, node.bodyHTML),
         createdAt: node.createdAt,
         url: node.url,
         reactionGroups: toReactionGroups(node.reactionGroups),

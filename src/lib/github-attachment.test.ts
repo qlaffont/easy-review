@@ -167,6 +167,15 @@ describe("Markdown github attachment embeds", () => {
         expect(html).not.toMatch(new RegExp(`<a[^>]*href="${ATTACHMENT.replaceAll("/", "\\/")}"`));
     });
 
+    it("embeds rewritten private-user-images screenshot links as images", () => {
+        const signed = "https://private-user-images.githubusercontent.com/1/abc.png?jwt=test";
+        const html = renderMarkdown(`[Capture d'écran 2026-08-04 à 12.02.08.png](${signed})`);
+
+        expect(html).toContain(`src="${signed}"`);
+        expect(html).toMatch(/<img\b/);
+        expect(html).not.toContain("Capture d'écran 2026-08-04 à 12.02.08.png");
+    });
+
     it("renders Graphite video links with HTML label as an embedded player", () => {
         const markdown = `[Enregistrement de l'écran 2026-07-30 à 17.56.22.mov <span class="graphite__hidden">(uploaded via Graphite)</span> <img class="graphite__hidden" src="https://app.graphite.com/user-attachments/thumbnails/4280fb23-bfcc-429d-95a4-461f52ce5fc1.mov" />](${GRAPHITE_VIDEO})`;
         const html = renderMarkdown(markdown);
