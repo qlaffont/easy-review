@@ -667,3 +667,31 @@ describe("resolveReviewRequestPayload", () => {
         });
     });
 });
+
+describe("REST validation errors", () => {
+    it("surfaces GitHub validation details on 422 instead of a generic search message", async () => {
+        const github = createGithubHttpClient(
+            async () =>
+                new Response(
+                    JSON.stringify({
+                        message: "Validation Failed",
+                        errors: [{ message: "Line could not be resolved" }],
+                    }),
+                    { status: 422, headers: { "content-type": "application/json" } },
+                ),
+        );
+
+        await expect(
+            github.addPendingReviewComment("token", "acme/api", 1, {
+                reviewId: 1,
+                headSha: "abc123",
+                path: "src/foo.ts",
+                line: 12,
+                side: "RIGHT",
+                body: "test",
+            }),
+        ).rejects.toMatchObject({
+            message: "Validation Failed Line could not be resolved",
+        });
+    });
+});

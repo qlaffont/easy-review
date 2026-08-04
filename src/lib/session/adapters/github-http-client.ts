@@ -121,7 +121,31 @@ function resetHeaderToIso(headers: Headers): string | undefined {
     return undefined;
 }
 
-function errorForStatus(response: Response): EasyReviewError {
+async function readRestErrorDetail(response: Response): Promise<string | null> {
+    try {
+        const body = (await response.json()) as {
+            message?: string;
+            errors?: Array<{ message?: string }>;
+        };
+        const parts: string[] = [];
+        if (body.message?.trim()) {
+            parts.push(humanizeGithubMessage(body.message.trim()));
+        }
+        for (const entry of body.errors ?? []) {
+            if (entry.message?.trim()) {
+                parts.push(entry.message.trim());
+            }
+        }
+        if (parts.length === 0) {
+            return null;
+        }
+        return [...new Set(parts)].join(" ");
+    } catch {
+        return null;
+    }
+}
+
+async function errorFromResponse(response: Response): Promise<EasyReviewError> {
     if (response.status === 401) {
         return new EasyReviewError(
             "unauthorized",
@@ -142,11 +166,9 @@ function errorForStatus(response: Response): EasyReviewError {
         return new EasyReviewError("not-found", "GitHub could not find that resource, or this session cannot see it.");
     }
 
-    if (response.status === 422) {
-        return new EasyReviewError(
-            "unknown",
-            "GitHub rejected the request — the search query may be invalid or unsupported for these repositories.",
-        );
+    if (response.status === 400 || response.status === 422) {
+        const detail = await readRestErrorDetail(response);
+        return new EasyReviewError("unknown", detail ?? "GitHub rejected the request — check the input and try again.");
     }
 
     if (response.status === 502 || response.status === 503 || response.status === 504) {
@@ -257,7 +279,7 @@ export function createGithubHttpClient(
         }
 
         if (!response.ok) {
-            throw errorForStatus(response);
+            throw await errorFromResponse(response);
         }
 
         const payload = (await response.json()) as GraphqlResponse<TData>;
@@ -317,7 +339,7 @@ export function createGithubHttpClient(
                         const response = await rest(token, path);
 
                         if (!response.ok) {
-                            throw errorForStatus(response);
+                            throw await errorFromResponse(response);
                         }
 
                         const payload = (await response.json()) as { repositories?: Array<RestRepositoryNode> };
@@ -707,7 +729,7 @@ export function createGithubHttpClient(
                 const response = await rest(token, path);
 
                 if (!response.ok) {
-                    throw errorForStatus(response);
+                    throw await errorFromResponse(response);
                 }
 
                 const nodes = (await response.json()) as Array<RestUserNode>;
@@ -734,7 +756,7 @@ export function createGithubHttpClient(
                 const response = await rest(token, path);
 
                 if (!response.ok) {
-                    throw errorForStatus(response);
+                    throw await errorFromResponse(response);
                 }
 
                 const nodes = (await response.json()) as Array<RestLabelNode>;
@@ -947,7 +969,7 @@ export function createGithubHttpClient(
                 const response = await rest(token, path);
 
                 if (!response.ok) {
-                    throw errorForStatus(response);
+                    throw await errorFromResponse(response);
                 }
 
                 const nodes = (await response.json()) as Array<RestIssueCommentNode>;
@@ -1513,7 +1535,7 @@ export function createGithubHttpClient(
                         baseTreeSha = commit.tree.sha;
                     }
                 } else if (existing.status !== 404) {
-                    throw errorForStatus(existing);
+                    throw await errorFromResponse(existing);
                 }
 
                 const blob = (await restJson(token, "POST", `/repos/${owner}/${name}/git/blobs`, {
@@ -1596,7 +1618,7 @@ export function createGithubHttpClient(
             }
 
             if (!response.ok) {
-                throw errorForStatus(response);
+                throw await errorFromResponse(response);
             }
 
             return parseGithubAttachmentMarkdownHtml(await response.text());
@@ -1845,7 +1867,7 @@ export function createGithubHttpClient(
         }
 
         if (!response.ok) {
-            throw errorForStatus(response);
+            throw await errorFromResponse(response);
         }
 
         if (response.status === 204) {
@@ -1973,7 +1995,7 @@ export function createGithubHttpClient(
         }
 
         if (!response.ok) {
-            throw errorForStatus(response);
+            throw await errorFromResponse(response);
         }
 
         const payload = (await response.json()) as {
@@ -2010,7 +2032,7 @@ export function createGithubHttpClient(
         const download = await rest(token, contentsPath, "application/vnd.github.raw");
 
         if (!download.ok) {
-            throw errorForStatus(download);
+            throw await errorFromResponse(download);
         }
 
         return { bytes: new Uint8Array(await download.arrayBuffer()) };
@@ -4016,7 +4038,7 @@ async function listInstallationIds(
         const response = await rest(token, path);
 
         if (!response.ok) {
-            throw errorForStatus(response);
+            throw await errorFromResponse(response);
         }
 
         const payload = (await response.json()) as { installations?: Array<RestInstallationNode> };

@@ -2708,12 +2708,11 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
                             return cached;
                         }
 
-                        const results = await github.searchPullRequests(requireToken(), {
-                            query: `https://github.com/${repository}/pull/${pullRequestNumber}`,
-                            repositories: [repository],
-                            limit: 1,
-                        });
-                        return results[0] ?? null;
+                        try {
+                            return await github.getPullRequest(requireToken(), repository, pullRequestNumber);
+                        } catch {
+                            return null;
+                        }
                     }),
                 )
             ).flatMap((pullRequest) => (pullRequest ? [pullRequest] : []));
