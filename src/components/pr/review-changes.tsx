@@ -58,6 +58,7 @@ import {
     useReviewThreadsQuery,
 } from "#/lib/query/pull-request.ts";
 import { useReviewDraft } from "#/lib/query/review-draft.ts";
+import { shouldConfirmLargeFile } from "#/lib/session/diff-policy.ts";
 import { useSession } from "#/lib/session/provider.tsx";
 import { notifyAction, notifyError } from "#/lib/toast.ts";
 import { cn } from "#/lib/utils.ts";
@@ -93,8 +94,7 @@ export function ReviewChanges({
     const [resizingFileList, setResizingFileList] = useState(false);
     const fileListWidth = preferences.fileListWidth;
     const [commitRange, setCommitRange] = useState<CommitRangeValue>({ mode: "all" });
-    const selectedDiffQuery = useFileDiffQuery(repository, number, commitRange.mode === "range" ? null : selectedPath);
-    const selectedDiff = commitRange.mode === "range" ? null : selectedDiffQuery;
+    const [confirmedLargePaths, setConfirmedLargePaths] = useState<Set<string>>(() => new Set());
     const [rangeFiles, setRangeFiles] = useState<Array<PullRequestFile> | null>(null);
     const [rangeFilesStatus, setRangeFilesStatus] = useState<"idle" | "loading" | "ready" | "error">("idle");
     const [rangeFilesError, setRangeFilesError] = useState<string | null>(null);
@@ -112,10 +112,22 @@ export function ReviewChanges({
         ? `${commitRange.baseOid}:${commitRange.headOid}:${rangeFilesStatus}`
         : files.lastLoadedAt;
 
+    const selectedFile = filesItems.find((file) => file.path === selectedPath) ?? null;
+    const needsLargeConfirm =
+        selectedFile !== null && shouldConfirmLargeFile(selectedFile) && !confirmedLargePaths.has(selectedFile.path);
+    const selectedDiffQuery = useFileDiffQuery(repository, number, commitRange.mode === "range" ? null : selectedPath, {
+        enabled: !needsLargeConfirm,
+    });
+    const selectedDiff = commitRange.mode === "range" ? null : selectedDiffQuery;
+
     const viewedCount = filesItems.filter((file) => fileViewState(viewedMarks, file.path, headSha) === "viewed").length;
     const allViewed = filesStatus === "ready" && filesItems.length > 0 && viewedCount === filesItems.length;
     const showFileDiff = selectedPath !== null && (!allViewed || browsingViewedFile);
     const fileListSelectedPath = showFileDiff ? selectedPath : null;
+
+    useEffect(() => {
+        setConfirmedLargePaths(new Set());
+    }, [repository, number]);
 
     useEffect(() => {
         const local = readViewedFileMarks(repository, number, headSha);
@@ -191,7 +203,12 @@ export function ReviewChanges({
     }
 
     useEffect(() => {
-        if (!selectedPath || !showFileDiff || commitRange.mode !== "range") {
+        if (!selectedPath || !showFileDiff || commitRange.mode !== "range" || needsLargeConfirm) {
+            if (needsLargeConfirm) {
+                setRangeDiff(null);
+                setRangeDiffStatus("idle");
+                setRangeDiffError(null);
+            }
             return;
         }
 
@@ -222,20 +239,31 @@ export function ReviewChanges({
                 setRangeDiffStatus("error");
                 setRangeDiffError(cause instanceof Error ? cause.message : "Could not load the file.");
             });
-    }, [session, repository, number, selectedPath, filesEpoch, commitRange, filesItems, showFileDiff]);
+    }, [
+        session,
+        repository,
+        number,
+        selectedPath,
+        filesEpoch,
+        commitRange,
+        filesItems,
+        showFileDiff,
+        needsLargeConfirm,
+    ]);
 
     const pendingOnFile = draft.comments.filter((comment) => comment.path === selectedPath);
     const threadsOnFile = selectedPath ? threads.items.filter((thread) => thread.path === selectedPath) : [];
     const fileCount = filesStatus === "ready" ? filesItems.length : null;
-    const selectedFile = filesItems.find((file) => file.path === selectedPath) ?? null;
     const activeDiff = isolatingRange ? rangeDiff : (selectedDiff?.diff ?? null);
     const displayDiff = activeDiff && selectedPath && activeDiff.path === selectedPath ? activeDiff : null;
-    const diffPending = isolatingRange
-        ? rangeDiffStatus === "idle" || rangeDiffStatus === "loading"
-        : selectedDiff === null ||
-          selectedDiff.status === "idle" ||
-          selectedDiff.status === "loading" ||
-          selectedDiff.refreshing === true;
+    const diffPending = needsLargeConfirm
+        ? false
+        : isolatingRange
+          ? rangeDiffStatus === "idle" || rangeDiffStatus === "loading"
+          : selectedDiff === null ||
+            selectedDiff.status === "idle" ||
+            selectedDiff.status === "loading" ||
+            selectedDiff.refreshing === true;
     const activeDiffError = isolatingRange ? rangeDiffError : (selectedDiff?.error?.message ?? null);
     const selectedViewState = selectedPath ? fileViewState(viewedMarks, selectedPath, headSha) : "unseen";
     const selectionDiffStats = (() => {
@@ -324,6 +352,13 @@ export function ReviewChanges({
             return;
         }
         await selectedDiffQuery.refresh();
+    }
+
+    function confirmLargeFileLoad() {
+        if (!selectedPath) {
+            return;
+        }
+        setConfirmedLargePaths((current) => new Set(current).add(selectedPath));
     }
 
     return (
@@ -503,85 +538,89 @@ export function ReviewChanges({
                     </aside>
                     <div className="flex min-h-0 min-w-0 flex-1 flex-col p-2 transition-[padding] duration-300 ease-out motion-reduce:transition-none">
                         {showFileDiff && selectedPath ? (
-                            <Suspense fallback={<DiffLoadingSkeleton path={selectedPath} />}>
-                                <FileDiffViewer
-                                    key={selectedPath}
-                                    path={selectedPath}
-                                    file={selectedFile}
-                                    diff={displayDiff}
-                                    isLoading={diffPending}
-                                    error={activeDiffError}
-                                    pendingComments={pendingOnFile}
-                                    threads={threadsOnFile}
-                                    viewerLogin={viewer?.login ?? null}
-                                    viewerAvatarUrl={viewer?.avatarUrl ?? null}
-                                    showInlineComments={!preferences.minimizeComments}
-                                    disabled={draft.stale}
-                                    repository={repository}
-                                    number={number}
-                                    canApplySuggestions={page.detail?.state === "open" && !isolatingRange}
-                                    mentionUsers={mentionUsers}
-                                    layout={preferences.layout}
-                                    hideWhitespace={preferences.hideWhitespace}
-                                    compactLineHeight={preferences.compactLineHeight}
-                                    wrapLines={preferences.wrapLines}
-                                    viewed={selectedViewState === "viewed"}
-                                    onViewedChange={(viewed) => setPathViewed(selectedPath, viewed)}
-                                    previewBaseUrl={
-                                        page.detail
-                                            ? `https://github.com/${page.detail.repository}/blob/${page.detail.headRefName}/`
-                                            : `https://github.com/${repository}/`
-                                    }
-                                    onLoadAnyway={() =>
-                                        void notifyAction(() => loadSelectedFileForce(), {
-                                            loading: "Loading file…",
-                                            success: "File loaded",
-                                            error: "Could not load the file.",
-                                        })
-                                    }
-                                    onAddComment={async (target, body) => {
-                                        await notifyAction(
-                                            () =>
-                                                session.addPendingComment(repository, number, {
-                                                    path: target.path,
-                                                    line: target.line,
-                                                    side: target.side,
-                                                    body,
-                                                }),
-                                            {
-                                                loading: "Adding comment to review…",
-                                                success: "Comment staged for review",
-                                                error: "Could not stage the comment.",
-                                            },
-                                        );
-                                    }}
-                                    onAddSingleComment={async (target, body) => {
-                                        await notifyAction(
-                                            () =>
-                                                session.addSingleLineComment(repository, number, {
-                                                    path: target.path,
-                                                    line: target.line,
-                                                    side: target.side,
-                                                    body,
-                                                }),
-                                            {
-                                                loading: "Posting comment…",
-                                                success: "Comment posted",
-                                                error: "Could not post the comment.",
-                                            },
-                                        );
-                                    }}
-                                    onRemovePending={async (commentId) => {
-                                        await session.removePendingComment(repository, number, commentId);
-                                    }}
-                                    onUpdatePending={async (commentId, body) => {
-                                        await session.updatePendingComment(repository, number, commentId, body);
-                                    }}
-                                    onReplyToThread={async (threadId, body) => {
-                                        await session.replyToReviewThread(repository, number, threadId, body);
-                                    }}
-                                />
-                            </Suspense>
+                            needsLargeConfirm && selectedFile ? (
+                                <LargeDiffConfirmPanel file={selectedFile} onLoad={confirmLargeFileLoad} />
+                            ) : (
+                                <Suspense fallback={<DiffLoadingSkeleton path={selectedPath} />}>
+                                    <FileDiffViewer
+                                        key={selectedPath}
+                                        path={selectedPath}
+                                        file={selectedFile}
+                                        diff={displayDiff}
+                                        isLoading={diffPending}
+                                        error={activeDiffError}
+                                        pendingComments={pendingOnFile}
+                                        threads={threadsOnFile}
+                                        viewerLogin={viewer?.login ?? null}
+                                        viewerAvatarUrl={viewer?.avatarUrl ?? null}
+                                        showInlineComments={!preferences.minimizeComments}
+                                        disabled={draft.stale}
+                                        repository={repository}
+                                        number={number}
+                                        canApplySuggestions={page.detail?.state === "open" && !isolatingRange}
+                                        mentionUsers={mentionUsers}
+                                        layout={preferences.layout}
+                                        hideWhitespace={preferences.hideWhitespace}
+                                        compactLineHeight={preferences.compactLineHeight}
+                                        wrapLines={preferences.wrapLines}
+                                        viewed={selectedViewState === "viewed"}
+                                        onViewedChange={(viewed) => setPathViewed(selectedPath, viewed)}
+                                        previewBaseUrl={
+                                            page.detail
+                                                ? `https://github.com/${page.detail.repository}/blob/${page.detail.headRefName}/`
+                                                : `https://github.com/${repository}/`
+                                        }
+                                        onLoadAnyway={() =>
+                                            void notifyAction(() => loadSelectedFileForce(), {
+                                                loading: "Loading file…",
+                                                success: "File loaded",
+                                                error: "Could not load the file.",
+                                            })
+                                        }
+                                        onAddComment={async (target, body) => {
+                                            await notifyAction(
+                                                () =>
+                                                    session.addPendingComment(repository, number, {
+                                                        path: target.path,
+                                                        line: target.line,
+                                                        side: target.side,
+                                                        body,
+                                                    }),
+                                                {
+                                                    loading: "Adding comment to review…",
+                                                    success: "Comment staged for review",
+                                                    error: "Could not stage the comment.",
+                                                },
+                                            );
+                                        }}
+                                        onAddSingleComment={async (target, body) => {
+                                            await notifyAction(
+                                                () =>
+                                                    session.addSingleLineComment(repository, number, {
+                                                        path: target.path,
+                                                        line: target.line,
+                                                        side: target.side,
+                                                        body,
+                                                    }),
+                                                {
+                                                    loading: "Posting comment…",
+                                                    success: "Comment posted",
+                                                    error: "Could not post the comment.",
+                                                },
+                                            );
+                                        }}
+                                        onRemovePending={async (commentId) => {
+                                            await session.removePendingComment(repository, number, commentId);
+                                        }}
+                                        onUpdatePending={async (commentId, body) => {
+                                            await session.updatePendingComment(repository, number, commentId, body);
+                                        }}
+                                        onReplyToThread={async (threadId, body) => {
+                                            await session.replyToReviewThread(repository, number, threadId, body);
+                                        }}
+                                    />
+                                </Suspense>
+                            )
                         ) : allViewed ? (
                             <AllFilesViewedPanel />
                         ) : (
@@ -1093,6 +1132,9 @@ function FileRow({
                     {file.stub ? (
                         <span className="uppercase tracking-wide text-muted-foreground">{file.stub}</span>
                     ) : null}
+                    {shouldConfirmLargeFile(file) ? (
+                        <span className="uppercase tracking-wide text-muted-foreground">large</span>
+                    ) : null}
                     {viewed ? (
                         <span className="rounded bg-emerald-500/15 px-1 py-px font-medium tracking-wide text-emerald-700 uppercase dark:bg-emerald-400/15 dark:text-emerald-300">
                             viewed
@@ -1106,6 +1148,39 @@ function FileRow({
                 </span>
             </span>
         </button>
+    );
+}
+
+function LargeDiffConfirmPanel({ file, onLoad }: { file: PullRequestFile; onLoad: () => void }) {
+    const changes = file.additions + file.deletions;
+
+    return (
+        <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border bg-card">
+            <header className="border-b px-4 py-3">
+                <p className="truncate font-mono text-sm">{file.path}</p>
+            </header>
+            <div className="flex flex-1 flex-col items-start justify-center gap-4 p-8">
+                <div className="max-w-lg">
+                    <p className="text-sm font-medium">Large diff</p>
+                    <p className="mt-1 text-sm text-muted-foreground">
+                        This file has{" "}
+                        <span className="tabular-nums">
+                            {file.additions > 0 ? (
+                                <span className="text-emerald-600 dark:text-emerald-400">+{file.additions}</span>
+                            ) : null}
+                            {file.additions > 0 && file.deletions > 0 ? " " : null}
+                            {file.deletions > 0 ? (
+                                <span className="text-red-600 dark:text-red-400">−{file.deletions}</span>
+                            ) : null}
+                        </span>{" "}
+                        ({changes.toLocaleString()} changed lines). Loading it may slow the tab down.
+                    </p>
+                </div>
+                <Button size="sm" onClick={onLoad}>
+                    Load diff
+                </Button>
+            </div>
+        </div>
     );
 }
 

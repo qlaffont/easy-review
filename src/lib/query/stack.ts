@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { useMemo } from "react";
 
-import type { RepoStackIndexQueryData } from "#/lib/query/types.ts";
+import type { PullRequestStackQueryData, RepoStackIndexQueryData } from "#/lib/query/types.ts";
 import type { PullRequestDetailQueryData } from "#/lib/query/types.ts";
 import type { PullRequestStackState } from "#/lib/session/session.ts";
 import type { PullRequestSummary } from "#/lib/session/types.ts";
@@ -14,9 +14,9 @@ import { queryKeys } from "#/lib/query/query-keys.ts";
 import { useSession, useSessionState } from "#/lib/session/provider.tsx";
 import { resolvePullRequestStack, type ResolvedPullRequestStack } from "#/lib/session/pull-request-stacks.ts";
 import { pullRequestKey } from "#/lib/session/session.ts";
-import { areStacksEnabled, getStackPreferences } from "#/lib/stack-preferences.ts";
+import { getStackPreferences, useStackPreferences } from "#/lib/stack-preferences.ts";
 
-async function fetchRepoStackIndex(
+export async function fetchRepoStackIndex(
     session: ReturnType<typeof useSession>,
     repository: string,
     signal?: AbortSignal,
@@ -37,11 +37,12 @@ async function fetchRepoStackIndex(
 export function useRepoStackIndexQuery(repository: string) {
     const session = useSession();
     const login = session.state.state.auth.viewer?.login ?? "";
+    const [stackPreferences] = useStackPreferences();
 
     const query = useQuery({
         queryKey: queryKeys.repository.stackIndex(repository),
         queryFn: ({ signal }) => fetchRepoStackIndex(session, repository, signal),
-        enabled: Boolean(login) && areStacksEnabled(),
+        enabled: Boolean(login) && stackPreferences.enabled,
         staleTime: CACHE_POLICY.repository.stackIndex.staleTime,
         gcTime: CACHE_POLICY.repository.stackIndex.gcTime,
         placeholderData: (previous) => previous,
@@ -86,6 +87,7 @@ export function usePullRequestStackQuery(
     number: number,
 ): PullRequestStackState & { loadGraphite: () => Promise<void> } {
     const session = useSession();
+    const [stackPreferences] = useStackPreferences();
     const index = useRepoStackIndexQuery(repository);
     const inboxForRepo = useInboxPullRequests().filter((pullRequest) => pullRequest.repository === repository);
     const override = useSessionState(
@@ -110,7 +112,7 @@ export function usePullRequestStackQuery(
     );
 
     const branchStack = useMemo((): ResolvedPullRequestStack | null => {
-        if (!areStacksEnabled()) return null;
+        if (!stackPreferences.enabled) return null;
         const { hideClosed } = getStackPreferences();
         return resolvePullRequestStack({
             repository,
@@ -119,10 +121,14 @@ export function usePullRequestStackQuery(
             defaultBranch: index.defaultBranch,
             hideClosed,
         });
-    }, [repository, number, pullRequests, index.defaultBranch]);
+    }, [repository, number, pullRequests, index.defaultBranch, stackPreferences.enabled]);
+
+    const cachedStack = session.queryClient.getQueryData<PullRequestStackQueryData>(
+        queryKeys.pullRequest.stack(pullRequestKey(repository, number)),
+    );
 
     const stackState = useMemo((): PullRequestStackState => {
-        if (!areStacksEnabled()) {
+        if (!stackPreferences.enabled) {
             return { status: "idle", stack: null, error: null };
         }
         if (index.status !== "ready" && index.status !== "error") {
@@ -130,6 +136,12 @@ export function usePullRequestStackQuery(
         }
         if (branchStack) {
             return { status: "ready", stack: branchStack, error: null };
+        }
+        if (cachedStack?.stack) {
+            return { status: "ready", stack: cachedStack.stack, error: null };
+        }
+        if (cachedStack?.resolved) {
+            return { status: "ready", stack: null, error: null };
         }
         if (override?.status === "loading") {
             return { status: "loading", stack: null, error: null };
@@ -141,7 +153,7 @@ export function usePullRequestStackQuery(
             return override;
         }
         return { status: "loading", stack: null, error: null };
-    }, [index.status, branchStack, override]);
+    }, [stackPreferences.enabled, cachedStack, index.status, branchStack, override]);
 
     const loadGraphite = async () => {
         await session.loadGraphiteStack(repository, number);

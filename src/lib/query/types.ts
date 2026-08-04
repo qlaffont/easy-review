@@ -72,7 +72,10 @@ export type RepoStackIndexQueryData = {
 };
 
 export type PullRequestStackQueryData = {
-    stack: ResolvedPullRequestStack;
+    stack: ResolvedPullRequestStack | null;
+    /** Resolution finished (including “no stack found”). */
+    resolved: boolean;
+    lastLoadedAt: string;
 };
 
 export type InboxSectionQueryData = {

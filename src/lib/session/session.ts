@@ -9,7 +9,9 @@ import type {
     PullRequestCommitsQueryData,
     PullRequestDetailQueryData,
     PullRequestFilesQueryData,
+    PullRequestStackQueryData,
     RelatedPullRequestsQueryData,
+    RepoStackIndexQueryData,
     RepositoriesQueryData,
     RepositoryMetadataQueryData,
     ReviewThreadsQueryData,
@@ -117,6 +119,8 @@ const REPOS_ACCOUNT_KEY = "repos:account";
 const INBOX_CACHE_KEY = "inbox:cache";
 const INBOX_EXPANDED_KEY = "inbox:expanded";
 const INBOX_SECTIONS_KEY = "inbox:sections";
+/** Graphite stack resolutions keyed by `owner/repo#number`. */
+const STACK_OVERRIDES_KEY = "stack:overrides";
 /** Background tab-focus revalidates skip if the inbox was refreshed more recently than this. */
 const INBOX_BACKGROUND_REVALIDATE_MIN_MS = CACHE_POLICY.inbox.backgroundRevalidateMinMs;
 /** Index of every persisted draft key so disconnect can wipe them without a store scan. */
@@ -566,6 +570,35 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
         }
     }
 
+    function cacheResolvedPullRequestStack(key: string, stack: ResolvedPullRequestStack | null): void {
+        queryClient.setQueryData<PullRequestStackQueryData>(queryKeys.pullRequest.stack(key), {
+            stack,
+            resolved: true,
+            lastLoadedAt: new Date().toISOString(),
+        });
+    }
+
+    async function persistStackOverridesToStore(): Promise<void> {
+        const payload: Record<string, PullRequestStackQueryData> = {};
+        for (const [key, value] of Object.entries(state.state.pullRequestStackOverrides)) {
+            if (value.status !== "ready") {
+                continue;
+            }
+            payload[key] = {
+                stack: value.stack,
+                resolved: true,
+                lastLoadedAt: new Date().toISOString(),
+            };
+        }
+
+        if (Object.keys(payload).length === 0) {
+            await store.remove(STACK_OVERRIDES_KEY);
+            return;
+        }
+
+        await store.set(STACK_OVERRIDES_KEY, JSON.stringify(payload));
+    }
+
     /** Cancels in-flight PR loads and empties the in-memory workspace (not the persisted store). */
     function resetSessionUi(): void {
         for (const [key, attempt] of latestPullRequestLoads) {
@@ -618,6 +651,7 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
             store.remove(INBOX_CACHE_KEY),
             store.remove(INBOX_EXPANDED_KEY),
             store.remove(INBOX_SECTIONS_KEY),
+            store.remove(STACK_OVERRIDES_KEY),
             clearDraftStorage(),
         ]);
     }
@@ -635,11 +669,12 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
             return;
         }
 
-        const [selected, repositories, inbox, sections] = await Promise.all([
+        const [selected, repositories, inbox, sections, stackOverrides] = await Promise.all([
             readJson<Array<string>>(SELECTED_REPOS_KEY),
             readJson<RepositoriesCache>(REPOS_CACHE_KEY),
             readJson<InboxCache>(INBOX_CACHE_KEY),
             readJson<Array<InboxSectionLayoutEntry>>(INBOX_SECTIONS_KEY),
+            readJson<Record<string, PullRequestStackQueryData>>(STACK_OVERRIDES_KEY),
         ]);
 
         // Live expand/collapse is tab-session memory only; drop any legacy persisted copy.
@@ -681,6 +716,25 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
                 available: repositories.available,
                 lastLoadedAt: repositories.lastLoadedAt,
             });
+        }
+
+        if (stackOverrides) {
+            const restoredOverrides = Object.fromEntries(
+                Object.entries(stackOverrides).map(([key, value]) => [
+                    key,
+                    { status: "ready" as const, stack: value.stack, error: null },
+                ]),
+            );
+            state.setState((prev) => ({
+                ...prev,
+                pullRequestStackOverrides: {
+                    ...prev.pullRequestStackOverrides,
+                    ...restoredOverrides,
+                },
+            }));
+            for (const [key, value] of Object.entries(stackOverrides)) {
+                queryClient.setQueryData<PullRequestStackQueryData>(queryKeys.pullRequest.stack(key), value);
+            }
         }
     }
 
@@ -2570,15 +2624,22 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
                 return;
             }
 
+            const lastLoadedAt = new Date().toISOString();
+            const pullRequests = mergePullRequestSummaries(
+                index.pullRequests,
+                state.state.inbox.pullRequests.filter((pullRequest) => pullRequest.repository === repository),
+            );
             setRepoStackIndex(repository, {
                 status: "ready",
-                pullRequests: mergePullRequestSummaries(
-                    index.pullRequests,
-                    state.state.inbox.pullRequests.filter((pullRequest) => pullRequest.repository === repository),
-                ),
+                pullRequests,
                 defaultBranch: index.defaultBranch,
                 error: null,
-                lastLoadedAt: new Date().toISOString(),
+                lastLoadedAt,
+            });
+            queryClient.setQueryData<RepoStackIndexQueryData>(queryKeys.repository.stackIndex(repository), {
+                pullRequests,
+                defaultBranch: index.defaultBranch,
+                lastLoadedAt,
             });
         } catch (error) {
             if (attempt !== latestRepoStackIndexLoads.get(repository)) {
@@ -2632,6 +2693,8 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
                         [key]: { status: "ready", stack: null, error: null },
                     },
                 }));
+                cacheResolvedPullRequestStack(key, null);
+                await persistStackOverridesToStore();
                 return;
             }
 
@@ -2676,6 +2739,8 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
                     [key]: { status: "ready", stack, error: null },
                 },
             }));
+            cacheResolvedPullRequestStack(key, stack);
+            await persistStackOverridesToStore();
         } catch (error) {
             if (attempt !== latestGraphiteStackLoads.get(key)) {
                 return;

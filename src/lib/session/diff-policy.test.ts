@@ -1,7 +1,14 @@
 import { describe, expect, it } from "vitest";
 
 import { buildFileDiff } from "#/lib/session/build-file-diff.ts";
-import { HUGE_FILE_BYTES, isLikelyGeneratedPath, stubForPath } from "#/lib/session/diff-policy.ts";
+import {
+    HUGE_FILE_BYTES,
+    isLikelyGeneratedPath,
+    shouldConfirmLargeFile,
+    stubForPath,
+    totalFileChanges,
+    LARGE_FILE_CHANGE_LINES,
+} from "#/lib/session/diff-policy.ts";
 
 function bytes(text: string): Uint8Array {
     return new TextEncoder().encode(text);
@@ -24,6 +31,19 @@ describe("stubForPath", () => {
     it("exposes the same rule through isLikelyGeneratedPath", () => {
         expect(isLikelyGeneratedPath("yarn.lock")).toBe(true);
         expect(isLikelyGeneratedPath("src/index.ts")).toBe(false);
+    });
+});
+
+describe("shouldConfirmLargeFile", () => {
+    it("prompts when changed lines meet the threshold", () => {
+        expect(shouldConfirmLargeFile({ additions: 250, deletions: 150, stub: null })).toBe(true);
+        expect(shouldConfirmLargeFile({ additions: 200, deletions: 199, stub: null })).toBe(false);
+        expect(totalFileChanges({ additions: 250, deletions: 150 })).toBe(400);
+        expect(LARGE_FILE_CHANGE_LINES).toBe(400);
+    });
+
+    it("skips files that already use a path stub", () => {
+        expect(shouldConfirmLargeFile({ additions: 900, deletions: 900, stub: "generated" })).toBe(false);
     });
 });
 

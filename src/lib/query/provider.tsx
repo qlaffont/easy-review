@@ -22,8 +22,11 @@ export function AppQueryProvider({ children }: { children: ReactNode }) {
                 maxAge: 1000 * 60 * 60 * 24,
                 dehydrateOptions: {
                     shouldDehydrateQuery: (query) => {
-                        const key = query.queryKey[0];
-                        return key === "inbox" || key === "repos";
+                        const root = query.queryKey[0];
+                        if (root === "inbox" || root === "repos" || root === "repository") {
+                            return true;
+                        }
+                        return root === "pullRequest" && query.queryKey[2] === "stack";
                     },
                 },
             }}

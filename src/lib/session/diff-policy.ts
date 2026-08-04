@@ -6,6 +6,25 @@ export const HUGE_FILE_BYTES = 512 * 1024;
 /** Diffs longer than this are capped after a successful load so the tab stays responsive. */
 export const MAX_RENDERED_DIFF_LINES = 4_000;
 
+/** Line-change totals at or above this prompt the reviewer before fetching the blob. */
+export const LARGE_FILE_CHANGE_LINES = 400;
+
+export function totalFileChanges(file: { additions: number; deletions: number }): number {
+    return file.additions + file.deletions;
+}
+
+/** True when the file list stats suggest a slow diff — path stubs use their own gate. */
+export function shouldConfirmLargeFile(file: {
+    additions: number;
+    deletions: number;
+    stub: FileStubReason | null;
+}): boolean {
+    if (file.stub) {
+        return false;
+    }
+    return totalFileChanges(file) >= LARGE_FILE_CHANGE_LINES;
+}
+
 /**
  * Paths that almost never repay a first look. Matching here means the Review Changes view shows
  * a stub instead of fetching the blob — "Load anyway" still works.
