@@ -2,7 +2,12 @@ import { describe, expect, it } from "vitest";
 
 import type { PullRequestFile } from "#/lib/session/types.ts";
 
-import { buildFileTree, defaultExpandedDirPaths, filePathsInDisplayOrder } from "#/lib/file-tree.ts";
+import {
+    buildFileTree,
+    defaultExpandedDirPaths,
+    filePathsInDisplayOrder,
+    firstUnviewedPathInDisplayOrder,
+} from "#/lib/file-tree.ts";
 
 function file(path: string, status: PullRequestFile["status"] = "modified"): PullRequestFile {
     return { path, previousPath: null, status, additions: 1, deletions: 0, stub: null };
@@ -57,5 +62,18 @@ describe("filePathsInDisplayOrder", () => {
 
     it("returns tree walk order in tree layout", () => {
         expect(filePathsInDisplayOrder(files, "tree")).toEqual(["docs/readme.md", "src/a.ts", "src/b.ts", "z.txt"]);
+    });
+});
+
+describe("firstUnviewedPathInDisplayOrder", () => {
+    const files = [file("z.txt"), file("src/b.ts"), file("src/a.ts"), file("docs/readme.md")];
+
+    it("returns the first unviewed file in tree order", () => {
+        const viewed = new Set(["docs/readme.md", "src/a.ts"]);
+        expect(firstUnviewedPathInDisplayOrder(files, "tree", (path) => viewed.has(path))).toBe("src/b.ts");
+    });
+
+    it("falls back to the first file when everything is viewed", () => {
+        expect(firstUnviewedPathInDisplayOrder(files, "tree", () => true)).toBe("docs/readme.md");
     });
 });

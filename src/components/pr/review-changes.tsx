@@ -46,6 +46,7 @@ import {
     buildFileTree,
     defaultExpandedDirPaths,
     filePathsInDisplayOrder,
+    firstUnviewedPathInDisplayOrder,
     type FileTreeDirNode,
     type FileTreeNode,
 } from "#/lib/file-tree.ts";
@@ -103,6 +104,7 @@ export function ReviewChanges({
     const [rangeDiffError, setRangeDiffError] = useState<string | null>(null);
     const rangeLoadAttempt = useRef(0);
     const rangeDiffAttempt = useRef(0);
+    const [scrollFileListToSelection, setScrollFileListToSelection] = useState(false);
 
     const isolatingRange = commitRange.mode === "range";
     const filesItems = isolatingRange ? (rangeFiles ?? []) : files.items;
@@ -124,6 +126,12 @@ export function ReviewChanges({
     const allViewed = filesStatus === "ready" && filesItems.length > 0 && viewedCount === filesItems.length;
     const showFileDiff = selectedPath !== null && (!allViewed || browsingViewedFile);
     const fileListSelectedPath = showFileDiff ? selectedPath : null;
+
+    useEffect(() => {
+        setSelectedPath(null);
+        setBrowsingViewedFile(false);
+        setScrollFileListToSelection(false);
+    }, [repository, number]);
 
     useEffect(() => {
         setConfirmedLargePaths(new Set());
@@ -165,7 +173,11 @@ export function ReviewChanges({
                     if (current && items.some((file) => file.path === current)) {
                         return current;
                     }
-                    return items[0]?.path ?? null;
+                    return (
+                        firstUnviewedPathInDisplayOrder(items, preferences.fileListLayout, () => false) ??
+                        items[0]?.path ??
+                        null
+                    );
                 });
             })
             .catch((cause) => {
@@ -182,13 +194,29 @@ export function ReviewChanges({
         if (initialPath) {
             setSelectedPath(initialPath);
             setBrowsingViewedFile(true);
+            setScrollFileListToSelection(true);
             return;
         }
 
-        if (!selectedPath && filesItems[0] && !allViewed) {
-            setSelectedPath(filesItems[0].path);
+        if (filesStatus !== "ready" || filesItems.length === 0 || allViewed) {
+            return;
         }
-    }, [filesItems, selectedPath, initialPath, allViewed]);
+
+        setSelectedPath((current) => {
+            if (current && filesItems.some((file) => file.path === current)) {
+                return current;
+            }
+
+            return (
+                firstUnviewedPathInDisplayOrder(
+                    filesItems,
+                    preferences.fileListLayout,
+                    (path) => fileViewState(viewedMarks, path, headSha) === "viewed",
+                ) ?? null
+            );
+        });
+        setBrowsingViewedFile(true);
+    }, [filesItems, filesStatus, initialPath, allViewed, viewedMarks, headSha, preferences.fileListLayout]);
 
     useEffect(() => {
         if (allViewed && !allViewedRef.current) {
@@ -198,6 +226,7 @@ export function ReviewChanges({
     }, [allViewed]);
 
     function selectFile(path: string) {
+        setScrollFileListToSelection(true);
         setSelectedPath(path);
         setBrowsingViewedFile(true);
     }
@@ -321,6 +350,7 @@ export function ReviewChanges({
                 orderedPaths.slice(index + 1).find((candidate) => !isViewed(candidate)) ??
                 orderedPaths.slice(0, index).find((candidate) => !isViewed(candidate));
             if (nextPath) {
+                setScrollFileListToSelection(true);
                 setSelectedPath(nextPath);
                 setBrowsingViewedFile(true);
             }
@@ -520,6 +550,7 @@ export function ReviewChanges({
                                 files={filesItems}
                                 status={filesStatus}
                                 selectedPath={fileListSelectedPath}
+                                scrollSelectionIntoView={scrollFileListToSelection}
                                 viewedMarks={viewedMarks}
                                 headSha={headSha}
                                 pendingPaths={new Set(draft.comments.map((comment) => comment.path))}
@@ -808,6 +839,7 @@ function FileList({
     files,
     status,
     selectedPath,
+    scrollSelectionIntoView,
     viewedMarks,
     headSha,
     pendingPaths,
@@ -818,6 +850,7 @@ function FileList({
     files: Array<PullRequestFile>;
     status: string;
     selectedPath: string | null;
+    scrollSelectionIntoView: boolean;
     viewedMarks: ViewedFileMarks;
     headSha: string;
     pendingPaths: Set<string>;
@@ -849,9 +882,14 @@ function FileList({
             return;
         }
 
+        if (!scrollSelectionIntoView) {
+            listRef.current?.scrollTo({ top: 0 });
+            return;
+        }
+
         const selected = listRef.current?.querySelector<HTMLElement>(`[data-file-path="${CSS.escape(selectedPath)}"]`);
         selected?.scrollIntoView({ block: "nearest" });
-    }, [selectedPath, visibleFiles, layout]);
+    }, [selectedPath, scrollSelectionIntoView, visibleFiles, layout]);
 
     if (status === "loading" || status === "idle") {
         return <FileListLoadingSkeleton />;

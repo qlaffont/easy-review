@@ -117,6 +117,16 @@ export function filePathsInDisplayOrder(files: ReadonlyArray<PullRequestFile>, l
     return flattenFileTreePaths(buildFileTree(files));
 }
 
+/** First unviewed file in sidebar order, or the first file when everything is viewed. */
+export function firstUnviewedPathInDisplayOrder(
+    files: ReadonlyArray<PullRequestFile>,
+    layout: "flat" | "tree",
+    isViewed: (path: string) => boolean,
+): string | null {
+    const ordered = filePathsInDisplayOrder(files, layout);
+    return ordered.find((path) => !isViewed(path)) ?? ordered[0] ?? null;
+}
+
 function flattenFileTreePaths(nodes: ReadonlyArray<FileTreeNode>): Array<string> {
     const paths: Array<string> = [];
 
