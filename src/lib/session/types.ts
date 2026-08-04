@@ -334,6 +334,8 @@ export type ReviewDraft = {
     stale: boolean;
     /** GitHub pending review id when the draft is synced server-side. */
     githubReviewId?: number;
+    /** GraphQL node id for `githubReviewId` — required to attach line comments to a pending review. */
+    githubReviewNodeId?: string;
 };
 
 export type ReviewThreadComment = {

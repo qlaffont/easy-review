@@ -191,6 +191,19 @@ export type GithubClient = {
             githubReviewId?: number;
         },
     ): Promise<void>;
+    /** Start a new review thread on a diff line. Uses GraphQL (same path as github.com). */
+    addPullRequestReviewThread(
+        token: string,
+        input: {
+            pullRequestNodeId: string;
+            body: string;
+            path: string;
+            line: number;
+            side: DiffSide;
+            /** When set, attach the thread to an existing pending review instead of publishing immediately. */
+            pullRequestReviewNodeId?: string;
+        },
+    ): Promise<{ commentId: number }>;
     /** Reply inside an existing thread. `threadId` is the GraphQL node id. */
     replyToReviewThread(token: string, threadId: string, body: string): Promise<ReviewThreadComment>;
     /** Resolve or unresolve a review thread. */
@@ -344,7 +357,7 @@ export type GithubClient = {
         repository: string,
         number: number,
         viewerLogin: string,
-    ): Promise<{ reviewId: number; body: string; commitId: string } | null>;
+    ): Promise<{ reviewId: number; reviewNodeId: string; body: string; commitId: string } | null>;
     /** Create an empty GitHub pending review to hold line comments cross-device. */
     createPendingReview(
         token: string,
@@ -352,7 +365,7 @@ export type GithubClient = {
         number: number,
         headSha: string,
         body?: string,
-    ): Promise<number>;
+    ): Promise<{ reviewId: number; reviewNodeId: string }>;
     /** Submit or update a pending review on GitHub. */
     submitPendingReview(
         token: string,

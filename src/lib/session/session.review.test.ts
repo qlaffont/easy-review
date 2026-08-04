@@ -145,19 +145,11 @@ describe("staged review drafts", () => {
             body: "ship it now",
         });
 
-        expect(github.submittedReviews).toEqual([
-            {
-                repository: "acme/api",
-                number: 1,
-                headSha: "sha-aaa",
-                event: "comment",
-                body: "",
-                comments: [{ path: "src/a.ts", line: 2, side: "RIGHT", body: "ship it now" }],
-            },
-        ]);
+        expect(github.calls.filter((call) => call === "addPullRequestReviewThread")).toHaveLength(2);
+        expect(github.submittedReviews).toEqual([]);
         expect(session.getReviewDraft("acme/api", 1).comments).toHaveLength(1);
         const threads = session.getReviewThreads("acme/api", 1).items;
-        expect(threads).toHaveLength(2);
+        expect(threads).toHaveLength(3);
         expect(threads.some((thread) => thread.comments.some((comment) => comment.body === "ship it now"))).toBe(true);
     });
 

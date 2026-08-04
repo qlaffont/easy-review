@@ -198,6 +198,10 @@ function humanizeGithubMessage(message: string): string {
         return FORBIDDEN_PERMISSION_MESSAGE;
     }
 
+    if (message === "Unprocessable Entity") {
+        return "GitHub could not attach a comment to that line — it may be outside the reviewable diff. Try a changed line, or refresh the page.";
+    }
+
     return message;
 }
 
@@ -1133,6 +1137,32 @@ export function createGithubHttpClient(
             return comment;
         },
 
+        async addPullRequestReviewThread(token, input) {
+            const data = await graphql<{
+                addPullRequestReviewThread: {
+                    thread: {
+                        comments: { nodes: Array<{ databaseId: number | null }> };
+                    } | null;
+                };
+            }>(token, ADD_REVIEW_THREAD_MUTATION, {
+                input: {
+                    pullRequestId: input.pullRequestNodeId,
+                    body: input.body,
+                    path: input.path,
+                    line: input.line,
+                    side: input.side,
+                    ...(input.pullRequestReviewNodeId ? { pullRequestReviewId: input.pullRequestReviewNodeId } : {}),
+                },
+            });
+
+            const databaseId = data.addPullRequestReviewThread.thread?.comments.nodes[0]?.databaseId;
+            if (databaseId == null) {
+                throw new EasyReviewError("unknown", "Could not read the new comment from GitHub.");
+            }
+
+            return { commentId: databaseId };
+        },
+
         async setReviewThreadResolved(token, threadId, resolved) {
             await graphql(token, resolved ? RESOLVE_THREAD_MUTATION : UNRESOLVE_THREAD_MUTATION, { threadId });
         },
@@ -1441,6 +1471,7 @@ export function createGithubHttpClient(
                 `/repos/${owner}/${name}/pulls/${number}/reviews?per_page=100`,
             )) as Array<{
                 id: number;
+                node_id: string;
                 user: { login: string } | null;
                 state: string;
                 body: string;
@@ -1450,7 +1481,12 @@ export function createGithubHttpClient(
             if (!pending) {
                 return null;
             }
-            return { reviewId: pending.id, body: pending.body ?? "", commitId: pending.commit_id };
+            return {
+                reviewId: pending.id,
+                reviewNodeId: pending.node_id,
+                body: pending.body ?? "",
+                commitId: pending.commit_id,
+            };
         },
 
         async createPendingReview(token, repository, number, headSha, body = "") {
@@ -1458,8 +1494,8 @@ export function createGithubHttpClient(
             const created = (await restJson(token, "POST", `/repos/${owner}/${name}/pulls/${number}/reviews`, {
                 commit_id: headSha,
                 body,
-            })) as { id: number };
-            return created.id;
+            })) as { id: number; node_id: string };
+            return { reviewId: created.id, reviewNodeId: created.node_id };
         },
 
         async submitPendingReview(token, repository, number, reviewId, event, body) {
@@ -4208,6 +4244,21 @@ const REPLY_TO_THREAD_MUTATION = `
                     viewerHasReacted
                     reactors {
                         totalCount
+                    }
+                }
+            }
+        }
+    }
+`;
+
+const ADD_REVIEW_THREAD_MUTATION = `
+    mutation EasyReviewAddReviewThread($input: AddPullRequestReviewThreadInput!) {
+        addPullRequestReviewThread(input: $input) {
+            thread {
+                id
+                comments(first: 1) {
+                    nodes {
+                        databaseId
                     }
                 }
             }

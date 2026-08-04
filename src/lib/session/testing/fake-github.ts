@@ -1066,6 +1066,44 @@ export function createFakeGithub(): FakeGithub {
                 throw new EasyReviewError("not-found", "That review thread no longer exists.");
             });
         },
+        addPullRequestReviewThread(token, input) {
+            return respond("addPullRequestReviewThread", () => {
+                authenticate(token);
+                const account = accounts.get(token);
+                const match = /^PR_(.+)#(\d+)$/.exec(input.pullRequestNodeId);
+                const repository = match?.[1] ?? "acme/api";
+                const number = Number(match?.[2] ?? 1);
+                requirePullRequest(token, repository, number);
+
+                const key = filesKey(token, repository, number);
+                const databaseId = ++replyCounter;
+                const threadId = `thread-${databaseId}`;
+                const thread: ReviewThread = {
+                    id: threadId,
+                    path: input.path,
+                    startLine: null,
+                    line: input.line,
+                    side: input.side,
+                    isResolved: false,
+                    isOutdated: false,
+                    diffHunk: `@@ -${input.line},1 +${input.line},1 @@\n ${input.body.slice(0, 40)}`,
+                    comments: [
+                        {
+                            id: `${threadId}-c0`,
+                            databaseId,
+                            author: account?.login ?? "octocat",
+                            authorAvatarUrl: account?.avatarUrl ?? null,
+                            body: input.body,
+                            createdAt: new Date().toISOString(),
+                            url: `https://github.com/${repository}/pull/${number}#discussion_r${databaseId}`,
+                            reactionGroups: [],
+                        },
+                    ],
+                };
+                threadsByPullRequest.set(key, [...(threadsByPullRequest.get(key) ?? []), thread]);
+                return { commentId: databaseId };
+            });
+        },
         setReviewThreadResolved(token, threadId, resolved) {
             return respond("setReviewThreadResolved", () => {
                 authenticate(token);
@@ -1287,7 +1325,7 @@ export function createFakeGithub(): FakeGithub {
             return respond("getViewerPendingReview", () => null);
         },
         createPendingReview(_token, _repository, _number, _headSha, _body) {
-            return respond("createPendingReview", () => 1);
+            return respond("createPendingReview", () => ({ reviewId: 1, reviewNodeId: "PRR_test" }));
         },
         submitPendingReview(_token, _repository, _number, _reviewId, _event, _body) {
             return respond("submitPendingReview", () => {});

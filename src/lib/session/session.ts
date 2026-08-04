@@ -1849,7 +1849,9 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
             const token = requireToken();
             const pending = await github.getViewerPendingReview(token, detail.repository, detail.number, login);
             if (!pending) {
-                return draft.githubReviewId ? { ...draft, githubReviewId: undefined } : draft;
+                return draft.githubReviewId
+                    ? { ...draft, githubReviewId: undefined, githubReviewNodeId: undefined }
+                    : draft;
             }
 
             const remoteRows = await github.listPendingReviewComments(
@@ -1883,6 +1885,7 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
             return {
                 ...draft,
                 githubReviewId: pending.reviewId,
+                githubReviewNodeId: pending.reviewNodeId,
                 body: draft.body.trim() ? draft.body : pending.body,
                 headSha: headMoved && draftHasPendingWork({ ...draft, comments }) ? pending.commitId : detail.headSha,
                 stale: headMoved && draftHasPendingWork({ ...draft, comments }),
@@ -1894,18 +1897,34 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
     }
 
     async function ensureGithubPendingReview(detail: PullRequestDetail, draft: ReviewDraft): Promise<ReviewDraft> {
-        if (draft.githubReviewId) {
+        if (draft.githubReviewId && draft.githubReviewNodeId) {
             return draft;
         }
 
-        const reviewId = await github.createPendingReview(
+        if (draft.githubReviewId && !draft.githubReviewNodeId) {
+            const login = viewerLogin();
+            if (login) {
+                const pending = await github.getViewerPendingReview(
+                    requireToken(),
+                    detail.repository,
+                    detail.number,
+                    login,
+                );
+                if (pending?.reviewId === draft.githubReviewId) {
+                    return { ...draft, githubReviewNodeId: pending.reviewNodeId };
+                }
+            }
+            return draft;
+        }
+
+        const { reviewId, reviewNodeId } = await github.createPendingReview(
             requireToken(),
             detail.repository,
             detail.number,
             detail.headSha,
             draft.body,
         );
-        return { ...draft, githubReviewId: reviewId };
+        return { ...draft, githubReviewId: reviewId, githubReviewNodeId: reviewNodeId };
     }
 
     async function syncDraftWithHead(detail: PullRequestDetail): Promise<void> {
@@ -2016,10 +2035,10 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
 
         if (detail) {
             nextDraft = await ensureGithubPendingReview(detail, nextDraft);
-            if (nextDraft.githubReviewId) {
-                const { commentId } = await github.addPendingReviewComment(requireToken(), repository, number, {
-                    reviewId: nextDraft.githubReviewId,
-                    headSha: detail.headSha,
+            if (nextDraft.githubReviewNodeId) {
+                const { commentId } = await github.addPullRequestReviewThread(requireToken(), {
+                    pullRequestNodeId: detail.pullRequestNodeId,
+                    pullRequestReviewNodeId: nextDraft.githubReviewNodeId,
                     path: input.path,
                     line: input.line,
                     side: input.side,
@@ -2130,13 +2149,12 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
             throw new EasyReviewError("unknown", "Comment body is required.");
         }
 
-        await github.submitReview(requireToken(), {
-            repository,
-            number,
-            headSha: detail.headSha,
-            event: "comment",
-            body: "",
-            comments: [{ path: input.path, line: input.line, side: input.side, body }],
+        await github.addPullRequestReviewThread(requireToken(), {
+            pullRequestNodeId: detail.pullRequestNodeId,
+            body,
+            path: input.path,
+            line: input.line,
+            side: input.side,
         });
 
         await refreshAfterMutation(repository, number, { reloadReviewSurfaces: true });

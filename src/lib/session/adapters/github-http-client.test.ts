@@ -694,4 +694,27 @@ describe("REST validation errors", () => {
             message: "Validation Failed Line could not be resolved",
         });
     });
+
+    it("rewrites bare Unprocessable Entity into actionable guidance", async () => {
+        const github = createGithubHttpClient(
+            async () =>
+                new Response(JSON.stringify({ message: "Unprocessable Entity" }), {
+                    status: 422,
+                    headers: { "content-type": "application/json" },
+                }),
+        );
+
+        await expect(
+            github.addPendingReviewComment("token", "acme/api", 1, {
+                reviewId: 1,
+                headSha: "abc123",
+                path: "src/foo.ts",
+                line: 12,
+                side: "RIGHT",
+                body: "test",
+            }),
+        ).rejects.toMatchObject({
+            message: expect.stringContaining("outside the reviewable diff"),
+        });
+    });
 });
