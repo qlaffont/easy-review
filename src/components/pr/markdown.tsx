@@ -23,6 +23,7 @@ import { remarkAlert } from "remark-github-blockquote-alert";
 import { SuggestionApplyActions, type SuggestionApplyTarget } from "#/components/pr/suggestion-apply.tsx";
 import {
     attachmentLabelFromLinkText,
+    isAllowedResolvedAttachmentSrc,
     isGithubPrivateMediaUrl,
     isGithubUserAttachmentUrl,
     isGraphiteUserAttachmentUrl,
@@ -35,6 +36,7 @@ import {
 } from "#/lib/github-attachment.ts";
 import { prepareMarkdownSource } from "#/lib/markdown-source.ts";
 import { remarkBoldMentions } from "#/lib/remark-bold-mentions.ts";
+import { remarkGithubEmoji } from "#/lib/remark-github-emoji.ts";
 import { useOptionalSession } from "#/lib/session/provider.tsx";
 import { notifyCopied, notifyError } from "#/lib/toast.ts";
 import { cn } from "#/lib/utils.ts";
@@ -122,7 +124,7 @@ function isAllowedMarkdownImageSrc(src: string | undefined): boolean {
     }
 }
 
-const remarkPlugins = [remarkGfm, remarkAlert, remarkBoldMentions];
+const remarkPlugins = [remarkGfm, remarkAlert, remarkGithubEmoji, remarkBoldMentions];
 const rehypePlugins: Array<typeof rehypeRaw | [typeof rehypeSanitize, typeof sanitizeSchema]> = [
     rehypeRaw,
     [rehypeSanitize, sanitizeSchema],
@@ -388,6 +390,33 @@ function linkContainsEmbeddedMedia(children: ReactNode): boolean {
     });
 }
 
+/** Prefer a signed CDN URL already present in GitHub’s HTML thumbnail wrapper. */
+function firstResolvedMediaFromChildren(children: ReactNode): ResolvedGithubAttachment | null {
+    for (const child of Children.toArray(children)) {
+        if (!isValidElement<{ src?: string; children?: ReactNode; alt?: string }>(child)) {
+            continue;
+        }
+        const childSrc = child.props.src;
+        if (typeof childSrc === "string" && isAllowedResolvedAttachmentSrc(childSrc)) {
+            const kind =
+                mediaKindFromLinkText(child.props.alt ?? "") ??
+                (/\.(mp4|webm|mov)(?:\?|$)/i.test(childSrc) ? "video" : "image");
+            return {
+                kind,
+                src: childSrc,
+                ...(child.props.alt?.trim() ? { name: child.props.alt.trim() } : {}),
+            };
+        }
+        if (child.props.children) {
+            const nested = firstResolvedMediaFromChildren(child.props.children);
+            if (nested) {
+                return nested;
+            }
+        }
+    }
+    return null;
+}
+
 const MarkdownRepoContext = createContext<string | null>(null);
 
 function AttachmentFallback({ href, name }: { href: string; name?: string }) {
@@ -452,65 +481,99 @@ function GraphiteAttachmentMedia({ src, name, kind }: { src: string; name?: stri
 /**
  * Private GitHub media: `user-attachments` (markdown API → signed CDN) or Easy Review
  * `blob/…?raw=true` uploads (Contents `download_url`). Cookies are not sent on cross-origin
- * `<img>`/`<video>`, so bare github.com URLs fail for private repos.
+ * `<img>`/`<video>`, so bare github.com URLs fail for private repos — wait for a signed URL
+ * (or reuse one from GitHub HTML) before mounting media.
  */
-function GithubAttachmentMedia({ src, preferredKind }: { src: string; preferredKind?: "image" | "video" }) {
+function GithubAttachmentMedia({
+    src,
+    preferredKind,
+    initialResolved = null,
+}: {
+    src: string;
+    preferredKind?: "image" | "video";
+    /** Signed CDN URL already present in GitHub’s HTML (thumbnail wrapper). */
+    initialResolved?: ResolvedGithubAttachment | null;
+}) {
     const repository = useContext(MarkdownRepoContext);
     const session = useOptionalSession();
-    const [resolved, setResolved] = useState<ResolvedGithubAttachment | null>(null);
-    const [mode, setMode] = useState<"image" | "video">(preferredKind ?? "image");
-    const [failed, setFailed] = useState(false);
+    const [resolved, setResolved] = useState<ResolvedGithubAttachment | null>(initialResolved);
+    const canResolve = Boolean(session && (!isGithubUserAttachmentUrl(src) || repository));
+    const [status, setStatus] = useState<"loading" | "ready" | "failed">(() => {
+        if (initialResolved) {
+            return "ready";
+        }
+        return canResolve ? "loading" : "failed";
+    });
     const [retried, setRetried] = useState(false);
     const isUserAttachment = isGithubUserAttachmentUrl(src);
 
     useEffect(() => {
+        if (initialResolved && !retried) {
+            return;
+        }
         if (!session) {
+            setStatus(initialResolved ? "ready" : "failed");
             return;
         }
         if (isUserAttachment && !repository) {
+            setStatus(initialResolved ? "ready" : "failed");
             return;
         }
 
         let cancelled = false;
+        if (!initialResolved || retried) {
+            setStatus("loading");
+        }
         const resolve = isUserAttachment
             ? session.resolveUserAttachment(repository!, src)
             : session.resolveRepoBlobMedia(src);
 
         void resolve
             .then((next) => {
-                if (!cancelled && next) {
+                if (cancelled) {
+                    return;
+                }
+                if (next) {
                     setResolved(next);
-                    setFailed(false);
+                    setStatus("ready");
+                    return;
+                }
+                if (!initialResolved) {
+                    setStatus("failed");
                 }
             })
             .catch(() => {
-                /* keep bare URL fallback */
+                if (!cancelled && !initialResolved) {
+                    setStatus("failed");
+                }
             });
 
         return () => {
             cancelled = true;
         };
-    }, [session, repository, src, retried, isUserAttachment]);
+    }, [session, repository, src, retried, isUserAttachment, initialResolved]);
 
-    async function retryOrFail() {
-        if (!retried && session && (!isUserAttachment || repository)) {
-            setRetried(true);
-            return;
-        }
-        setFailed(true);
-    }
-
-    if (failed) {
+    if (status === "failed") {
         return <AttachmentFallback href={src} name={resolved?.name} />;
     }
 
-    const mediaSrc = resolved?.src ?? src;
-    const kind = resolved?.kind ?? mode;
+    if (status === "loading" || !resolved) {
+        return (
+            <div
+                className="my-2 h-40 max-w-full animate-pulse rounded-md bg-muted/50"
+                aria-busy="true"
+                aria-label="Loading attachment"
+            />
+        );
+    }
+
+    const mediaSrc = resolved.src;
+    const kind = resolved.kind ?? preferredKind ?? "image";
 
     if (kind === "video") {
         return (
             <div className="my-2 overflow-hidden rounded-md border bg-muted/20">
-                {resolved?.name ? (
+                {resolved.name ? (
                     <div className="border-b px-3 py-1.5 text-xs font-medium text-muted-foreground">
                         {resolved.name}
                     </div>
@@ -523,7 +586,11 @@ function GithubAttachmentMedia({ src, preferredKind }: { src: string; preferredK
                     preload="metadata"
                     className="max-h-[min(480px,70vh)] w-full max-w-full bg-muted"
                     onError={() => {
-                        void retryOrFail();
+                        if (!retried && canResolve) {
+                            setRetried(true);
+                            return;
+                        }
+                        setStatus("failed");
                     }}
                 >
                     <a href={src} target="_blank" rel="noreferrer noopener ugc">
@@ -538,15 +605,15 @@ function GithubAttachmentMedia({ src, preferredKind }: { src: string; preferredK
         <img
             key={mediaSrc}
             src={mediaSrc}
-            alt=""
+            alt={resolved.name ?? ""}
             loading="lazy"
             className="my-2 max-h-[min(480px,70vh)] max-w-full rounded-md"
             onError={() => {
-                if (resolved?.kind === "image") {
-                    void retryOrFail();
+                if (!retried && canResolve) {
+                    setRetried(true);
                     return;
                 }
-                setMode("video");
+                setStatus("failed");
             }}
         />
     );
@@ -588,7 +655,13 @@ const components = {
             shouldEmbedGithubAttachment(href, linkText) ||
             (isGithubUserAttachmentUrl(href) && linkContainsEmbeddedMedia(children))
         ) {
-            return <GithubAttachmentMedia src={href!} preferredKind={mediaKindFromLinkText(linkText) ?? undefined} />;
+            return (
+                <GithubAttachmentMedia
+                    src={href!}
+                    preferredKind={mediaKindFromLinkText(linkText) ?? undefined}
+                    initialResolved={firstResolvedMediaFromChildren(children)}
+                />
+            );
         }
 
         return (

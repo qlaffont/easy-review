@@ -114,11 +114,11 @@ describe("shouldEmbedGithubAttachment", () => {
 });
 
 describe("Markdown github attachment embeds", () => {
-    it("renders a bare user-attachments url as media, not a plain link", () => {
+    it("renders a bare user-attachments url as an attachment control, not a plain autolink", () => {
         const html = renderMarkdown(`Fix concurrency:\n\n${ATTACHMENT}`);
 
-        expect(html).toContain(`src="${ATTACHMENT}"`);
-        expect(html).toMatch(/<(?:img|video)\b/);
+        expect(html).toContain(`href="${ATTACHMENT}"`);
+        expect(html).toMatch(/Open attachment on GitHub|Loading attachment/);
         expect(html).not.toMatch(
             new RegExp(
                 `<a[^>]*href="${ATTACHMENT.replaceAll("/", "\\/")}"[^>]*>\\s*${ATTACHMENT.replaceAll("/", "\\/")}`,
@@ -142,28 +142,29 @@ describe("Markdown github attachment embeds", () => {
 
     it("renders Graphite video links as an embedded player", () => {
         const label = "screen-recording.mov (uploaded via Graphite)";
-        const html = renderMarkdown(`[${label}](${ATTACHMENT})`);
-        expect(html).toContain(`src="${ATTACHMENT}"`);
+        const html = renderMarkdown(`[${label}](${GRAPHITE_VIDEO})`);
+        expect(html).toContain(`src="${GRAPHITE_VIDEO}"`);
         expect(html).toMatch(/<video\b/);
         expect(html).not.toContain("screen-recording.mov (uploaded via Graphite)");
     });
 
     it("routes repo blob raw images through private media resolution", () => {
         const html = renderMarkdown(`![shot.png](${REPO_BLOB})`);
-        expect(html).toContain(`src="${REPO_BLOB}"`);
-        expect(html).toMatch(/<img\b/);
+        expect(html).toContain(`href="${REPO_BLOB}"`);
+        expect(html).toMatch(/Open attachment on GitHub|Loading attachment/);
     });
 
-    it("embeds GitHub HTML thumbnail links as full media, not a tiny inline preview", () => {
+    it("embeds GitHub HTML thumbnail links using the signed CDN url, not the tiny width", () => {
         const signed = "https://private-user-images.githubusercontent.com/1/abc.png?jwt=test";
         const html = renderMarkdown(
             `<a href="${ATTACHMENT}" target="_blank" rel="noopener noreferrer"><img src="${signed}" width="200" alt="Capture d'écran 2026-08-04 à 12.02.08.png"></a>`,
         );
 
-        expect(html).toContain(`src="${ATTACHMENT}"`);
+        expect(html).toContain(`src="${signed}"`);
         expect(html).toMatch(/<img\b/);
+        expect(html).toContain("max-h-");
         expect(html).not.toContain('width="200"');
-        expect(html).not.toContain(`href="${ATTACHMENT}"`);
+        expect(html).not.toMatch(new RegExp(`<a[^>]*href="${ATTACHMENT.replaceAll("/", "\\/")}"`));
     });
 
     it("renders Graphite video links with HTML label as an embedded player", () => {
