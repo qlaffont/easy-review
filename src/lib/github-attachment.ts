@@ -174,9 +174,6 @@ export function shouldEmbedGithubAttachment(href: string | undefined, linkText: 
     }
 
     const text = linkText.trim();
-    if (!text) {
-        return false;
-    }
 
     if (text === href) {
         return true;
@@ -196,6 +193,11 @@ export function shouldEmbedGithubAttachment(href: string | undefined, linkText: 
     }
 
     if (VIDEO_IN_LINK_LABEL.test(text) || IMAGE_IN_LINK_LABEL.test(text)) {
+        return true;
+    }
+
+    // GitHub wraps uploaded media in `<a href="user-attachments/…"><img …></a>` with no link text.
+    if (!text) {
         return true;
     }
 

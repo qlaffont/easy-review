@@ -102,6 +102,15 @@ describe("shouldEmbedGithubAttachment", () => {
         expect(shouldEmbedGithubAttachment(ATTACHMENT, label)).toBe(true);
         expect(mediaKindFromLinkText(label)).toBe("video");
     });
+
+    it("embeds user-attachments links labeled with a screenshot filename", () => {
+        expect(shouldEmbedGithubAttachment(ATTACHMENT, "Capture d'écran 2026-08-04 à 12.02.08.png")).toBe(true);
+        expect(mediaKindFromLinkText("Capture d'écran 2026-08-04 à 12.02.08.png")).toBe("image");
+    });
+
+    it("embeds user-attachments links with no visible label (GitHub HTML thumbnail wrapper)", () => {
+        expect(shouldEmbedGithubAttachment(ATTACHMENT, "")).toBe(true);
+    });
 });
 
 describe("Markdown github attachment embeds", () => {
@@ -143,6 +152,18 @@ describe("Markdown github attachment embeds", () => {
         const html = renderMarkdown(`![shot.png](${REPO_BLOB})`);
         expect(html).toContain(`src="${REPO_BLOB}"`);
         expect(html).toMatch(/<img\b/);
+    });
+
+    it("embeds GitHub HTML thumbnail links as full media, not a tiny inline preview", () => {
+        const signed = "https://private-user-images.githubusercontent.com/1/abc.png?jwt=test";
+        const html = renderMarkdown(
+            `<a href="${ATTACHMENT}" target="_blank" rel="noopener noreferrer"><img src="${signed}" width="200" alt="Capture d'écran 2026-08-04 à 12.02.08.png"></a>`,
+        );
+
+        expect(html).toContain(`src="${ATTACHMENT}"`);
+        expect(html).toMatch(/<img\b/);
+        expect(html).not.toContain('width="200"');
+        expect(html).not.toContain(`href="${ATTACHMENT}"`);
     });
 
     it("renders Graphite video links with HTML label as an embedded player", () => {

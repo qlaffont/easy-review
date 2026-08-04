@@ -114,6 +114,7 @@ function isAllowedMarkdownImageSrc(src: string | undefined): boolean {
             host === "www.github.com" ||
             host.endsWith(".github.com") ||
             host.endsWith(".githubusercontent.com") ||
+            host.endsWith(".amazonaws.com") ||
             isGraphiteUserAttachmentUrl(src)
         );
     } catch {
@@ -361,12 +362,30 @@ function linkChildrenText(children: ReactNode): string {
             if (typeof child === "string" || typeof child === "number") {
                 return String(child);
             }
-            if (isValidElement<{ children?: ReactNode }>(child)) {
+            if (isValidElement<{ children?: ReactNode; alt?: string }>(child)) {
+                if (typeof child.props.alt === "string" && child.props.alt.trim()) {
+                    return child.props.alt.trim();
+                }
                 return linkChildrenText(child.props.children);
             }
             return "";
         })
         .join("");
+}
+
+function linkContainsEmbeddedMedia(children: ReactNode): boolean {
+    return Children.toArray(children).some((child) => {
+        if (!isValidElement<{ src?: string; children?: ReactNode }>(child)) {
+            return false;
+        }
+        if (typeof child.props.src === "string" && child.props.src.length > 0) {
+            return true;
+        }
+        if (child.props.children) {
+            return linkContainsEmbeddedMedia(child.props.children);
+        }
+        return false;
+    });
 }
 
 const MarkdownRepoContext = createContext<string | null>(null);
@@ -565,7 +584,10 @@ const components = {
                 />
             );
         }
-        if (shouldEmbedGithubAttachment(href, linkText)) {
+        if (
+            shouldEmbedGithubAttachment(href, linkText) ||
+            (isGithubUserAttachmentUrl(href) && linkContainsEmbeddedMedia(children))
+        ) {
             return <GithubAttachmentMedia src={href!} preferredKind={mediaKindFromLinkText(linkText) ?? undefined} />;
         }
 
@@ -664,14 +686,31 @@ const components = {
         }
         return <p {...props}>{children}</p>;
     },
-    img: ({ src, alt, ...props }: ComponentPropsWithoutRef<"img">) => {
+    img: ({
+        src,
+        alt,
+        width: _width,
+        height: _height,
+        style: _style,
+        className,
+        ...props
+    }: ComponentPropsWithoutRef<"img">) => {
         if (!isAllowedMarkdownImageSrc(src)) {
             return null;
         }
         if (isGithubPrivateMediaUrl(src) && typeof src === "string") {
-            return <GithubAttachmentMedia src={src} />;
+            return <GithubAttachmentMedia src={src} preferredKind={mediaKindFromLinkText(alt ?? "") ?? undefined} />;
         }
-        return <img src={src} alt={alt ?? ""} loading="lazy" referrerPolicy="no-referrer" {...props} />;
+        return (
+            <img
+                src={src}
+                alt={alt ?? ""}
+                loading="lazy"
+                referrerPolicy="no-referrer"
+                className={cn("my-2 max-h-[min(480px,70vh)] max-w-full rounded-md", className)}
+                {...props}
+            />
+        );
     },
     video: ({ src, ...props }: ComponentPropsWithoutRef<"video">) => {
         if (!isAllowedMarkdownImageSrc(typeof src === "string" ? src : undefined)) {

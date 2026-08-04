@@ -2,6 +2,7 @@ import { useState } from "react";
 
 import type { ReviewThread } from "#/lib/session/types.ts";
 
+import { Markdown } from "#/components/pr/markdown.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import { RelativeTime } from "#/components/ui/relative-time.tsx";
 import { Textarea } from "#/components/ui/textarea.tsx";
@@ -46,6 +47,7 @@ function ThreadCard({ repository, number, thread }: { repository: string; number
     const [reply, setReply] = useState("");
     const [sending, setSending] = useState(false);
     const { comments, isResolved } = thread;
+    const baseUrl = `https://github.com/${repository}/`;
 
     async function send() {
         if (!reply.trim()) {
@@ -85,7 +87,9 @@ function ThreadCard({ repository, number, thread }: { repository: string; number
                     <li key={comment.id} className={cn("py-1.5", index > 0 && "border-t border-border")}>
                         <span className="font-medium">{comment.author}</span>{" "}
                         <RelativeTime iso={comment.createdAt} className="text-muted-foreground" />
-                        <p className="mt-0.5 whitespace-pre-wrap">{comment.body}</p>
+                        <div className="mt-0.5 text-xs">
+                            <Markdown source={comment.body} baseUrl={baseUrl} />
+                        </div>
                     </li>
                 ))}
             </ul>
