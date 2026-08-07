@@ -23,7 +23,7 @@ Object.defineProperty(globalThis, "localStorage", {
 });
 
 Object.defineProperty(globalThis, "window", {
-    value: { ...globalThis, open: vi.fn() },
+    value: { ...globalThis, open: vi.fn(), localStorage: localStorageMock },
     configurable: true,
 });
 
@@ -60,6 +60,7 @@ describe("openInboxPullRequest", () => {
             "easy-review:inbox-prefs:v1",
             JSON.stringify({ backgroundNotifications: false, openInEasyReview: true }),
         );
+        resetInboxPreferencesCache();
         const navigate = vi.fn();
 
         openInboxPullRequest(

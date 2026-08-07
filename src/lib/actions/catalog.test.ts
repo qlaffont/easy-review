@@ -8,18 +8,20 @@ import { resetInboxPreferencesCache } from "#/lib/inbox-preferences.ts";
 
 const prefsMemory = new Map<string, string>();
 
-Object.defineProperty(globalThis, "localStorage", {
-    value: {
-        getItem(key: string) {
-            return prefsMemory.has(key) ? prefsMemory.get(key)! : null;
-        },
-        setItem(key: string, value: string) {
-            prefsMemory.set(key, value);
-        },
-        removeItem(key: string) {
-            prefsMemory.delete(key);
-        },
+const catalogLocalStorageMock = {
+    getItem(key: string) {
+        return prefsMemory.has(key) ? prefsMemory.get(key)! : null;
     },
+    setItem(key: string, value: string) {
+        prefsMemory.set(key, value);
+    },
+    removeItem(key: string) {
+        prefsMemory.delete(key);
+    },
+};
+
+Object.defineProperty(globalThis, "localStorage", {
+    value: catalogLocalStorageMock,
     configurable: true,
 });
 
@@ -28,6 +30,7 @@ Object.defineProperty(globalThis, "window", {
         ...globalThis,
         open: vi.fn(() => null),
         location: { origin: "https://easy-review.test" },
+        localStorage: catalogLocalStorageMock,
     },
     configurable: true,
 });
@@ -148,6 +151,7 @@ describe("action catalog", () => {
             "easy-review:inbox-prefs:v1",
             JSON.stringify({ backgroundNotifications: false, openInEasyReview: true }),
         );
+        resetInboxPreferencesCache();
         const openPullRequest = vi.fn();
         findAction("nav.open-selected")!.run(context({ surface: "inbox", openPullRequest }));
         expect(openPullRequest).toHaveBeenCalledWith("acme/api", 1);

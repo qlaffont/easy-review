@@ -117,7 +117,7 @@ async function mapWithConcurrency<TItem, TResult>(
         return [];
     }
 
-    const results: Array<TResult> = new Array(items.length);
+    const results: Array<TResult> = Array.from({ length: items.length });
     let nextIndex = 0;
 
     async function worker(): Promise<void> {

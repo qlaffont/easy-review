@@ -14,13 +14,27 @@ const DEFAULT_PREFERENCES: InboxPreferences = {
     openInEasyReview: false,
 };
 
-function readPreferences(): InboxPreferences {
+function getBrowserLocalStorage(): Storage | null {
     if (typeof window === "undefined") {
+        return null;
+    }
+
+    if (window.localStorage) {
+        return window.localStorage;
+    }
+
+    const globalStorage = (globalThis as typeof globalThis & { localStorage?: Storage }).localStorage;
+    return globalStorage ?? null;
+}
+
+function readPreferences(): InboxPreferences {
+    const storage = getBrowserLocalStorage();
+    if (!storage) {
         return DEFAULT_PREFERENCES;
     }
 
     try {
-        const raw = window.localStorage.getItem(STORAGE_KEY);
+        const raw = storage.getItem(STORAGE_KEY);
         if (!raw) {
             return DEFAULT_PREFERENCES;
         }
@@ -49,8 +63,16 @@ function getPreferences(): InboxPreferences {
 
 function commitPreferences(next: InboxPreferences): void {
     cachedPreferences = next;
+    const storage = getBrowserLocalStorage();
+    if (!storage) {
+        for (const listener of preferencesListeners) {
+            listener(next);
+        }
+        return;
+    }
+
     try {
-        window.localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+        storage.setItem(STORAGE_KEY, JSON.stringify(next));
     } catch {
         // Private mode / quota — keep in-memory prefs.
     }
