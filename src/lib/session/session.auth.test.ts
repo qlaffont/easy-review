@@ -221,6 +221,51 @@ describe("oauth restore", () => {
             error: null,
         });
     });
+
+    it("starts GitHub OAuth immediately when a returning account session expired", async () => {
+        await store.set("repos:account", "quentin");
+        let loginStarted = false;
+        const session = createEasyReviewSession({
+            github,
+            queryClient: createTestQueryClient(),
+            store,
+            oauth: {
+                sessionCredential: "session",
+                logout: async () => undefined,
+                beginLogin: () => {
+                    loginStarted = true;
+                },
+            },
+        });
+
+        await session.restore();
+
+        expect(loginStarted).toBe(true);
+        expect(session.state.state.auth.status).toBe("verifying");
+    });
+
+    it("does not auto-reconnect after an explicit sign-out", async () => {
+        await store.set("repos:account", "quentin");
+        await store.set("auth:signed-out", "1");
+        let loginStarted = false;
+        const session = createEasyReviewSession({
+            github,
+            queryClient: createTestQueryClient(),
+            store,
+            oauth: {
+                sessionCredential: "session",
+                logout: async () => undefined,
+                beginLogin: () => {
+                    loginStarted = true;
+                },
+            },
+        });
+
+        await session.restore();
+
+        expect(loginStarted).toBe(false);
+        expect(session.state.state.auth.status).toBe("unauthenticated");
+    });
 });
 
 describe("disconnect", () => {
@@ -236,6 +281,7 @@ describe("disconnect", () => {
             viewer: null,
             tokenStored: false,
         });
+        expect(store.entries()["auth:signed-out"]).toBe("1");
     });
 
     it("leaves the next restore unauthenticated without OAuth", async () => {

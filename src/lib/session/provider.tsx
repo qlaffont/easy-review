@@ -19,7 +19,10 @@ async function logoutOAuthSession(): Promise<void> {
 }
 
 function beginOAuthLogin(): void {
-    window.location.assign("/api/auth/github");
+    const returnTo = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+    const url = new URL("/api/auth/github", window.location.origin);
+    url.searchParams.set("returnTo", returnTo);
+    window.location.assign(url.toString());
 }
 
 function createSession(queryClient: ReturnType<typeof useQueryClient>): EasyReviewSession {

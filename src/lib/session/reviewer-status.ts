@@ -77,3 +77,19 @@ export function excludeAuthorFromReviewers<T extends { login: string }>(
 export function excludeAuthorFromReviewRequests(author: string, reviewRequests: ReadonlyArray<string>): Array<string> {
     return reviewRequests.filter((login) => login !== author);
 }
+
+/**
+ * GitHub shows a pending re-review when someone is in `reviewRequests`, even if their
+ * latest submitted review was approve / changes-requested / commented.
+ */
+export function displayReviewState(
+    login: string,
+    reviewers: ReadonlyArray<ReviewerStatus>,
+    reviewRequests: ReadonlyArray<string>,
+): ReviewState {
+    if (reviewRequests.includes(login)) {
+        return "pending";
+    }
+
+    return reviewers.find((reviewer) => reviewer.login === login)?.state ?? "pending";
+}

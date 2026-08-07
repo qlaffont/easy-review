@@ -2,6 +2,7 @@ import type { EasyReviewSession } from "#/lib/session/session.ts";
 import type { PullRequestDetail, PullRequestState } from "#/lib/session/types.ts";
 
 import { shouldReturnToInboxAfterReviewOrMerge, shouldDeleteHeadBranchOnMerge } from "#/lib/diff-preferences.ts";
+import { openInboxPullRequest } from "#/lib/inbox/inbox-navigation.ts";
 import { notifyAction, notifyActionWithInboxPrompt } from "#/lib/toast.ts";
 
 /**
@@ -96,7 +97,9 @@ export const APP_ACTIONS: ReadonlyArray<AppAction> = [
         when: (context) => onInbox(context) && hasTarget(context),
         run: (context) => {
             if (!context.target) return;
-            context.openPullRequest(context.target.repository, context.target.number);
+            openInboxPullRequest(context.target, (repository, number) => {
+                context.openPullRequest(repository, number);
+            });
         },
     },
     {

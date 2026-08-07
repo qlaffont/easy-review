@@ -23,6 +23,8 @@ import {
     clearGithubAuthSession,
     ensureGithubAccessToken,
     persistGithubOAuthTokens,
+    readOAuthReturnToCookie,
+    setOAuthReturnToCookie,
 } from "#/lib/github/auth-cookies.server.ts";
 import { resetGithubServerEnvCache } from "#/lib/github/env.server.ts";
 import { openGithubSessionPayload, sealGithubSessionPayload } from "#/lib/github/token-crypto.server.ts";
@@ -81,5 +83,12 @@ describe("auth-cookies refresh session", () => {
         expect(await ensureGithubAccessToken()).toBe("ghu_new");
         expect(refreshGithubAccessToken).toHaveBeenCalledWith("ghr_old");
         expect(cookieStore.get("easy-review-gh-token")).toBe("ghu_new");
+    });
+
+    it("stores and reads a sanitized OAuth return path", () => {
+        setOAuthReturnToCookie("/pr/acme/api/7?tab=files#review");
+        expect(readOAuthReturnToCookie()).toBe("/pr/acme/api/7?tab=files#review");
+        setOAuthReturnToCookie("https://evil.test");
+        expect(readOAuthReturnToCookie()).toBe("/");
     });
 });

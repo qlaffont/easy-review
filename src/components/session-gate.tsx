@@ -9,6 +9,7 @@ import { AppFooter } from "#/components/app-footer.tsx";
 import { AppHeader } from "#/components/app-header.tsx";
 import { ConnectGithubScreen } from "#/components/auth/connect-github-screen.tsx";
 import { CommandPalette } from "#/components/command-palette.tsx";
+import { InboxBackgroundWatcher } from "#/components/inbox/inbox-background-watcher.tsx";
 import { RepoPickerProvider } from "#/components/repos/repo-picker.tsx";
 import { BootLoadingScreen } from "#/components/ui/loading.tsx";
 import { useSessionState } from "#/lib/session/provider.tsx";
@@ -20,7 +21,7 @@ export function SessionGate({ children }: { children: React.ReactNode }) {
     const auth = useSessionState((state) => state.auth);
     const isInbox = useRouterState({ select: (state) => state.location.pathname === "/" });
 
-    if (auth.status === "restoring") {
+    if (auth.status === "restoring" || auth.status === "verifying") {
         return bootScreen;
     }
 
@@ -45,6 +46,7 @@ export function SessionGate({ children }: { children: React.ReactNode }) {
                         <EscapeToInboxHotkey />
                         <RefreshPullRequestHotkey />
                         <CommandPalette />
+                        <InboxBackgroundWatcher />
                     </ClipboardHotkeys>
                 </ActionsProvider>
             </HotkeysProvider>

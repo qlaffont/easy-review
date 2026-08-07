@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
     aggregateReviewerStatuses,
+    displayReviewState,
     excludeAuthorFromReviewers,
     excludeAuthorFromReviewRequests,
 } from "#/lib/session/reviewer-status.ts";
@@ -85,5 +86,23 @@ describe("aggregateReviewerStatuses", () => {
             ]),
         ).toEqual([{ login: "hubot", state: "commented", reviewId: 2 }]);
         expect(excludeAuthorFromReviewRequests("octocat", ["octocat", "hubot"])).toEqual(["hubot"]);
+    });
+});
+
+describe("displayReviewState", () => {
+    it("shows pending when the reviewer was re-requested", () => {
+        expect(
+            displayReviewState(
+                "romainpm",
+                [{ login: "romainpm", state: "changes-requested", reviewId: 1 }],
+                ["romainpm"],
+            ),
+        ).toBe("pending");
+    });
+
+    it("keeps the substantive review state when no re-request is pending", () => {
+        expect(
+            displayReviewState("romainpm", [{ login: "romainpm", state: "changes-requested", reviewId: 1 }], []),
+        ).toBe("changes-requested");
     });
 });

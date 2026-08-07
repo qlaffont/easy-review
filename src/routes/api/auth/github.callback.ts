@@ -2,8 +2,10 @@ import { createFileRoute } from "@tanstack/react-router";
 
 import {
     assertGithubOAuthConfigured,
+    clearOAuthReturnToCookie,
     clearOAuthStateCookie,
     persistGithubOAuthTokens,
+    readOAuthReturnToCookie,
     readOAuthStateCookie,
     redirectTo,
 } from "#/lib/github/auth-cookies.server.ts";
@@ -22,6 +24,7 @@ export const Route = createFileRoute("/api/auth/github/callback")({
 
                 if (error) {
                     clearOAuthStateCookie();
+                    clearOAuthReturnToCookie();
                     const message = encodeURIComponent(errorDescription ?? error);
                     return redirectTo(`${origin}/?authError=${message}`);
                 }
@@ -29,9 +32,11 @@ export const Route = createFileRoute("/api/auth/github/callback")({
                 const code = url.searchParams.get("code");
                 const state = url.searchParams.get("state");
                 const expectedState = readOAuthStateCookie();
+                const returnTo = readOAuthReturnToCookie();
 
                 if (!code || !state || !expectedState || state !== expectedState) {
                     clearOAuthStateCookie();
+                    clearOAuthReturnToCookie();
                     return redirectTo(
                         `${origin}/?authError=${encodeURIComponent("OAuth state mismatch. Try signing in again.")}`,
                     );
@@ -40,10 +45,12 @@ export const Route = createFileRoute("/api/auth/github/callback")({
                 try {
                     const tokens = await exchangeGithubOAuthCode(code);
                     clearOAuthStateCookie();
+                    clearOAuthReturnToCookie();
                     persistGithubOAuthTokens(tokens);
-                    return redirectTo(`${origin}/`);
+                    return redirectTo(`${origin}${returnTo}`);
                 } catch (cause) {
                     clearOAuthStateCookie();
+                    clearOAuthReturnToCookie();
                     const message = cause instanceof Error ? cause.message : "GitHub sign-in failed.";
                     return redirectTo(`${origin}/?authError=${encodeURIComponent(message)}`);
                 }

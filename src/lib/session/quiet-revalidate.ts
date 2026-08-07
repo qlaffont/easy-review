@@ -1,7 +1,10 @@
 import { useEffect, useEffectEvent } from "react";
 
-/** Background revalidate cadence for inbox. No polling while the tab is hidden. */
+/** Background revalidate cadence for inbox while the tab is visible. No polling while hidden. */
 export const SESSION_REVALIDATE_INTERVAL_MS = 3 * 60 * 1000;
+
+/** Inbox refresh cadence while the tab is in the background (with optional desktop notifications). */
+export const BACKGROUND_INBOX_REVALIDATE_INTERVAL_MS = 5 * 60 * 1000;
 
 /** How often an open pull request refreshes CI / check rollup while the tab is visible. */
 export const CHECK_STATUS_REVALIDATE_INTERVAL_MS = 5_000;

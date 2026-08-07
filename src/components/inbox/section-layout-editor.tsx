@@ -29,6 +29,8 @@ import {
     Plus,
     Trash2,
     Upload,
+    Bell,
+    ExternalLink,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
@@ -48,7 +50,11 @@ import {
     resolveSectionVisual,
     visualForSection,
 } from "#/components/inbox/section-visuals.ts";
-import { SettingsDialogTitle } from "#/components/settings/settings-ui.tsx";
+import {
+    SettingsDialogTitle,
+    SettingsPreferenceRow,
+    SettingsSectionHeading,
+} from "#/components/settings/settings-ui.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import { Dialog, DialogContent, DialogDescription, DialogHeader } from "#/components/ui/dialog.tsx";
 import {
@@ -61,6 +67,8 @@ import {
 } from "#/components/ui/dropdown-menu.tsx";
 import { Input } from "#/components/ui/input.tsx";
 import { Switch } from "#/components/ui/switch.tsx";
+import { useInboxPreferences } from "#/lib/inbox-preferences.ts";
+import { notificationPermission, requestInboxNotificationPermission } from "#/lib/inbox/inbox-notifications.ts";
 import {
     SECTION_COLOR_IDS,
     SECTION_ICON_IDS,
@@ -78,6 +86,8 @@ export function SectionLayoutEditor({ open, onOpenChange }: { open: boolean; onO
     const fileInputRef = useRef<HTMLInputElement>(null);
     const sectionImportRef = useRef<HTMLInputElement>(null);
     const [filterSectionId, setFilterSectionId] = useState<InboxSectionId | null>(null);
+    const [inboxPreferences, setInboxPreferences] = useInboxPreferences();
+    const notificationsBlocked = notificationPermission() === "denied";
 
     const visible = layout.filter((entry) => !entry.hidden);
     const hiddenPresetsById = new Map(
@@ -152,6 +162,42 @@ export function SectionLayoutEditor({ open, onOpenChange }: { open: boolean; onO
                             independently, so the same PR can appear in more than one. Saved in this browser.
                         </DialogDescription>
                     </DialogHeader>
+
+                    <section className="flex shrink-0 flex-col gap-3">
+                        <SettingsSectionHeading icon={ExternalLink}>Navigation</SettingsSectionHeading>
+                        <SettingsPreferenceRow
+                            icon={ExternalLink}
+                            title="Open pull requests in Easy Review"
+                            description="When off, clicking a row opens the pull request on GitHub in a new tab. When on, open the review page in this app."
+                            checked={inboxPreferences.openInEasyReview}
+                            onCheckedChange={(openInEasyReview) => setInboxPreferences({ openInEasyReview })}
+                        />
+                    </section>
+
+                    <section className="flex shrink-0 flex-col gap-3">
+                        <SettingsSectionHeading icon={Bell}>Background updates</SettingsSectionHeading>
+                        <SettingsPreferenceRow
+                            icon={Bell}
+                            title="Notify when open sections change"
+                            description="While this tab is in the background, refresh the inbox every 5 minutes and send a desktop notification when a pull request in an expanded section updates."
+                            checked={inboxPreferences.backgroundNotifications}
+                            disabled={notificationsBlocked}
+                            onCheckedChange={(checked) => {
+                                void (async () => {
+                                    if (checked) {
+                                        const permission = await requestInboxNotificationPermission();
+                                        if (permission !== "granted") {
+                                            notifyError(
+                                                "Browser notifications are blocked. Allow them in your browser settings to enable background alerts.",
+                                            );
+                                            return;
+                                        }
+                                    }
+                                    setInboxPreferences({ backgroundNotifications: checked });
+                                })();
+                            }}
+                        />
+                    </section>
 
                     <div className="flex w-full min-w-0 shrink-0 flex-wrap items-center justify-between gap-2">
                         <div className="flex flex-wrap gap-2">

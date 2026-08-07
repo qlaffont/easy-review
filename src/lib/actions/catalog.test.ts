@@ -1,9 +1,42 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { ActionContext, ActionTarget } from "#/lib/actions/catalog.ts";
 import type { EasyReviewSession } from "#/lib/session/session.ts";
 
 import { APP_ACTIONS, availableActions, findAction } from "#/lib/actions/catalog.ts";
+import { resetInboxPreferencesCache } from "#/lib/inbox-preferences.ts";
+
+const prefsMemory = new Map<string, string>();
+
+Object.defineProperty(globalThis, "localStorage", {
+    value: {
+        getItem(key: string) {
+            return prefsMemory.has(key) ? prefsMemory.get(key)! : null;
+        },
+        setItem(key: string, value: string) {
+            prefsMemory.set(key, value);
+        },
+        removeItem(key: string) {
+            prefsMemory.delete(key);
+        },
+    },
+    configurable: true,
+});
+
+Object.defineProperty(globalThis, "window", {
+    value: {
+        ...globalThis,
+        open: vi.fn(() => null),
+        location: { origin: "https://easy-review.test" },
+    },
+    configurable: true,
+});
+
+afterEach(() => {
+    prefsMemory.clear();
+    resetInboxPreferencesCache();
+    vi.mocked(window.open).mockClear();
+});
 
 function target(overrides: Partial<ActionTarget> = {}): ActionTarget {
     return {
@@ -103,9 +136,20 @@ describe("action catalog", () => {
         expect(copyText).toHaveBeenCalledWith("feature-1");
     });
 
-    it("opens the selected pull request through navigation, not a one-off handler", () => {
+    it("opens the selected pull request on GitHub by default", () => {
         const openPullRequest = vi.fn();
-        findAction("nav.open-selected")!.run(context({ openPullRequest }));
+        findAction("nav.open-selected")!.run(context({ surface: "inbox", openPullRequest }));
+        expect(window.open).toHaveBeenCalledWith("https://github.com/acme/api/pull/1", "_blank", "noopener,noreferrer");
+        expect(openPullRequest).not.toHaveBeenCalled();
+    });
+
+    it("opens the selected pull request in Easy Review when enabled", () => {
+        localStorage.setItem(
+            "easy-review:inbox-prefs:v1",
+            JSON.stringify({ backgroundNotifications: false, openInEasyReview: true }),
+        );
+        const openPullRequest = vi.fn();
+        findAction("nav.open-selected")!.run(context({ surface: "inbox", openPullRequest }));
         expect(openPullRequest).toHaveBeenCalledWith("acme/api", 1);
     });
 

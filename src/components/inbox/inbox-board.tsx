@@ -18,6 +18,7 @@ import {
 } from "#/components/ui/dropdown-menu.tsx";
 import { InboxLoadingSkeleton, LazyChunkFallback } from "#/components/ui/loading.tsx";
 import { RelativeTime } from "#/components/ui/relative-time.tsx";
+import { openInboxPullRequest } from "#/lib/inbox/inbox-navigation.ts";
 import { useInboxStackBadges } from "#/lib/query/inbox-stack.ts";
 import { useInboxQuery } from "#/lib/query/inbox.ts";
 import { invalidateInboxAfterRepoSelection } from "#/lib/query/invalidate.ts";
@@ -104,10 +105,12 @@ export function InboxBoard() {
             return;
         }
 
-        const [owner = "", repo = ""] = selected.repository.split("/");
-        void navigate({
-            to: "/pr/$owner/$repo/$number",
-            params: { owner, repo, number: String(selected.number) },
+        openInboxPullRequest(selected, (repository, number) => {
+            const [owner = "", repo = ""] = repository.split("/");
+            void navigate({
+                to: "/pr/$owner/$repo/$number",
+                params: { owner, repo, number: String(number) },
+            });
         });
     });
 

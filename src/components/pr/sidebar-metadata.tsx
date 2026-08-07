@@ -48,7 +48,11 @@ import { Skeleton } from "#/components/ui/skeleton.tsx";
 import { Textarea } from "#/components/ui/textarea.tsx";
 import { useRepositoryMetadataQuery } from "#/lib/query/pull-request.ts";
 import { useSession } from "#/lib/session/provider.tsx";
-import { excludeAuthorFromReviewRequests, excludeAuthorFromReviewers } from "#/lib/session/reviewer-status.ts";
+import {
+    displayReviewState,
+    excludeAuthorFromReviewRequests,
+    excludeAuthorFromReviewers,
+} from "#/lib/session/reviewer-status.ts";
 import { notifyAction } from "#/lib/toast.ts";
 import { cn } from "#/lib/utils.ts";
 
@@ -249,6 +253,7 @@ function ReviewersSection({
                                 }
                             }
                             reviewer={reviewer}
+                            displayState={displayReviewState(reviewer.login, visibleReviewers, visibleReviewRequests)}
                             canEdit={canEdit}
                             busy={busy}
                             onReRequest={() => void reRequest(reviewer.login)}
@@ -287,6 +292,7 @@ function ReviewersSection({
 function ReviewerRow({
     user,
     reviewer,
+    displayState,
     canEdit,
     busy,
     onReRequest,
@@ -294,6 +300,7 @@ function ReviewerRow({
 }: {
     user: RepositoryUser;
     reviewer: ReviewerStatus;
+    displayState: ReviewState;
     canEdit: boolean;
     busy: boolean;
     onReRequest: () => void;
@@ -301,7 +308,7 @@ function ReviewerRow({
 }) {
     const [confirmDismiss, setConfirmDismiss] = useState(false);
     const [dismissMessage, setDismissMessage] = useState("");
-    const meta = REVIEW_STATE_META[reviewer.state];
+    const meta = REVIEW_STATE_META[displayState];
     const dismissable = canDismissReview(reviewer.state);
     const canSubmitDismiss = dismissMessage.trim().length > 0;
 

@@ -116,6 +116,8 @@ const SELECTED_REPOS_KEY = "repos:selected";
 const REPOS_CACHE_KEY = "repos:cache";
 /** Login the persisted repository preferences belong to. */
 const REPOS_ACCOUNT_KEY = "repos:account";
+/** Set on explicit sign-out so an expired session auto-reconnects but a deliberate logout shows the connect screen. */
+const SIGNED_OUT_KEY = "auth:signed-out";
 const INBOX_CACHE_KEY = "inbox:cache";
 const INBOX_EXPANDED_KEY = "inbox:expanded";
 const INBOX_SECTIONS_KEY = "inbox:sections";
@@ -762,19 +764,43 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
             const viewer = await github.getViewer(candidate);
             if (attempt !== latestAuthAttempt) return;
             token = candidate;
+            await store.remove(SIGNED_OUT_KEY);
             await loadAccountPreferences(viewer.login);
             setAuth({ status: "authenticated", viewer, error: null });
         } catch (error) {
             if (attempt !== latestAuthAttempt) return;
             const sessionError = toSessionError(error);
-            // Missing/expired cookie → quiet connect screen. Other failures stay visible.
+            // Missing/expired cookie → reconnect when this browser already had an account.
             if (sessionError.kind === "unauthorized") {
+                if (await tryAutoReconnectAfterExpiredSession()) {
+                    return;
+                }
                 setAuth({ status: "unauthenticated", viewer: null, tokenStored: false, error: null });
                 return;
             }
 
             setAuth({ status: "unauthenticated", viewer: null, tokenStored: false, error: sessionError });
         }
+    }
+
+    async function tryAutoReconnectAfterExpiredSession(): Promise<boolean> {
+        if (!oauth || !shouldAutoReconnectAfterUnauthorized()) {
+            return false;
+        }
+
+        const [hadAccount, signedOut] = await Promise.all([store.get(REPOS_ACCOUNT_KEY), store.get(SIGNED_OUT_KEY)]);
+        if (!hadAccount || signedOut) {
+            return false;
+        }
+
+        setAuth({ status: "verifying", error: null });
+        oauth.beginLogin();
+        return true;
+    }
+
+    function shouldAutoReconnectAfterUnauthorized(): boolean {
+        const search = typeof globalThis.location?.search === "string" ? globalThis.location.search : "";
+        return !new URLSearchParams(search).has("authError");
     }
 
     /**
@@ -803,6 +829,7 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
             if (attempt !== latestAuthAttempt) return;
             token = trimmed;
             await store.remove(LEGACY_BROWSER_TOKEN_KEY);
+            await store.remove(SIGNED_OUT_KEY);
             await loadAccountPreferences(viewer.login);
             setAuth({ status: "authenticated", viewer, tokenStored: true, error: null });
         } catch (error) {
@@ -866,6 +893,7 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
             }
         }
         await store.remove(LEGACY_BROWSER_TOKEN_KEY);
+        await store.set(SIGNED_OUT_KEY, "1");
         queryClient.removeQueries({ queryKey: ["pullRequest"] });
         resetSessionUi();
         setAuth({ status: "unauthenticated", viewer: null, tokenStored: false, error: null });

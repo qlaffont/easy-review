@@ -2,6 +2,7 @@ import { deleteCookie, getCookie, setCookie } from "@tanstack/react-start/server
 
 import type { GithubOAuthTokens } from "#/lib/github/oauth-types.ts";
 
+import { sanitizeOAuthReturnTo } from "#/lib/github/oauth-return-to.server.ts";
 import { oauthTokensUseRefreshFlow } from "#/lib/github/oauth-types.ts";
 import { refreshGithubAccessToken } from "#/lib/github/oauth.server.ts";
 import { openGithubSessionPayload, sealGithubSessionPayload } from "#/lib/github/token-crypto.server.ts";
@@ -9,6 +10,7 @@ import { openGithubSessionPayload, sealGithubSessionPayload } from "#/lib/github
 /** Legacy plain access-token cookie for apps without expiring user tokens. */
 const LEGACY_ACCESS_COOKIE = "easy-review-gh-token";
 const STATE_COOKIE = "easy-review-oauth-state";
+const RETURN_TO_COOKIE = "easy-review-oauth-return-to";
 /** Encrypted refresh token + expiry metadata (access token stays in the legacy cookie). */
 const REFRESH_SESSION_COOKIE = "easy-review-gh-refresh-session";
 
@@ -211,10 +213,36 @@ export function clearOAuthStateCookie(): void {
     deleteCookie(STATE_COOKIE, cookieBase());
 }
 
+export function setOAuthReturnToCookie(returnTo: string | null | undefined): void {
+    const safe = sanitizeOAuthReturnTo(returnTo);
+    setCookie(RETURN_TO_COOKIE, encodeURIComponent(safe), {
+        ...cookieBase(),
+        maxAge: STATE_MAX_AGE_SECONDS,
+    });
+}
+
+export function readOAuthReturnToCookie(): string {
+    const raw = getCookie(RETURN_TO_COOKIE);
+    if (!raw) {
+        return "/";
+    }
+
+    try {
+        return sanitizeOAuthReturnTo(decodeURIComponent(raw));
+    } catch {
+        return "/";
+    }
+}
+
+export function clearOAuthReturnToCookie(): void {
+    deleteCookie(RETURN_TO_COOKIE, cookieBase());
+}
+
 export function clearGithubAuthSession(): void {
     deleteCookie(LEGACY_ACCESS_COOKIE, cookieBase());
     deleteCookie(REFRESH_SESSION_COOKIE, cookieBase());
     deleteCookie(STATE_COOKIE, cookieBase());
+    deleteCookie(RETURN_TO_COOKIE, cookieBase());
     refreshInFlight = null;
     refreshLockKey = null;
 }

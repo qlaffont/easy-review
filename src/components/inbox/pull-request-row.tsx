@@ -17,7 +17,12 @@ import { ChecksDot } from "#/components/pr/checks-dot.tsx";
 import { pullRequestHasMergeConflicts } from "#/components/pr/merge-requirements.ts";
 import { HelpTooltip } from "#/components/ui/help-tooltip.tsx";
 import { RelativeTime } from "#/components/ui/relative-time.tsx";
-import { excludeAuthorFromReviewRequests, excludeAuthorFromReviewers } from "#/lib/session/reviewer-status.ts";
+import { useInboxPreferences } from "#/lib/inbox-preferences.ts";
+import {
+    excludeAuthorFromReviewRequests,
+    excludeAuthorFromReviewers,
+    displayReviewState,
+} from "#/lib/session/reviewer-status.ts";
 import { cn } from "#/lib/utils.ts";
 
 const REVIEW_STATUS_LABEL: Record<ReviewState, string> = {
@@ -53,12 +58,17 @@ type ReviewerChip = {
 
 function collectReviewers(pullRequest: PullRequestSummary): Array<ReviewerChip> {
     const byLogin = new Map<string, ReviewerChip>();
+    const reviewers = excludeAuthorFromReviewers(pullRequest.author, pullRequest.reviewers);
+    const reviewRequests = excludeAuthorFromReviewRequests(pullRequest.author, pullRequest.reviewRequests);
 
-    for (const reviewer of excludeAuthorFromReviewers(pullRequest.author, pullRequest.reviewers)) {
-        byLogin.set(reviewer.login, { login: reviewer.login, state: reviewer.state });
+    for (const reviewer of reviewers) {
+        byLogin.set(reviewer.login, {
+            login: reviewer.login,
+            state: displayReviewState(reviewer.login, reviewers, reviewRequests),
+        });
     }
 
-    for (const login of excludeAuthorFromReviewRequests(pullRequest.author, pullRequest.reviewRequests)) {
+    for (const login of reviewRequests) {
         if (!byLogin.has(login)) {
             byLogin.set(login, { login, state: "pending" });
         }
@@ -177,20 +187,17 @@ export const PullRequestRow = memo(function PullRequestRow({
     selected?: boolean;
     stackBadge?: { position: number; total: number } | null;
 }) {
+    const [preferences] = useInboxPreferences();
     const [owner = "", repo = ""] = pullRequest.repository.split("/");
     const hasConflicts = pullRequestHasMergeConflicts(pullRequest);
 
-    return (
-        <Link
-            to="/pr/$owner/$repo/$number"
-            params={{ owner, repo, number: String(pullRequest.number) }}
-            data-selected={selected || undefined}
-            aria-current={selected ? "true" : undefined}
-            className={cn(
-                "inbox-row grid cursor-pointer grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-3 border-b px-3 py-2 text-sm no-underline last:border-b-0 hover:bg-accent/60",
-                selected && "bg-accent",
-            )}
-        >
+    const rowClassName = cn(
+        "inbox-row grid cursor-pointer grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-3 border-b px-3 py-2 text-sm no-underline last:border-b-0 hover:bg-accent/60",
+        selected && "bg-accent",
+    );
+
+    const rowContent = (
+        <>
             <ChecksDot state={pullRequest.checks} />
 
             <span className="flex min-w-0 flex-col gap-0.5">
@@ -248,7 +255,34 @@ export const PullRequestRow = memo(function PullRequestRow({
                     className="w-14 text-right"
                 />
             </span>
-        </Link>
+        </>
+    );
+
+    if (preferences.openInEasyReview) {
+        return (
+            <Link
+                to="/pr/$owner/$repo/$number"
+                params={{ owner, repo, number: String(pullRequest.number) }}
+                data-selected={selected || undefined}
+                aria-current={selected ? "true" : undefined}
+                className={rowClassName}
+            >
+                {rowContent}
+            </Link>
+        );
+    }
+
+    return (
+        <a
+            href={pullRequest.url}
+            target="_blank"
+            rel="noopener noreferrer"
+            data-selected={selected || undefined}
+            aria-current={selected ? "true" : undefined}
+            className={rowClassName}
+        >
+            {rowContent}
+        </a>
     );
 });
 

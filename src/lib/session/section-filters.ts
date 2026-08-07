@@ -117,7 +117,7 @@ export function involvementFor(pullRequest: PullRequestSummary, viewerLogin: str
             return "my-draft";
         }
         if (pullRequest.reviewDecision === "changes-requested") {
-            return "my-changes-requested";
+            return pullRequest.reviewRequests.length > 0 ? "my-waiting-for-reviewers" : "my-changes-requested";
         }
         if (pullRequest.reviewDecision === "approved") {
             return "my-approved";
@@ -357,14 +357,14 @@ export function defaultFilterForPreset(id: string): SectionFilter {
                 condition("state", "is", "open"),
                 condition("isDraft", "is", false),
                 condition("reviewDecision", "is", "changes-requested"),
+                condition("involvement", "is", "my-changes-requested"),
             ]);
         case "waiting-for-reviewers-me":
             return singleCaseFilter("My open PR waiting on review", [
                 condition("author", "is", VIEWER_PERSON),
                 condition("state", "is", "open"),
                 condition("isDraft", "is", false),
-                condition("reviewDecision", "is_not", "changes-requested"),
-                condition("reviewDecision", "is_not", "approved"),
+                condition("involvement", "is", "my-waiting-for-reviewers"),
             ]);
         case "waiting-for-reviewers":
             return singleCaseFilter("Others' open PR waiting on review", [
