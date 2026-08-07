@@ -17,6 +17,17 @@ Open [http://localhost:3000](http://localhost:3000) and use **Sign in with GitHu
 
 **Credentials:** see **[docs/github-setup.md](docs/github-setup.md)** — create the GitHub App, set permissions, install it, and what to put in `.env`.
 
+## Documentation
+
+| Doc | Contents |
+| --- | --- |
+| [CONTEXT.md](CONTEXT.md) | Domain glossary (auth, inbox sections, refresh, notifications) |
+| [docs/inbox.md](docs/inbox.md) | Inbox sections, navigation, refresh, notifications, keyboard |
+| [docs/auth.md](docs/auth.md) | Sign-in, reconnect vs sign-out, return URL |
+| [docs/github-setup.md](docs/github-setup.md) | GitHub App setup and environment variables |
+
+Spec and issue tracker (implementation history): `.scratch/pr-inbox-and-review/`.
+
 ### Fixture mode (no GitHub sign-in)
 
 ```bash

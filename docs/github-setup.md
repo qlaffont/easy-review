@@ -116,4 +116,9 @@ Install URL pattern: `https://github.com/apps/<your-app-slug>/installations/new`
 - [ ] Installability is **Any account** if you need org repos  
 - [ ] App **installed** on your user **and** each org you use  
 - [ ] `.env` has `GITHUB_CLIENT_ID` + `GITHUB_CLIENT_SECRET` + `GITHUB_APP_SLUG`  
-- [ ] Dev server restarted after editing `.env`  
+- [ ] Dev server restarted after editing `.env`
+
+## See also
+
+- [auth.md](./auth.md) — sign-in flow, auto-reconnect, return URL, sign out
+- [inbox.md](./inbox.md) — triage board behavior after you are signed in  
