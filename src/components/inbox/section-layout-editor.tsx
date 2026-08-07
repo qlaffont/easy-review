@@ -55,6 +55,7 @@ import {
     SettingsPreferenceRow,
     SettingsSectionHeading,
 } from "#/components/settings/settings-ui.tsx";
+import { Badge } from "#/components/ui/badge.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import { Dialog, DialogContent, DialogDescription, DialogHeader } from "#/components/ui/dialog.tsx";
 import {
@@ -166,8 +167,20 @@ export function SectionLayoutEditor({ open, onOpenChange }: { open: boolean; onO
                     <section className="flex shrink-0 flex-col gap-3">
                         <SettingsSectionHeading icon={ExternalLink}>Navigation</SettingsSectionHeading>
                         <SettingsPreferenceRow
-                            icon={ExternalLink}
+                            leading={
+                                <span
+                                    className="mt-0.5 grid size-7 shrink-0 place-items-center overflow-hidden rounded-md border border-border/70 bg-muted/50"
+                                    aria-hidden="true"
+                                >
+                                    <img src="/favicon-inbox.svg" alt="" width={16} height={16} className="size-4" />
+                                </span>
+                            }
                             title="Open pull requests in Easy Review"
+                            titleAddon={
+                                <Badge variant="secondary" className="px-1.5 py-0 text-[10px] font-medium uppercase">
+                                    Beta
+                                </Badge>
+                            }
                             description="When off, clicking a row opens the pull request on GitHub in a new tab. When on, open the review page in this app."
                             checked={inboxPreferences.openInEasyReview}
                             onCheckedChange={(openInEasyReview) => setInboxPreferences({ openInEasyReview })}

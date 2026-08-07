@@ -38,14 +38,18 @@ export function SettingsSectionHeading({ icon: Icon, children }: { icon: LucideI
 
 export function SettingsPreferenceRow({
     icon: Icon,
+    leading,
     title,
+    titleAddon,
     description,
     checked,
     onCheckedChange,
     disabled = false,
 }: {
-    icon: LucideIcon;
+    icon?: LucideIcon;
+    leading?: ReactNode;
     title: string;
+    titleAddon?: ReactNode;
     description: string;
     checked: boolean;
     onCheckedChange: (checked: boolean) => void;
@@ -59,14 +63,19 @@ export function SettingsPreferenceRow({
             )}
         >
             <span className="flex min-w-0 items-start gap-3">
-                <span
-                    className="mt-0.5 grid size-7 shrink-0 place-items-center rounded-md border border-border/70 bg-muted/50 text-muted-foreground"
-                    aria-hidden="true"
-                >
-                    <Icon className="size-3.5" />
-                </span>
+                {leading ?? (
+                    <span
+                        className="mt-0.5 grid size-7 shrink-0 place-items-center rounded-md border border-border/70 bg-muted/50 text-muted-foreground"
+                        aria-hidden="true"
+                    >
+                        {Icon ? <Icon className="size-3.5" /> : null}
+                    </span>
+                )}
                 <span className="flex min-w-0 flex-col gap-0.5">
-                    <span className="text-sm font-medium">{title}</span>
+                    <span className="flex flex-wrap items-center gap-1.5 text-sm font-medium">
+                        {title}
+                        {titleAddon}
+                    </span>
                     <span className="text-xs text-muted-foreground">{description}</span>
                 </span>
             </span>
