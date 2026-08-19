@@ -218,7 +218,7 @@ export function PullRequestOverview({
 
                 {activeTab === "conversation" ? (
                     <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_16rem]">
-                        <div id="conversation" className="flex min-w-0 scroll-mt-20 flex-col gap-5">
+                        <div id="conversation" className="flex min-w-0 scroll-mt-32 flex-col gap-5">
                             <PullRequestStackPanel repository={repository} number={number} detail={page.detail} />
                             <Description
                                 detail={page.detail}
@@ -613,8 +613,8 @@ function StickyPullRequestBar({ headline, visible }: { headline: Headline; visib
             aria-hidden={!visible}
             inert={!visible ? true : undefined}
             className={cn(
-                "fixed inset-x-0 top-0 z-30 border-b bg-background/95 shadow-sm backdrop-blur transition duration-200",
-                visible ? "translate-y-0 opacity-100" : "pointer-events-none -translate-y-full opacity-0",
+                "fixed inset-x-0 top-12 z-30 border-b bg-background/95 shadow-sm backdrop-blur transition-opacity duration-200",
+                visible ? "opacity-100" : "pointer-events-none opacity-0",
             )}
         >
             <div className="mx-auto flex w-full max-w-6xl items-center gap-3 px-4 py-2">

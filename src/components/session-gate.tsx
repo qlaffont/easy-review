@@ -1,5 +1,4 @@
 import { HotkeysProvider } from "@tanstack/react-hotkeys";
-import { useRouterState } from "@tanstack/react-router";
 
 import { ActionsProvider } from "#/components/actions/actions-provider.tsx";
 import { ClipboardHotkeys } from "#/components/actions/clipboard-hotkeys.tsx";
@@ -19,7 +18,6 @@ const bootScreen = <BootLoadingScreen />;
 /** Decides between the boot state, the connect screen and the signed-in app shell. */
 export function SessionGate({ children }: { children: React.ReactNode }) {
     const auth = useSessionState((state) => state.auth);
-    const isInbox = useRouterState({ select: (state) => state.location.pathname === "/" });
 
     if (auth.status === "restoring" || auth.status === "verifying") {
         return bootScreen;
@@ -35,11 +33,9 @@ export function SessionGate({ children }: { children: React.ReactNode }) {
                 <ActionsProvider>
                     <ClipboardHotkeys>
                         <div className="flex min-h-svh flex-col">
-                            {isInbox ? (
-                                <div className="sticky top-0 z-20 border-b bg-background">
-                                    <AppHeader />
-                                </div>
-                            ) : null}
+                            <div className="sticky top-0 z-20 border-b bg-background">
+                                <AppHeader />
+                            </div>
                             <main className="flex-1">{children}</main>
                             <AppFooter />
                         </div>

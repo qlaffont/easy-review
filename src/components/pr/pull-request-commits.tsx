@@ -12,7 +12,7 @@ export function PullRequestCommits({ repository, number }: { repository: string;
         <section
             id="commits"
             aria-label="Commits"
-            className="scroll-mt-20 overflow-hidden rounded-lg border bg-background"
+            className="scroll-mt-32 overflow-hidden rounded-lg border bg-background"
         >
             <header className="flex items-center justify-between gap-2 border-b bg-muted/30 px-3 py-2">
                 <h2 className="flex items-center gap-1.5 text-sm font-medium">

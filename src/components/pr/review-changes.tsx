@@ -393,7 +393,7 @@ export function ReviewChanges({
 
     return (
         <div className={cn(preferences.fullWidth && "relative left-1/2 w-screen max-w-[100vw] -translate-x-1/2 px-4")}>
-            <section id="review" className="flex min-h-0 scroll-mt-20 flex-col overflow-hidden rounded-lg border">
+            <section id="review" className="flex min-h-0 scroll-mt-32 flex-col overflow-hidden rounded-lg border">
                 <header className="flex shrink-0 items-center justify-between gap-3 border-b bg-muted/40 px-3 py-2">
                     <div className="flex min-w-0 flex-1 items-center gap-3">
                         <h2 className="shrink-0 text-sm font-medium">
