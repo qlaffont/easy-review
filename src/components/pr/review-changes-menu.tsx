@@ -13,7 +13,7 @@ import { useDiffPreferences } from "#/lib/diff-preferences.ts";
 import { usePullRequestPage, useReviewThreadsQuery } from "#/lib/query/pull-request.ts";
 import { useReviewDraft } from "#/lib/query/review-draft.ts";
 import { useSession } from "#/lib/session/provider.tsx";
-import { notifyAction, notifyActionWithInboxPrompt, notifySuccess } from "#/lib/toast.ts";
+import { notifyAction, notifyBackgroundActionWithInboxPrompt, notifySuccess } from "#/lib/toast.ts";
 import { cn } from "#/lib/utils.ts";
 
 const EVENTS: Array<{ value: ReviewEvent; label: string; hint: string }> = [
@@ -63,7 +63,7 @@ export function ReviewChangesMenu({ repository, number }: { repository: string; 
         ? `https://github.com/${detail.repository}/blob/${detail.headRefName}/`
         : `https://github.com/${repository}/`;
 
-    async function handleSubmit() {
+    function handleSubmit() {
         if (busyRef.current || draft.stale) {
             return;
         }
@@ -71,30 +71,35 @@ export function ReviewChangesMenu({ repository, number }: { repository: string; 
         busyRef.current = true;
         setSubmitting(true);
         setError(null);
+        setOpen(false);
 
-        try {
-            await notifyActionWithInboxPrompt(
-                () => session.submitReview(repository, number),
-                {
-                    loading: "Submitting review…",
-                    success: "Review submitted",
-                    error: "Could not submit the review.",
+        const returnToInbox = preferences.returnToInboxAfterReviewOrMerge;
+        void notifyBackgroundActionWithInboxPrompt(
+            () => session.submitReview(repository, number),
+            {
+                loading: "Submitting review…",
+                success: "Review submitted",
+                error: "Could not submit the review.",
+            },
+            {
+                returnToInbox,
+                onGoToInbox: () => {
+                    session.invalidateInbox();
+                    void navigate({ to: "/" });
                 },
-                {
-                    returnToInbox: preferences.returnToInboxAfterReviewOrMerge,
-                    onGoToInbox: () => {
-                        session.invalidateInbox();
-                        void navigate({ to: "/" });
-                    },
-                },
-            );
-            setOpen(false);
-        } catch (cause) {
-            setError(cause instanceof Error ? cause.message : "Could not submit the review.");
-        } finally {
-            busyRef.current = false;
-            setSubmitting(false);
-        }
+            },
+        )
+            .catch((cause) => {
+                if (returnToInbox) {
+                    return;
+                }
+                setError(cause instanceof Error ? cause.message : "Could not submit the review.");
+                setOpen(true);
+            })
+            .finally(() => {
+                busyRef.current = false;
+                setSubmitting(false);
+            });
     }
 
     async function resolveAllThreads() {

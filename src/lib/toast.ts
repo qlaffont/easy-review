@@ -67,6 +67,33 @@ export async function notifyActionWithInboxPrompt<T>(
     }
 }
 
+/**
+ * Same toasts as {@link notifyActionWithInboxPrompt}, but does not block the caller.
+ * When `returnToInbox` is on, navigates immediately and lets the fetch finish in the background.
+ */
+export function notifyBackgroundActionWithInboxPrompt<T>(
+    action: () => Promise<T>,
+    messages: {
+        loading: string;
+        success: string;
+        error?: string;
+    },
+    options: {
+        returnToInbox: boolean;
+        onGoToInbox: () => void;
+    },
+): Promise<T> {
+    if (options.returnToInbox) {
+        options.onGoToInbox();
+        return notifyAction(action, messages);
+    }
+
+    return notifyActionWithInboxPrompt(action, messages, {
+        returnToInbox: false,
+        onGoToInbox: options.onGoToInbox,
+    });
+}
+
 export function notifySuccess(message: string): void {
     toast.success(message);
 }

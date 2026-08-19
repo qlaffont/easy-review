@@ -2157,7 +2157,7 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
         });
 
         await persistDraft(emptyDraft(repository, number, detail.headSha));
-        await refreshAfterMutation(repository, number, { reloadReviewSurfaces: true, reloadStack: true });
+        void refreshAfterMutation(repository, number, { reloadReviewSurfaces: true, reloadStack: true });
         invalidateInbox();
     }
 

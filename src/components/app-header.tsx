@@ -12,6 +12,7 @@ import {
     DropdownMenuTrigger,
 } from "#/components/ui/dropdown-menu.tsx";
 import { LazyChunkFallback } from "#/components/ui/loading.tsx";
+import { useInboxPreferences } from "#/lib/inbox-preferences.ts";
 import { useSession, useSessionState } from "#/lib/session/provider.tsx";
 import { notifySuccess } from "#/lib/toast.ts";
 
@@ -44,9 +45,11 @@ function preloadStackSettings() {
 export function AppHeader() {
     const session = useSession();
     const viewer = useSessionState((state) => state.auth.viewer);
+    const [inboxPreferences] = useInboxPreferences();
     const [inboxSettingsOpen, setInboxSettingsOpen] = useState(false);
     const [prSettingsOpen, setPrSettingsOpen] = useState(false);
     const [stackSettingsOpen, setStackSettingsOpen] = useState(false);
+    const showPrSettings = inboxPreferences.openInEasyReview;
 
     return (
         <header className="flex h-12 items-center justify-between gap-4 bg-background px-4">
@@ -82,14 +85,16 @@ export function AppHeader() {
                         <Settings2 aria-hidden="true" />
                         Inbox Settings
                     </DropdownMenuItem>
-                    <DropdownMenuItem
-                        onSelect={() => setPrSettingsOpen(true)}
-                        onPointerEnter={preloadPrSettings}
-                        onFocus={preloadPrSettings}
-                    >
-                        <FileDiff aria-hidden="true" />
-                        PR Settings
-                    </DropdownMenuItem>
+                    {showPrSettings ? (
+                        <DropdownMenuItem
+                            onSelect={() => setPrSettingsOpen(true)}
+                            onPointerEnter={preloadPrSettings}
+                            onFocus={preloadPrSettings}
+                        >
+                            <FileDiff aria-hidden="true" />
+                            PR Settings
+                        </DropdownMenuItem>
+                    ) : null}
                     <DropdownMenuItem
                         onSelect={() => setStackSettingsOpen(true)}
                         onPointerEnter={preloadStackSettings}
@@ -117,7 +122,7 @@ export function AppHeader() {
                     <SectionLayoutEditor open={inboxSettingsOpen} onOpenChange={setInboxSettingsOpen} />
                 </Suspense>
             ) : null}
-            {prSettingsOpen ? (
+            {showPrSettings && prSettingsOpen ? (
                 <Suspense fallback={<LazyChunkFallback label="Loading PR settings…" />}>
                     <PrSettingsEditor open={prSettingsOpen} onOpenChange={setPrSettingsOpen} />
                 </Suspense>

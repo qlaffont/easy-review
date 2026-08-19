@@ -3,7 +3,7 @@ import type { PullRequestDetail, PullRequestState } from "#/lib/session/types.ts
 
 import { shouldReturnToInboxAfterReviewOrMerge, shouldDeleteHeadBranchOnMerge } from "#/lib/diff-preferences.ts";
 import { openInboxPullRequest } from "#/lib/inbox/inbox-navigation.ts";
-import { notifyAction, notifyActionWithInboxPrompt } from "#/lib/toast.ts";
+import { notifyAction, notifyActionWithInboxPrompt, notifyBackgroundActionWithInboxPrompt } from "#/lib/toast.ts";
 
 /**
  * The pull request the keyboard selection or the open page is focused on. Copy and lifecycle
@@ -73,6 +73,30 @@ function onPullRequestWithDetail(
     context: ActionContext,
 ): context is ActionContext & { target: ActionTarget; pullRequestDetail: PullRequestDetail } {
     return onPullRequest(context) && hasOpenTarget(context) && context.pullRequestDetail !== null;
+}
+
+function submitReviewInBackground(
+    context: ActionContext,
+    event: "approve" | "request-changes" | "comment",
+    messages: { loading: string; success: string; error: string },
+): void {
+    if (!context.target) {
+        return;
+    }
+
+    const repository = context.target.repository;
+    const number = context.target.number;
+    void notifyBackgroundActionWithInboxPrompt(
+        async () => {
+            await context.session.setReviewEvent(repository, number, event);
+            await context.session.submitReview(repository, number);
+        },
+        messages,
+        {
+            returnToInbox: shouldReturnToInboxAfterReviewOrMerge(),
+            onGoToInbox: context.goToInboxFresh,
+        },
+    );
 }
 
 /** Every command the palette (and later chords) can discover. */
@@ -313,23 +337,12 @@ export const APP_ACTIONS: ReadonlyArray<AppAction> = [
         group: "Pull request",
         keywords: ["review", "lgtm"],
         when: onPullRequestWithDetail,
-        run: async (context) => {
-            if (!context.target) return;
-            await notifyActionWithInboxPrompt(
-                async () => {
-                    await context.session.setReviewEvent(context.target!.repository, context.target!.number, "approve");
-                    await context.session.submitReview(context.target!.repository, context.target!.number);
-                },
-                {
-                    loading: "Submitting approval…",
-                    success: "Pull request approved",
-                    error: "Could not approve the pull request.",
-                },
-                {
-                    returnToInbox: shouldReturnToInboxAfterReviewOrMerge(),
-                    onGoToInbox: context.goToInboxFresh,
-                },
-            );
+        run: (context) => {
+            submitReviewInBackground(context, "approve", {
+                loading: "Submitting approval…",
+                success: "Pull request approved",
+                error: "Could not approve the pull request.",
+            });
         },
     },
     {
@@ -338,27 +351,12 @@ export const APP_ACTIONS: ReadonlyArray<AppAction> = [
         group: "Pull request",
         keywords: ["review", "block"],
         when: onPullRequestWithDetail,
-        run: async (context) => {
-            if (!context.target) return;
-            await notifyActionWithInboxPrompt(
-                async () => {
-                    await context.session.setReviewEvent(
-                        context.target!.repository,
-                        context.target!.number,
-                        "request-changes",
-                    );
-                    await context.session.submitReview(context.target!.repository, context.target!.number);
-                },
-                {
-                    loading: "Submitting review…",
-                    success: "Changes requested",
-                    error: "Could not submit the review.",
-                },
-                {
-                    returnToInbox: shouldReturnToInboxAfterReviewOrMerge(),
-                    onGoToInbox: context.goToInboxFresh,
-                },
-            );
+        run: (context) => {
+            submitReviewInBackground(context, "request-changes", {
+                loading: "Submitting review…",
+                success: "Changes requested",
+                error: "Could not submit the review.",
+            });
         },
     },
     {
@@ -494,23 +492,12 @@ export const APP_ACTIONS: ReadonlyArray<AppAction> = [
         label: "Submit staged review as Comment",
         group: "Pull request",
         when: (context) => onPullRequest(context) && hasOpenTarget(context),
-        run: async (context) => {
-            if (!context.target) return;
-            await notifyActionWithInboxPrompt(
-                async () => {
-                    await context.session.setReviewEvent(context.target!.repository, context.target!.number, "comment");
-                    await context.session.submitReview(context.target!.repository, context.target!.number);
-                },
-                {
-                    loading: "Submitting review…",
-                    success: "Review submitted",
-                    error: "Could not submit the review.",
-                },
-                {
-                    returnToInbox: shouldReturnToInboxAfterReviewOrMerge(),
-                    onGoToInbox: context.goToInboxFresh,
-                },
-            );
+        run: (context) => {
+            submitReviewInBackground(context, "comment", {
+                loading: "Submitting review…",
+                success: "Review submitted",
+                error: "Could not submit the review.",
+            });
         },
     },
 ];
