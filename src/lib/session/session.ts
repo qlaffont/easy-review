@@ -3547,7 +3547,12 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
         await refreshAfterMutation(repository, number, { reloadReviewSurfaces: true });
     }
 
-    async function updatePullRequestReview(repository: string, number: number, reviewId: string, body: string): Promise<void> {
+    async function updatePullRequestReview(
+        repository: string,
+        number: number,
+        reviewId: string,
+        body: string,
+    ): Promise<void> {
         await github.updatePullRequestReview(requireToken(), reviewId, body);
         const key = pullRequestKey(repository, number);
         const conversationItems = resolveConversationItems(key);

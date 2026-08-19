@@ -14,6 +14,10 @@ Single-context: `CONTEXT.md` + `docs/adr/` at the repo root. See `docs/agents/do
 
 Skills live under `.agents/skills/`. Install more with `pnpm dlx skills add <owner/repo@skill> -y`.
 
+### Quality gate
+
+After every source change, use `verify-changes`: lint, typecheck, tests, and app size. Fix failures before moving on.
+
 ### Design & visual craft
 
 - **frontend-design** — Core design principles and anti-patterns. Start here for any new UI.
@@ -58,6 +62,7 @@ Skills live under `.agents/skills/`. Install more with `pnpm dlx skills add <own
 
 | Task | Skill |
 |---|---|
+| After any source edit | `verify-changes` |
 | New page or layout | `design-an-interface` → `frontend-design` → `shadcn` |
 | Admin table / list | `tanstack-table` + `shadcn` |
 | Forms (send, CRUD) | `tanstack-form` + generated Zod schemas |

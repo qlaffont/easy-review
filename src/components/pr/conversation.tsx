@@ -27,9 +27,9 @@ import { EditableCommentBody } from "#/components/pr/editable-comment-body.tsx";
 import { EditedMeta } from "#/components/pr/edited-meta.tsx";
 import { MarkdownComposer } from "#/components/pr/markdown-composer.tsx";
 import { Markdown } from "#/components/pr/markdown.tsx";
-import { useMarkdownTaskToggle } from "#/components/pr/use-markdown-task-toggle.ts";
 import { ReactionBar, ReviewThreadCommentReactions } from "#/components/pr/reaction-bar.tsx";
 import { ReviewThreadStatusLabels } from "#/components/pr/review-thread-status.tsx";
+import { useMarkdownTaskToggle } from "#/components/pr/use-markdown-task-toggle.ts";
 import {
     AlertDialog,
     AlertDialogAction,

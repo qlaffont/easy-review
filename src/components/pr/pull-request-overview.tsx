@@ -34,7 +34,6 @@ import { CommentActionsMenu, quoteMarkdown } from "#/components/pr/comment-actio
 import { EditedMeta } from "#/components/pr/edited-meta.tsx";
 import { MarkdownComposer } from "#/components/pr/markdown-composer.tsx";
 import { Markdown } from "#/components/pr/markdown.tsx";
-import { useMarkdownTaskToggle } from "#/components/pr/use-markdown-task-toggle.ts";
 import { PullRequestControls } from "#/components/pr/pull-request-controls.tsx";
 import { PullRequestCopyMenu } from "#/components/pr/pull-request-copy-menu.tsx";
 import { PullRequestStackPanel } from "#/components/pr/pull-request-stack-panel.tsx";
@@ -43,6 +42,7 @@ import { RelatedPullRequestsSidebar } from "#/components/pr/related-pull-request
 import { ReviewChangesMenu } from "#/components/pr/review-changes-menu.tsx";
 import { PullRequestSidebarMetadata } from "#/components/pr/sidebar-metadata.tsx";
 import { SuggestionBatchBar } from "#/components/pr/suggestion-apply.tsx";
+import { useMarkdownTaskToggle } from "#/components/pr/use-markdown-task-toggle.ts";
 import { Button } from "#/components/ui/button.tsx";
 import {
     Command,
@@ -1153,11 +1153,7 @@ function Description({
             ) : (
                 <div className="px-3 py-3">
                     {body.trim() ? (
-                        <Markdown
-                            source={source}
-                            baseUrl={baseUrl}
-                            onToggleTask={detail ? onToggleTask : undefined}
-                        />
+                        <Markdown source={source} baseUrl={baseUrl} onToggleTask={detail ? onToggleTask : undefined} />
                     ) : (
                         <p className="text-sm italic text-muted-foreground">No description provided.</p>
                     )}
