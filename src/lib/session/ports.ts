@@ -351,6 +351,8 @@ export type GithubClient = {
         commentId: number,
         body: string,
     ): Promise<ReviewThreadComment>;
+    /** Edit a submitted pull request review summary body. */
+    updatePullRequestReview(token: string, reviewNodeId: string, body: string): Promise<void>;
     /** Load the viewer’s GitHub pending review, if any. */
     getViewerPendingReview(
         token: string,

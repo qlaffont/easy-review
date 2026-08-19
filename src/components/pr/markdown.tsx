@@ -9,6 +9,7 @@ import {
     useContext,
     useEffect,
     useMemo,
+    useRef,
     useState,
     type ComponentPropsWithoutRef,
     type ReactElement,
@@ -164,6 +165,46 @@ const SuggestionContext = createContext<SuggestionContextValue>({
     endLine: null,
     apply: null,
 });
+
+type TaskListContextValue = {
+    onToggle: ((index: number, checked: boolean) => void) | null;
+    nextIndex: () => number;
+};
+
+const TaskListContext = createContext<TaskListContextValue>({
+    onToggle: null,
+    nextIndex: () => 0,
+});
+
+function MarkdownCheckbox({ checked, defaultChecked }: ComponentPropsWithoutRef<"input">) {
+    const { onToggle, nextIndex } = useContext(TaskListContext);
+    const indexRef = useRef<number | null>(null);
+    if (indexRef.current === null) {
+        indexRef.current = nextIndex();
+    }
+    const index = indexRef.current;
+    const interactive = onToggle !== null;
+    const isChecked = Boolean(checked ?? defaultChecked);
+
+    return (
+        <input
+            type="checkbox"
+            className={cn("relative z-10 mr-1.5 align-middle", interactive && "cursor-pointer")}
+            checked={isChecked}
+            disabled={!interactive}
+            onClick={(event) => {
+                event.stopPropagation();
+            }}
+            onChange={
+                interactive
+                    ? (event) => {
+                          onToggle(index, event.target.checked);
+                      }
+                    : undefined
+            }
+        />
+    );
+}
 
 function codeChildFromPre(children: ReactNode): ReactElement<{ className?: string; children?: ReactNode }> | null {
     const child = Children.toArray(children).find((node) => isValidElement(node)) as
@@ -821,7 +862,7 @@ const components = {
     },
     input: ({ type, ...props }: ComponentPropsWithoutRef<"input">) => {
         if (type === "checkbox") {
-            return <input type="checkbox" disabled className="mr-1.5 align-middle" {...props} />;
+            return <MarkdownCheckbox {...props} />;
         }
         return null;
     },
@@ -886,6 +927,7 @@ export const Markdown = memo(function Markdown({
     suggestionStartLine = null,
     suggestionLine = null,
     suggestionApply = null,
+    onToggleTask = null,
 }: {
     source: string;
     baseUrl: string;
@@ -896,6 +938,8 @@ export const Markdown = memo(function Markdown({
     suggestionLine?: number | null;
     /** When set, suggestion fences show Apply / batch actions. */
     suggestionApply?: SuggestionApplyTarget | null;
+    /** When set, GitHub task-list checkboxes are clickable. */
+    onToggleTask?: ((index: number, checked: boolean) => void) | null;
 }) {
     const urlTransform = useMemo(() => resolveAgainst(baseUrl), [baseUrl]);
     const prepared = useMemo(() => prepareMarkdownSource(source), [source]);
@@ -910,19 +954,31 @@ export const Markdown = memo(function Markdown({
         return { original, startLine: start, endLine: end, apply: suggestionApply };
     }, [suggestionOriginal, suggestionStartLine, suggestionLine, suggestionApply]);
 
+    let taskIndex = 0;
+    const taskList: TaskListContextValue = {
+        onToggle: onToggleTask,
+        nextIndex: () => {
+            const current = taskIndex;
+            taskIndex += 1;
+            return current;
+        },
+    };
+
     return (
         <SuggestionContext.Provider value={suggestionContext}>
             <MarkdownRepoContext.Provider value={repositoryFromGithubBaseUrl(baseUrl)}>
-                <div className="prose prose-sm max-w-none text-foreground dark:prose-invert prose-p:my-2 prose-hr:my-3 prose-pre:my-0 prose-pre:bg-transparent prose-pre:p-0 prose-code:text-foreground prose-code:before:content-none prose-code:after:content-none prose-strong:text-foreground [&_.graphite__hidden]:hidden [&_li:has(>input[type=checkbox])]:list-none [&_ul:has(li>input[type=checkbox])]:list-none [&_ul:has(li>input[type=checkbox])]:pl-0">
-                    <ReactMarkdown
-                        remarkPlugins={remarkPlugins}
-                        rehypePlugins={rehypePlugins}
-                        components={components}
-                        urlTransform={urlTransform}
-                    >
-                        {prepared}
-                    </ReactMarkdown>
-                </div>
+                <TaskListContext.Provider value={taskList}>
+                    <div className="prose prose-sm max-w-none text-foreground dark:prose-invert prose-p:my-2 prose-hr:my-3 prose-pre:my-0 prose-pre:bg-transparent prose-pre:p-0 prose-code:text-foreground prose-code:before:content-none prose-code:after:content-none prose-strong:text-foreground [&_.graphite__hidden]:hidden [&_li:has(>input[type=checkbox])]:list-none [&_ul:has(li>input[type=checkbox])]:list-none [&_ul:has(li>input[type=checkbox])]:pl-0">
+                        <ReactMarkdown
+                            remarkPlugins={remarkPlugins}
+                            rehypePlugins={rehypePlugins}
+                            components={components}
+                            urlTransform={urlTransform}
+                        >
+                            {prepared}
+                        </ReactMarkdown>
+                    </div>
+                </TaskListContext.Provider>
             </MarkdownRepoContext.Provider>
         </SuggestionContext.Provider>
     );

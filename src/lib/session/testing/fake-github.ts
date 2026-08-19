@@ -1306,6 +1306,9 @@ export function createFakeGithub(): FakeGithub {
                 };
             });
         },
+        updatePullRequestReview(_token, _reviewNodeId, _body) {
+            return respond("updatePullRequestReview", () => {});
+        },
         updateReviewComment(token, _repository, commentId, body) {
             return respond("updateReviewComment", () => {
                 const account = authenticate(token);

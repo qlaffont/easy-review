@@ -27,6 +27,7 @@ import { EditableCommentBody } from "#/components/pr/editable-comment-body.tsx";
 import { EditedMeta } from "#/components/pr/edited-meta.tsx";
 import { MarkdownComposer } from "#/components/pr/markdown-composer.tsx";
 import { Markdown } from "#/components/pr/markdown.tsx";
+import { useMarkdownTaskToggle } from "#/components/pr/use-markdown-task-toggle.ts";
 import { ReactionBar, ReviewThreadCommentReactions } from "#/components/pr/reaction-bar.tsx";
 import { ReviewThreadStatusLabels } from "#/components/pr/review-thread-status.tsx";
 import {
@@ -738,6 +739,56 @@ function IssueTimelineComment({
     );
 }
 
+function ReviewTimelineComment({
+    item,
+    baseUrl,
+    repository,
+    number,
+    onQuote,
+}: {
+    item: Extract<PullRequestTimelineItem, { kind: "review" }>;
+    baseUrl: string;
+    repository: string;
+    number: number;
+    onQuote?: (body: string) => void;
+}) {
+    const session = useSession();
+    const { source, onToggleTask } = useMarkdownTaskToggle(item.body, (body) =>
+        session.updatePullRequestReview(repository, number, item.id, body),
+    );
+
+    return (
+        <>
+            <TimelineDot className="mt-2 bg-background">
+                <MessageSquare className="size-3.5" aria-hidden="true" />
+            </TimelineDot>
+            <article className="min-w-0 flex-1 overflow-hidden rounded-md border bg-background">
+                <header className="flex flex-wrap items-center gap-x-2 gap-y-1 border-b bg-muted/30 px-3 py-2 text-xs">
+                    <AvatarTiny login={item.author.login} avatarUrl={item.author.avatarUrl} />
+                    <a href={item.url} target="_blank" rel="noreferrer" className="font-semibold hover:underline">
+                        {item.author.login}
+                    </a>
+                    <RelativeTime
+                        iso={item.createdAt}
+                        prefix={reviewVerb(item.state)}
+                        className="text-muted-foreground"
+                    />
+                    <div className="ml-auto">
+                        <CommentActionsMenu
+                            url={item.url}
+                            body={item.body}
+                            onQuote={item.body.trim() && onQuote ? () => onQuote(item.body) : undefined}
+                        />
+                    </div>
+                </header>
+                <div className="px-3 py-3">
+                    <Markdown source={source} baseUrl={baseUrl} onToggleTask={onToggleTask} />
+                </div>
+            </article>
+        </>
+    );
+}
+
 function TimelineItemRow({
     item,
     baseUrl,
@@ -765,34 +816,13 @@ function TimelineItemRow({
 
     if (item.kind === "review" && item.body.trim()) {
         return (
-            <>
-                <TimelineDot className="mt-2 bg-background">
-                    <MessageSquare className="size-3.5" aria-hidden="true" />
-                </TimelineDot>
-                <article className="min-w-0 flex-1 overflow-hidden rounded-md border bg-background">
-                    <header className="flex flex-wrap items-center gap-x-2 gap-y-1 border-b bg-muted/30 px-3 py-2 text-xs">
-                        <AvatarTiny login={item.author.login} avatarUrl={item.author.avatarUrl} />
-                        <a href={item.url} target="_blank" rel="noreferrer" className="font-semibold hover:underline">
-                            {item.author.login}
-                        </a>
-                        <RelativeTime
-                            iso={item.createdAt}
-                            prefix={reviewVerb(item.state)}
-                            className="text-muted-foreground"
-                        />
-                        <div className="ml-auto">
-                            <CommentActionsMenu
-                                url={item.url}
-                                body={item.body}
-                                onQuote={item.body.trim() && onQuote ? () => onQuote(item.body) : undefined}
-                            />
-                        </div>
-                    </header>
-                    <div className="px-3 py-3">
-                        <Markdown source={item.body} baseUrl={baseUrl} />
-                    </div>
-                </article>
-            </>
+            <ReviewTimelineComment
+                item={item}
+                baseUrl={baseUrl}
+                repository={repository}
+                number={number}
+                onQuote={onQuote}
+            />
         );
     }
 

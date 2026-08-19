@@ -34,6 +34,7 @@ import { CommentActionsMenu, quoteMarkdown } from "#/components/pr/comment-actio
 import { EditedMeta } from "#/components/pr/edited-meta.tsx";
 import { MarkdownComposer } from "#/components/pr/markdown-composer.tsx";
 import { Markdown } from "#/components/pr/markdown.tsx";
+import { useMarkdownTaskToggle } from "#/components/pr/use-markdown-task-toggle.ts";
 import { PullRequestControls } from "#/components/pr/pull-request-controls.tsx";
 import { PullRequestCopyMenu } from "#/components/pr/pull-request-copy-menu.tsx";
 import { PullRequestStackPanel } from "#/components/pr/pull-request-stack-panel.tsx";
@@ -188,12 +189,11 @@ export function PullRequestOverview({
             return;
         }
 
-        // App header is h-12 — treat the page header as gone once it clears that band.
         const observer = new IntersectionObserver(
             ([entry]) => {
                 setStickyVisible(!(entry?.isIntersecting ?? true));
             },
-            { rootMargin: "-48px 0px 0px 0px", threshold: 0 },
+            { threshold: 0 },
         );
         observer.observe(node);
 
@@ -218,7 +218,7 @@ export function PullRequestOverview({
 
                 {activeTab === "conversation" ? (
                     <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_16rem]">
-                        <div id="conversation" className="flex min-w-0 scroll-mt-32 flex-col gap-5">
+                        <div id="conversation" className="flex min-w-0 scroll-mt-20 flex-col gap-5">
                             <PullRequestStackPanel repository={repository} number={number} detail={page.detail} />
                             <Description
                                 detail={page.detail}
@@ -613,7 +613,7 @@ function StickyPullRequestBar({ headline, visible }: { headline: Headline; visib
             aria-hidden={!visible}
             inert={!visible ? true : undefined}
             className={cn(
-                "fixed inset-x-0 top-12 z-30 border-b bg-background/95 shadow-sm backdrop-blur transition-opacity duration-200",
+                "fixed inset-x-0 top-0 z-30 border-b bg-background/95 shadow-sm backdrop-blur transition-opacity duration-200",
                 visible ? "opacity-100" : "pointer-events-none opacity-0",
             )}
         >
@@ -1033,6 +1033,12 @@ function Description({
     const [saving, setSaving] = useState(false);
     const body = detail?.body ?? "";
     const canEdit = detail?.state === "open" && viewer?.login === headline.author;
+    const { source, onToggleTask } = useMarkdownTaskToggle(body, async (next) => {
+        if (!detail) {
+            throw new Error("Pull request is not loaded.");
+        }
+        await session.updatePullRequestBody(detail.repository, detail.number, next);
+    });
 
     async function save() {
         if (!detail || saving) {
@@ -1147,7 +1153,11 @@ function Description({
             ) : (
                 <div className="px-3 py-3">
                     {body.trim() ? (
-                        <Markdown source={body} baseUrl={baseUrl} />
+                        <Markdown
+                            source={source}
+                            baseUrl={baseUrl}
+                            onToggleTask={detail ? onToggleTask : undefined}
+                        />
                     ) : (
                         <p className="text-sm italic text-muted-foreground">No description provided.</p>
                     )}

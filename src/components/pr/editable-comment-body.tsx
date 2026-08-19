@@ -2,6 +2,7 @@ import { useState, type ComponentProps } from "react";
 
 import { MarkdownComposer } from "#/components/pr/markdown-composer.tsx";
 import { Markdown } from "#/components/pr/markdown.tsx";
+import { useMarkdownTaskToggle } from "#/components/pr/use-markdown-task-toggle.ts";
 import { Button } from "#/components/ui/button.tsx";
 import { notifyAction } from "#/lib/toast.ts";
 
@@ -30,6 +31,7 @@ export function EditableCommentBody({
 }: EditableCommentBodyProps) {
     const [draft, setDraft] = useState(body);
     const [saving, setSaving] = useState(false);
+    const { source, onToggleTask } = useMarkdownTaskToggle(body, onSave);
 
     if (editing && canEdit) {
         return (
@@ -84,5 +86,5 @@ export function EditableCommentBody({
         );
     }
 
-    return <Markdown source={body} baseUrl={baseUrl} {...markdownProps} />;
+    return <Markdown source={source} baseUrl={baseUrl} {...markdownProps} onToggleTask={onToggleTask} />;
 }

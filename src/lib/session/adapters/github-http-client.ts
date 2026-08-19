@@ -1464,6 +1464,22 @@ export function createGithubHttpClient(
             };
         },
 
+        async updatePullRequestReview(token, reviewNodeId, body) {
+            await graphql(
+                token,
+                `
+                    mutation EasyReviewUpdatePullRequestReview($pullRequestReviewId: ID!, $body: String!) {
+                        updatePullRequestReview(input: { pullRequestReviewId: $pullRequestReviewId, body: $body }) {
+                            pullRequestReview {
+                                id
+                            }
+                        }
+                    }
+                `,
+                { pullRequestReviewId: reviewNodeId, body },
+            );
+        },
+
         async getViewerPendingReview(token, repository, number, viewerLogin) {
             const [owner = "", name = ""] = repository.split("/");
             const rows = (await restJson(

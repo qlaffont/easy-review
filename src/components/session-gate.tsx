@@ -1,4 +1,5 @@
 import { HotkeysProvider } from "@tanstack/react-hotkeys";
+import { useRouterState } from "@tanstack/react-router";
 
 import { ActionsProvider } from "#/components/actions/actions-provider.tsx";
 import { ClipboardHotkeys } from "#/components/actions/clipboard-hotkeys.tsx";
@@ -18,6 +19,9 @@ const bootScreen = <BootLoadingScreen />;
 /** Decides between the boot state, the connect screen and the signed-in app shell. */
 export function SessionGate({ children }: { children: React.ReactNode }) {
     const auth = useSessionState((state) => state.auth);
+    const onPullRequest = useRouterState({
+        select: (state) => state.location.pathname.startsWith("/pr/"),
+    });
 
     if (auth.status === "restoring" || auth.status === "verifying") {
         return bootScreen;
@@ -33,9 +37,11 @@ export function SessionGate({ children }: { children: React.ReactNode }) {
                 <ActionsProvider>
                     <ClipboardHotkeys>
                         <div className="flex min-h-svh flex-col">
-                            <div className="sticky top-0 z-20 border-b bg-background">
-                                <AppHeader />
-                            </div>
+                            {onPullRequest ? null : (
+                                <div className="sticky top-0 z-20 border-b bg-background">
+                                    <AppHeader />
+                                </div>
+                            )}
                             <main className="flex-1">{children}</main>
                             <AppFooter />
                         </div>

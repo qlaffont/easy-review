@@ -3547,6 +3547,29 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
         await refreshAfterMutation(repository, number, { reloadReviewSurfaces: true });
     }
 
+    async function updatePullRequestReview(repository: string, number: number, reviewId: string, body: string): Promise<void> {
+        await github.updatePullRequestReview(requireToken(), reviewId, body);
+        const key = pullRequestKey(repository, number);
+        const conversationItems = resolveConversationItems(key);
+        const nextItems = conversationItems.map((entry) =>
+            entry.kind === "review" && entry.id === reviewId ? { ...entry, body } : entry,
+        );
+        queryClient.setQueryData<ConversationQueryData>(queryKeys.pullRequest.conversation(key), {
+            items: nextItems,
+        });
+        state.setState((prev) => ({
+            ...prev,
+            conversationComments: {
+                ...prev.conversationComments,
+                [key]: {
+                    status: "ready",
+                    items: nextItems,
+                    error: null,
+                },
+            },
+        }));
+    }
+
     async function closePullRequest(repository: string, number: number): Promise<void> {
         await github.closePullRequest(requireToken(), repository, number);
         await refreshAfterMutation(repository, number, { reloadStack: true });
@@ -3762,6 +3785,7 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
         disablePullRequestAutoMerge,
         updateIssueComment,
         updateReviewComment,
+        updatePullRequestReview,
         closePullRequest,
         uploadPullRequestMedia,
         resolveUserAttachment,
