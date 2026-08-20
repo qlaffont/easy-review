@@ -20,6 +20,7 @@ import {
 
 const ATTACHMENT = "https://github.com/user-attachments/assets/0682c898-4e3a-4209-a711-54519406d6a8";
 const GRAPHITE_VIDEO = "https://app.graphite.com/user-attachments/video/4280fb23-bfcc-429d-95a4-461f52ce5fc1.mov";
+const GRAPHITE_ASSET = "https://app.graphite.com/user-attachments/assets/c24f1fdd-0862-4fee-9f1e-0f572cb7bbc3.png";
 const REPO_BLOB =
     "https://github.com/acme/api/blob/b395d09f1dd536188676eeb4a6958f77aebf3f08/ae48774b65c9-shot.png?raw=true";
 const REPO_BLOB_ENCODED =
@@ -52,6 +53,16 @@ describe("parseGraphiteUserAttachmentUrl", () => {
         });
         expect(isGraphiteUserAttachmentUrl(GRAPHITE_VIDEO)).toBe(true);
         expect(shouldEmbedGraphiteAttachment(GRAPHITE_VIDEO)).toBe(true);
+    });
+
+    it("parses Graphite asset urls used in PR descriptions", () => {
+        expect(parseGraphiteUserAttachmentUrl(GRAPHITE_ASSET)).toEqual({
+            kind: "image",
+            src: GRAPHITE_ASSET,
+            name: "c24f1fdd-0862-4fee-9f1e-0f572cb7bbc3.png",
+        });
+        expect(isGraphiteUserAttachmentUrl(GRAPHITE_ASSET)).toBe(true);
+        expect(shouldEmbedGraphiteAttachment(GRAPHITE_ASSET)).toBe(true);
     });
 
     it("rejects Graphite thumbnail paths", () => {
@@ -138,6 +149,13 @@ describe("Markdown github attachment embeds", () => {
         expect(html).toContain(`href="${ATTACHMENT}"`);
         expect(html).toContain("Open asset");
         expect(html).not.toMatch(/<(?:img|video)\b/);
+    });
+
+    it("renders Graphite asset images from markdown image syntax", () => {
+        const html = renderMarkdown(`Le figma:\n\n![Capture d’écran 2026-08-20 à 15.18.06.png](${GRAPHITE_ASSET})`);
+
+        expect(html).toContain(`src="${GRAPHITE_ASSET}"`);
+        expect(html).toMatch(/<img\b/);
     });
 
     it("renders Graphite video links as an embedded player", () => {

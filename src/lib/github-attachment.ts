@@ -3,7 +3,7 @@ const USER_ATTACHMENT_PATH = /^\/user-attachments\/assets\/[0-9a-f-]+\/?$/i;
 
 /** Graphite upload CDN — separate host from GitHub (`app.graphite.com/user-attachments/...`). */
 const GRAPHITE_HOST = /^(?:[\w-]+\.)*graphite\.(?:com|dev)$/i;
-const GRAPHITE_ATTACHMENT_PATH = /^\/user-attachments\/(video|image|images)\/(.+)$/i;
+const GRAPHITE_ATTACHMENT_PATH = /^\/user-attachments\/(video|image|images|assets)\/(.+)$/i;
 
 /** Easy Review PR media: `…/blob/<sha>/<path>?raw=true` (often private — needs auth to render). */
 const REPO_BLOB_RAW_PATH = /^\/([^/]+)\/([^/]+)\/blob\/([0-9a-f]{7,40})\/(.+)$/i;
