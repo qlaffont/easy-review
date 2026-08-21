@@ -83,15 +83,16 @@ describe("evaluateStackMerge", () => {
         expect(evaluation.blockMessage).toContain("#289");
     });
 
-    it("requires at least two open pull requests", () => {
+    it("allows merging the remaining open layer after downstack pull requests land", () => {
         const evaluation = evaluateStackMerge(
             stack([
                 summary({ number: 289, headRefName: "feat-a", baseRefName: "dev", state: "merged", mergedAt: "x" }),
                 summary({ number: 332, headRefName: "feat-b", baseRefName: "feat-a", reviewDecision: "approved" }),
             ]),
+            { upToNumber: 332 },
         );
 
-        expect(evaluation.canMerge).toBe(false);
-        expect(evaluation.blockMessage).toContain("at least two open");
+        expect(evaluation.canMerge).toBe(true);
+        expect(evaluation.mergeOrder.map((pullRequest) => pullRequest.number)).toEqual([332]);
     });
 });

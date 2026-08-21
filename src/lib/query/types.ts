@@ -1,7 +1,6 @@
 import type { SessionError } from "#/lib/session/errors.ts";
 import type { InboxSectionId } from "#/lib/session/inbox-sections.ts";
 import type { InboxPullRequestPageInfo } from "#/lib/session/ports.ts";
-import type { ResolvedPullRequestStack } from "#/lib/session/pull-request-stacks.ts";
 import type {
     FileDiff,
     PullRequestCommit,
@@ -63,19 +62,6 @@ export type RelatedPullRequestsQueryData = {
 export type RepositoryMetadataQueryData = {
     users: Array<RepositoryUser>;
     labels: Array<RepositoryLabel>;
-};
-
-export type RepoStackIndexQueryData = {
-    pullRequests: Array<PullRequestSummary>;
-    defaultBranch: string | null;
-    lastLoadedAt: string | null;
-};
-
-export type PullRequestStackQueryData = {
-    stack: ResolvedPullRequestStack | null;
-    /** Resolution finished (including “no stack found”). */
-    resolved: boolean;
-    lastLoadedAt: string;
 };
 
 export type InboxSectionQueryData = {

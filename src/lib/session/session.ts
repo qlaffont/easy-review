@@ -9,9 +9,7 @@ import type {
     PullRequestCommitsQueryData,
     PullRequestDetailQueryData,
     PullRequestFilesQueryData,
-    PullRequestStackQueryData,
     RelatedPullRequestsQueryData,
-    RepoStackIndexQueryData,
     RepositoriesQueryData,
     RepositoryMetadataQueryData,
     ReviewThreadsQueryData,
@@ -60,6 +58,7 @@ import {
     mergePullRequestSummaries,
     mergeSectionResultsIntoInbox,
     patchInboxPullRequest,
+    sectionCountAfterClientFilter,
 } from "#/lib/query/inbox-fetch.ts";
 import {
     getInboxQueryData,
@@ -67,15 +66,10 @@ import {
     inboxSectionQueryPrefix,
     setInboxQueryData,
 } from "#/lib/query/inbox.ts";
-import {
-    invalidateInboxForRefresh,
-    invalidatePullRequestSecondaryAfterMutation,
-    invalidateRepositoryStackIndex,
-} from "#/lib/query/invalidate.ts";
+import { invalidateInboxForRefresh, invalidatePullRequestSecondaryAfterMutation } from "#/lib/query/invalidate.ts";
 import { setPullRequestDetailQueryData } from "#/lib/query/pull-request.ts";
 import { queryKeys } from "#/lib/query/query-keys.ts";
 import { EasyReviewError, missingToken, toSessionError, unauthorized } from "#/lib/session/errors.ts";
-import { parseGraphiteStackComment, resolveStackFromGraphiteComment } from "#/lib/session/graphite-stack-comments.ts";
 import {
     defaultExpandedSections,
     defaultLabelForSection,
@@ -96,7 +90,7 @@ import {
     matchesPullRequestSearchQuery,
     parsePullRequestUrl,
 } from "#/lib/session/pull-request-search.ts";
-import { resolvePullRequestStack, type ResolvedPullRequestStack } from "#/lib/session/pull-request-stacks.ts";
+import { resolveGithubPullRequestStack, type ResolvedPullRequestStack } from "#/lib/session/pull-request-stacks.ts";
 import { selectRelatedPullRequests } from "#/lib/session/related-pull-requests.ts";
 import { sectionFilterToSearchQuery } from "#/lib/session/section-filters.ts";
 import {
@@ -121,8 +115,6 @@ const SIGNED_OUT_KEY = "auth:signed-out";
 const INBOX_CACHE_KEY = "inbox:cache";
 const INBOX_EXPANDED_KEY = "inbox:expanded";
 const INBOX_SECTIONS_KEY = "inbox:sections";
-/** Graphite stack resolutions keyed by `owner/repo#number`. */
-const STACK_OVERRIDES_KEY = "stack:overrides";
 /** Background tab-focus revalidates skip if the inbox was refreshed more recently than this. */
 const INBOX_BACKGROUND_REVALIDATE_MIN_MS = CACHE_POLICY.inbox.backgroundRevalidateMinMs;
 /** Index of every persisted draft key so disconnect can wipe them without a store scan. */
@@ -241,14 +233,6 @@ export type RelatedPullRequestsState = {
     error: SessionError | null;
 };
 
-export type RepoStackIndexState = {
-    status: "idle" | "loading" | "ready" | "error";
-    pullRequests: Array<PullRequestSummary>;
-    defaultBranch: string | null;
-    error: SessionError | null;
-    lastLoadedAt: string | null;
-};
-
 export type PullRequestStackState = {
     status: "idle" | "loading" | "ready" | "error";
     stack: ResolvedPullRequestStack | null;
@@ -278,10 +262,6 @@ export type SessionState = {
     pullRequestCommits: Record<string, PullRequestCommitsState>;
     /** Cross-repo siblings sharing head+base, keyed by `owner/repo#number`. */
     relatedPullRequests: Record<string, RelatedPullRequestsState>;
-    /** Same-repo pull requests for stack inference, keyed by `owner/repo`. */
-    repoStackIndices: Record<string, RepoStackIndexState>;
-    /** Branch-less stacks (e.g. Graphite comments), keyed by `owner/repo#number`. */
-    pullRequestStackOverrides: Record<string, PullRequestStackState>;
     /** Assignable users + labels keyed by `owner/repo`. */
     repositoryMetadata: Record<string, RepositoryMetadataState>;
 };
@@ -403,13 +383,6 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
         labels: [],
         error: null,
     };
-    const initialRepoStackIndexState: RepoStackIndexState = {
-        status: "idle",
-        pullRequests: [],
-        defaultBranch: null,
-        error: null,
-        lastLoadedAt: null,
-    };
 
     const state = new Store<SessionState>({
         auth: initialAuthState,
@@ -421,8 +394,6 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
         conversationComments: {},
         pullRequestCommits: {},
         relatedPullRequests: {},
-        repoStackIndices: {},
-        pullRequestStackOverrides: {},
         repositoryMetadata: {},
     });
 
@@ -444,8 +415,6 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
     const latestConversationCommentLoads = new Map<string, number>();
     const latestPullRequestCommitLoads = new Map<string, number>();
     const latestRelatedPullRequestLoads = new Map<string, number>();
-    const latestRepoStackIndexLoads = new Map<string, number>();
-    const latestGraphiteStackLoads = new Map<string, number>();
     const latestRepositoryMetadataLoads = new Map<string, number>();
     /** Last-write-wins for summary typing so overlapping persists cannot drop characters. */
     const latestDraftBodyWrites = new Map<string, number>();
@@ -572,35 +541,6 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
         }
     }
 
-    function cacheResolvedPullRequestStack(key: string, stack: ResolvedPullRequestStack | null): void {
-        queryClient.setQueryData<PullRequestStackQueryData>(queryKeys.pullRequest.stack(key), {
-            stack,
-            resolved: true,
-            lastLoadedAt: new Date().toISOString(),
-        });
-    }
-
-    async function persistStackOverridesToStore(): Promise<void> {
-        const payload: Record<string, PullRequestStackQueryData> = {};
-        for (const [key, value] of Object.entries(state.state.pullRequestStackOverrides)) {
-            if (value.status !== "ready") {
-                continue;
-            }
-            payload[key] = {
-                stack: value.stack,
-                resolved: true,
-                lastLoadedAt: new Date().toISOString(),
-            };
-        }
-
-        if (Object.keys(payload).length === 0) {
-            await store.remove(STACK_OVERRIDES_KEY);
-            return;
-        }
-
-        await store.set(STACK_OVERRIDES_KEY, JSON.stringify(payload));
-    }
-
     /** Cancels in-flight PR loads and empties the in-memory workspace (not the persisted store). */
     function resetSessionUi(): void {
         for (const [key, attempt] of latestPullRequestLoads) {
@@ -623,10 +563,6 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
             latestRelatedPullRequestLoads.set(key, attempt + 1);
         }
 
-        for (const [key, attempt] of latestRepoStackIndexLoads) {
-            latestRepoStackIndexLoads.set(key, attempt + 1);
-        }
-
         setRepos({ ...initialRepositoriesState });
         setInbox({ ...initialInboxState });
         state.setState((prev) => ({
@@ -637,8 +573,6 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
             conversationComments: {},
             pullRequestCommits: {},
             relatedPullRequests: {},
-            repoStackIndices: {},
-            pullRequestStackOverrides: {},
             repositoryMetadata: {},
         }));
     }
@@ -653,7 +587,6 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
             store.remove(INBOX_CACHE_KEY),
             store.remove(INBOX_EXPANDED_KEY),
             store.remove(INBOX_SECTIONS_KEY),
-            store.remove(STACK_OVERRIDES_KEY),
             clearDraftStorage(),
         ]);
     }
@@ -671,12 +604,11 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
             return;
         }
 
-        const [selected, repositories, inbox, sections, stackOverrides] = await Promise.all([
+        const [selected, repositories, inbox, sections] = await Promise.all([
             readJson<Array<string>>(SELECTED_REPOS_KEY),
             readJson<RepositoriesCache>(REPOS_CACHE_KEY),
             readJson<InboxCache>(INBOX_CACHE_KEY),
             readJson<Array<InboxSectionLayoutEntry>>(INBOX_SECTIONS_KEY),
-            readJson<Record<string, PullRequestStackQueryData>>(STACK_OVERRIDES_KEY),
         ]);
 
         // Live expand/collapse is tab-session memory only; drop any legacy persisted copy.
@@ -718,25 +650,6 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
                 available: repositories.available,
                 lastLoadedAt: repositories.lastLoadedAt,
             });
-        }
-
-        if (stackOverrides) {
-            const restoredOverrides = Object.fromEntries(
-                Object.entries(stackOverrides).map(([key, value]) => [
-                    key,
-                    { status: "ready" as const, stack: value.stack, error: null },
-                ]),
-            );
-            state.setState((prev) => ({
-                ...prev,
-                pullRequestStackOverrides: {
-                    ...prev.pullRequestStackOverrides,
-                    ...restoredOverrides,
-                },
-            }));
-            for (const [key, value] of Object.entries(stackOverrides)) {
-                queryClient.setQueryData<PullRequestStackQueryData>(queryKeys.pullRequest.stack(key), value);
-            }
         }
     }
 
@@ -1249,12 +1162,24 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
                 after: inboxData.sectionPagination[sectionId]?.endCursor,
             });
 
-            const pullRequests = mergePullRequestSummaries(loaded, page.pullRequests);
-            const mergedPool = mergePullRequestSummaries(inboxData.pullRequests, page.pullRequests);
+            const incoming = page.pullRequests.filter((pullRequest) =>
+                matchSectionFilter(pullRequest, entry.filter, viewerLogin),
+            );
+            const pullRequests = mergePullRequestSummaries(loaded, incoming);
+            const mergedPool = mergePullRequestSummaries(inboxData.pullRequests, incoming);
 
             setInbox({
                 sectionPullRequests: { ...state.state.inbox.sectionPullRequests, [sectionId]: pullRequests },
-                sectionCounts: { ...state.state.inbox.sectionCounts, [sectionId]: page.totalCount },
+                sectionCounts: {
+                    ...state.state.inbox.sectionCounts,
+                    [sectionId]: sectionCountAfterClientFilter({
+                        githubTotal: page.totalCount,
+                        fetchedOnThisPage: page.pullRequests.length,
+                        matchingOnThisPage: incoming.length,
+                        matchingLoaded: pullRequests.length,
+                        hasNextPage: page.pageInfo.hasNextPage,
+                    }),
+                },
                 sectionPagination: { ...state.state.inbox.sectionPagination, [sectionId]: page.pageInfo },
                 pullRequests: mergedPool,
                 loadingMoreSection: null,
@@ -2580,262 +2505,27 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
         return state.state.relatedPullRequests[key] ?? initialRelatedState;
     }
 
-    function setRepoStackIndex(repository: string, patch: Partial<RepoStackIndexState>): void {
-        state.setState((prev) => ({
-            ...prev,
-            repoStackIndices: {
-                ...prev.repoStackIndices,
-                [repository]: {
-                    ...(prev.repoStackIndices[repository] ?? initialRepoStackIndexState),
-                    ...patch,
-                },
-            },
-        }));
-    }
-
-    function loadedPullRequestSummariesForRepository(repository: string): Array<PullRequestSummary> {
-        const fromSession = Object.values(state.state.pullRequests).flatMap((view) =>
-            view.detail?.repository === repository ? [view.detail] : [],
-        );
-        const fromQuery = queryClient
-            .getQueriesData<PullRequestDetailQueryData>({ queryKey: ["pullRequest"] })
-            .flatMap(([, data]) => (data?.detail?.repository === repository ? [data.detail] : []));
-
-        return mergePullRequestSummaries(fromQuery, fromSession);
-    }
-
-    function pullRequestsForStackResolution(repository: string): Array<PullRequestSummary> {
-        const index = state.state.repoStackIndices[repository] ?? initialRepoStackIndexState;
-        const loaded = loadedPullRequestSummariesForRepository(repository);
-
-        if (index.status !== "ready") {
-            return loaded;
-        }
-
-        const inboxForRepo = state.state.inbox.pullRequests.filter(
-            (pullRequest) => pullRequest.repository === repository,
-        );
-
-        return mergePullRequestSummaries(mergePullRequestSummaries(index.pullRequests, inboxForRepo), loaded);
-    }
-
-    function withFreshStackSummaries(stack: ResolvedPullRequestStack, repository: string): ResolvedPullRequestStack {
-        const byNumber = new Map(
-            pullRequestsForStackResolution(repository).map((pullRequest) => [pullRequest.number, pullRequest]),
-        );
-
-        return {
-            ...stack,
-            pullRequests: stack.pullRequests.map((pullRequest) => byNumber.get(pullRequest.number) ?? pullRequest),
-        };
-    }
-
-    function resolveStackFor(repository: string, number: number): ResolvedPullRequestStack | null {
-        if (!areStacksEnabled()) {
-            return null;
-        }
-
-        const index = state.state.repoStackIndices[repository] ?? initialRepoStackIndexState;
-        const { hideClosed } = getStackPreferences();
-
-        return resolvePullRequestStack({
-            repository,
-            number,
-            pullRequests: pullRequestsForStackResolution(repository),
-            defaultBranch: index.defaultBranch,
-            hideClosed,
-        });
-    }
-
-    async function loadRepoStackIndex(repository: string): Promise<void> {
-        if (!areStacksEnabled()) {
-            return;
-        }
-
-        const current = state.state.repoStackIndices[repository];
-        if (current?.status === "loading") {
-            return;
-        }
-
-        const attempt = (latestRepoStackIndexLoads.get(repository) ?? 0) + 1;
-        latestRepoStackIndexLoads.set(repository, attempt);
-        setRepoStackIndex(repository, {
-            status: current?.pullRequests.length ? "ready" : "loading",
-            error: null,
-        });
-
-        try {
-            const index = await github.listRepositoryStackIndex(requireToken(), repository);
-            if (attempt !== latestRepoStackIndexLoads.get(repository)) {
-                return;
-            }
-
-            const lastLoadedAt = new Date().toISOString();
-            const pullRequests = mergePullRequestSummaries(
-                index.pullRequests,
-                state.state.inbox.pullRequests.filter((pullRequest) => pullRequest.repository === repository),
-            );
-            setRepoStackIndex(repository, {
-                status: "ready",
-                pullRequests,
-                defaultBranch: index.defaultBranch,
-                error: null,
-                lastLoadedAt,
-            });
-            queryClient.setQueryData<RepoStackIndexQueryData>(queryKeys.repository.stackIndex(repository), {
-                pullRequests,
-                defaultBranch: index.defaultBranch,
-                lastLoadedAt,
-            });
-        } catch (error) {
-            if (attempt !== latestRepoStackIndexLoads.get(repository)) {
-                return;
-            }
-
-            setRepoStackIndex(repository, {
-                status: current?.pullRequests.length ? "ready" : "error",
-                error: toSessionError(error),
-            });
-        }
-    }
-
-    async function loadGraphiteStack(repository: string, number: number): Promise<void> {
-        // Branch-name stacks take precedence; Graphite comments are only a fallback.
-        if (!areStacksEnabled() || resolveStackFor(repository, number)) {
-            return;
-        }
-
-        const key = pullRequestKey(repository, number);
-        const current = state.state.pullRequestStackOverrides[key];
-        if (current?.status === "loading" || current?.status === "ready") {
-            return;
-        }
-
-        const attempt = (latestGraphiteStackLoads.get(key) ?? 0) + 1;
-        latestGraphiteStackLoads.set(key, attempt);
-
-        state.setState((prev) => ({
-            ...prev,
-            pullRequestStackOverrides: {
-                ...prev.pullRequestStackOverrides,
-                [key]: { status: "loading", stack: null, error: null },
-            },
-        }));
-
-        try {
-            const comments = await github.listPullRequestComments(requireToken(), repository, number);
-            if (attempt !== latestGraphiteStackLoads.get(key)) {
-                return;
-            }
-
-            const parsed = comments
-                .map((comment) => parseGraphiteStackComment(comment.body))
-                .find((comment) => comment != null);
-            if (!parsed) {
-                state.setState((prev) => ({
-                    ...prev,
-                    pullRequestStackOverrides: {
-                        ...prev.pullRequestStackOverrides,
-                        [key]: { status: "ready", stack: null, error: null },
-                    },
-                }));
-                cacheResolvedPullRequestStack(key, null);
-                await persistStackOverridesToStore();
-                return;
-            }
-
-            const summaries = (
-                await Promise.all(
-                    parsed.numbersTopToBottom.map(async (pullRequestNumber) => {
-                        const cached = pullRequestsForStackResolution(repository).find(
-                            (pullRequest) => pullRequest.number === pullRequestNumber,
-                        );
-                        if (cached) {
-                            return cached;
-                        }
-
-                        try {
-                            return await github.getPullRequest(requireToken(), repository, pullRequestNumber);
-                        } catch {
-                            return null;
-                        }
-                    }),
-                )
-            ).flatMap((pullRequest) => (pullRequest ? [pullRequest] : []));
-
-            if (attempt !== latestGraphiteStackLoads.get(key)) {
-                return;
-            }
-
-            const index = state.state.repoStackIndices[repository] ?? initialRepoStackIndexState;
-            const stack = resolveStackFromGraphiteComment({
-                repository,
-                number,
-                comment: parsed,
-                pullRequests: summaries,
-                defaultBranch: index.defaultBranch,
-                hideClosed: getStackPreferences().hideClosed,
-            });
-
-            state.setState((prev) => ({
-                ...prev,
-                pullRequestStackOverrides: {
-                    ...prev.pullRequestStackOverrides,
-                    [key]: { status: "ready", stack, error: null },
-                },
-            }));
-            cacheResolvedPullRequestStack(key, stack);
-            await persistStackOverridesToStore();
-        } catch (error) {
-            if (attempt !== latestGraphiteStackLoads.get(key)) {
-                return;
-            }
-
-            state.setState((prev) => ({
-                ...prev,
-                pullRequestStackOverrides: {
-                    ...prev.pullRequestStackOverrides,
-                    [key]: { status: "error", stack: null, error: toSessionError(error) },
-                },
-            }));
-        }
-    }
-
-    function getRepoStackIndex(repository: string): RepoStackIndexState {
-        return state.state.repoStackIndices[repository] ?? initialRepoStackIndexState;
-    }
-
     function getPullRequestStack(repository: string, number: number): PullRequestStackState {
         if (!areStacksEnabled()) {
             return { status: "idle", stack: null, error: null };
         }
 
-        const index = getRepoStackIndex(repository);
-        const key = pullRequestKey(repository, number);
-        const override = state.state.pullRequestStackOverrides[key];
-
-        if (index.status !== "ready" && index.status !== "error") {
+        const detail = resolvePullRequestDetail(repository, number);
+        if (!detail) {
             return { status: "loading", stack: null, error: null };
         }
 
-        const branchStack = resolveStackFor(repository, number);
-        if (branchStack) {
-            return { status: "ready", stack: branchStack, error: null };
-        }
-
-        if (override?.status === "loading") {
-            return { status: "loading", stack: null, error: null };
-        }
-
-        if (override?.stack) {
-            return { ...override, stack: withFreshStackSummaries(override.stack, repository) };
-        }
-
-        if (override) {
-            return override;
-        }
-
-        return { status: "loading", stack: null, error: null };
+        return {
+            status: "ready",
+            stack: resolveGithubPullRequestStack({
+                repository,
+                number,
+                githubStack: detail.githubStack,
+                pullRequests: detail.githubStackPullRequests,
+                hideClosed: getStackPreferences().hideClosed,
+            }),
+            error: null,
+        };
     }
 
     async function addPullRequestComment(
@@ -2898,7 +2588,7 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
         reloadSecondary?: boolean;
         /** Always reload review threads and conversation (after submitting review comments). */
         reloadReviewSurfaces?: boolean;
-        /** Refetch the repo stack index when stack UI is enabled. */
+        /** Refresh other GitHub stack layers after merge / close. */
         reloadStack?: boolean;
     };
 
@@ -2953,8 +2643,16 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
             if (login) {
                 invalidatePullRequestSecondaryAfterMutation(queryClient, login, repository, number);
             }
-            if (options?.reloadStack && areStacksEnabled()) {
-                invalidateRepositoryStackIndex(queryClient, repository);
+            if (options?.reloadStack) {
+                for (const layer of detail.githubStackPullRequests) {
+                    if (layer.number === number) {
+                        continue;
+                    }
+                    void queryClient.invalidateQueries({
+                        queryKey: queryKeys.pullRequest.detail(pullRequestKey(repository, layer.number)),
+                        refetchType: "active",
+                    });
+                }
             }
             if (options?.reloadReviewSurfaces) {
                 await Promise.all([
@@ -3399,7 +3097,11 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
     ): Promise<void> {
         const token = requireToken();
         const detail = resolvePullRequestDetail(repository, number);
-        await github.mergePullRequest(token, repository, number, method, options);
+        if (detail?.githubStack) {
+            await github.mergeStackedPullRequest(token, repository, number, method, options);
+        } else {
+            await github.mergePullRequest(token, repository, number, method, options);
+        }
 
         if (options?.deleteHeadBranch && detail?.headRefName) {
             try {
@@ -3418,34 +3120,37 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
         method: MergeMethod,
         options?: StackMergePullRequestOptions,
     ): Promise<void> {
-        const stackState = getPullRequestStack(repository, number);
-        if (stackState.status !== "ready" || !stackState.stack) {
-            throw new EasyReviewError("unknown", "Stack is not ready to merge.");
+        if (!resolvePullRequestDetail(repository, number)) {
+            await loadPullRequest(repository, number);
         }
 
-        const stack = withFreshStackSummaries(stackState.stack, repository);
-        const evaluation = evaluateStackMerge(stack, { bypassRules: options?.bypassRules });
+        const stackState = getPullRequestStack(repository, number);
+        if (stackState.status !== "ready" || !stackState.stack) {
+            throw new EasyReviewError("unknown", "This pull request is not part of a GitHub stack.");
+        }
+
+        const evaluation = evaluateStackMerge(stackState.stack, {
+            bypassRules: options?.bypassRules,
+            upToNumber: number,
+        });
 
         if (!evaluation.canMerge) {
             throw new EasyReviewError("unknown", evaluation.blockMessage ?? "This stack cannot be merged.");
         }
 
         const token = requireToken();
+        await github.mergeStackedPullRequest(token, repository, number, method);
 
-        for (let index = 0; index < evaluation.mergeOrder.length; index++) {
-            const pullRequest = evaluation.mergeOrder[index]!;
-            await github.mergePullRequest(token, repository, pullRequest.number, method);
-
-            if (options?.deleteHeadBranch && pullRequest.headRefName) {
+        if (options?.deleteHeadBranch) {
+            for (const pullRequest of evaluation.mergeOrder) {
+                if (!pullRequest.headRefName) {
+                    continue;
+                }
                 try {
                     await github.deleteHeadBranch(token, repository, pullRequest.headRefName);
                 } catch {
                     // Branch may already be deleted or protected.
                 }
-            }
-
-            if (index < evaluation.mergeOrder.length - 1) {
-                await loadRepoStackIndex(repository);
             }
         }
 
@@ -3761,9 +3466,6 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
         getPullRequestCommits,
         loadRelatedPullRequests,
         getRelatedPullRequests,
-        loadRepoStackIndex,
-        loadGraphiteStack,
-        getRepoStackIndex,
         getPullRequestStack,
         addPullRequestComment,
         loadRepositoryMetadata,
@@ -3826,6 +3528,7 @@ function toInboxSummary(detail: PullRequestDetail): PullRequestSummary {
         mergeStateStatus: detail.mergeStateStatus,
         assignees: detail.assignees,
         labels: detail.labels,
+        githubStack: detail.githubStack ?? null,
     };
 }
 

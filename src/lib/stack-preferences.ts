@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 
 export type StackPreferences = {
-    /** When false, no stack UI or repo index fetches run. */
+    /** When false, no GitHub stack UI runs. */
     enabled: boolean;
 
     /** Hide closed pull requests in the PR stack panel. */

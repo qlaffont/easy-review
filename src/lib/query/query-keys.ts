@@ -19,11 +19,9 @@ export const queryKeys = {
         conversation: (key: string) => ["pullRequest", key, "conversation"] as const,
         commits: (key: string) => ["pullRequest", key, "commits"] as const,
         related: (key: string) => ["pullRequest", key, "related"] as const,
-        stack: (key: string) => ["pullRequest", key, "stack"] as const,
     },
     repository: {
         metadata: (repository: string) => ["repository", repository, "metadata"] as const,
-        stackIndex: (repository: string) => ["repository", repository, "stackIndex"] as const,
     },
 } as const;
 

@@ -70,8 +70,6 @@ export type FakeGithub = GithubClient & {
         headRefName: string;
         baseRefName: string;
     }>;
-    /** Stack index loads, one entry per `listRepositoryStackIndex` call. */
-    stackIndexQueries: Array<string>;
     /** Paths asked for via `getPullRequestFileDiff`, in order. */
     fileDiffQueries: Array<string>;
     /** Submitted reviews, in order. */
@@ -207,6 +205,8 @@ function buildPullRequest(input: PullRequestInput): PullRequestDetail {
         viewerCanUpdateBranch: input.viewerCanUpdateBranch ?? false,
         autoMergeEnabled: input.autoMergeEnabled ?? false,
         autoMergeMethod: input.autoMergeMethod ?? null,
+        githubStack: input.githubStack ?? null,
+        githubStackPullRequests: input.githubStackPullRequests ?? [],
     };
 }
 
@@ -238,6 +238,7 @@ const SUMMARY_FIELDS = [
     "mergeStateStatus",
     "assignees",
     "labels",
+    "githubStack",
 ] as const satisfies ReadonlyArray<keyof PullRequestSummary>;
 
 /** The Inbox only ever sees the row-shaped fields, exactly as the real batch query returns. */
@@ -271,7 +272,6 @@ export function createFakeGithub(): FakeGithub {
     const pullRequestQueries: Array<ReadonlyArray<string>> = [];
     const pullRequestQueryOptions: Array<ListPullRequestsOptions | undefined> = [];
     const relatedPullRequestQueries: FakeGithub["relatedPullRequestQueries"] = [];
-    const stackIndexQueries: FakeGithub["stackIndexQueries"] = [];
     const fileDiffQueries: Array<string> = [];
     const submittedReviews: FakeGithub["submittedReviews"] = [];
     const calls: Array<string> = [];
@@ -420,6 +420,20 @@ export function createFakeGithub(): FakeGithub {
         }
     }
 
+    function mergeOpenPullRequest(token: string, repository: string, number: number): void {
+        const pullRequest = requirePullRequest(token, repository, number);
+        requireOpen(pullRequest);
+        if (pullRequest.mergeable === "conflicting") {
+            throw new EasyReviewError("unknown", "This pull request has merge conflicts.");
+        }
+        patchPullRequest(token, repository, number, {
+            state: "merged",
+            isDraft: false,
+            mergedAt: new Date().toISOString(),
+            reviewRequests: [],
+        });
+    }
+
     function parseInboxCursor(cursor: string | undefined): number {
         if (!cursor) {
             return 0;
@@ -452,7 +466,6 @@ export function createFakeGithub(): FakeGithub {
         pullRequestQueries,
         pullRequestQueryOptions,
         relatedPullRequestQueries,
-        stackIndexQueries,
         fileDiffQueries,
         submittedReviews,
         addAccount(token, viewer) {
@@ -805,19 +818,6 @@ export function createFakeGithub(): FakeGithub {
                             matchesRelatedRefs(pullRequest, input.headRefName, input.baseRefName),
                     )
                     .map(toSummary);
-            });
-        },
-        listRepositoryStackIndex(token, repository) {
-            stackIndexQueries.push(repository);
-
-            return respond("listRepositoryStackIndex", () => {
-                authenticate(token);
-                return {
-                    defaultBranch: defaultBranchByRepository.get(`${token}:${repository}`) ?? "main",
-                    pullRequests: (pullRequestsByToken.get(token) ?? [])
-                        .filter((pullRequest) => pullRequest.repository === repository)
-                        .map(toSummary),
-                };
             });
         },
         getPullRequest(token, repository, number) {
@@ -1220,17 +1220,25 @@ export function createFakeGithub(): FakeGithub {
         mergePullRequest(token, repository, number, _method: MergeMethod, _options?: MergePullRequestOptions) {
             return respond("mergePullRequest", () => {
                 authenticate(token);
+                mergeOpenPullRequest(token, repository, number);
+            });
+        },
+        mergeStackedPullRequest(token, repository, number, _method: MergeMethod, _options?: MergePullRequestOptions) {
+            return respond("mergeStackedPullRequest", () => {
+                authenticate(token);
                 const pullRequest = requirePullRequest(token, repository, number);
-                requireOpen(pullRequest);
-                if (pullRequest.mergeable === "conflicting") {
-                    throw new EasyReviewError("unknown", "This pull request has merge conflicts.");
+                const focalPosition = pullRequest.githubStack?.position ?? 1;
+                const layers =
+                    pullRequest.githubStackPullRequests.length > 0
+                        ? pullRequest.githubStackPullRequests
+                        : [pullRequest];
+                for (const layer of layers) {
+                    const layerPosition =
+                        layer.githubStack?.position ?? layers.findIndex((entry) => entry.number === layer.number) + 1;
+                    if (layerPosition <= focalPosition && layer.state === "open") {
+                        mergeOpenPullRequest(token, repository, layer.number);
+                    }
                 }
-                patchPullRequest(token, repository, number, {
-                    state: "merged",
-                    isDraft: false,
-                    mergedAt: new Date().toISOString(),
-                    reviewRequests: [],
-                });
             });
         },
         closePullRequest(token, repository, number) {

@@ -98,6 +98,54 @@ describe("fetchInboxSections", () => {
         expect(data.sectionPullRequests["approved"]).toHaveLength(1);
         expect(data.sectionPullRequests["approved"]?.[0]?.title).toBe("Cached approved PR");
     });
+
+    it("counts only pull requests that remain after the section filter", async () => {
+        const github = createFakeGithub();
+        github.addAccount(TOKEN, { login: "quentin" });
+        github.addPullRequest(TOKEN, {
+            repository: "acme/api",
+            number: 7,
+            author: "quentin",
+            reviewDecision: "changes-requested",
+            reviewRequests: ["romainpm"],
+            reviewers: [{ login: "romainpm", state: "changes-requested", reviewId: 1 }],
+        });
+
+        const { data } = await fetchInboxSections({
+            github,
+            token: TOKEN,
+            viewerLogin: "quentin",
+            selected: ["acme/api"],
+            sectionLayout: defaultSectionLayout(),
+            existing: emptyInboxQueryData(),
+        });
+
+        expect(data.sectionPullRequests["returned-to-you"]).toEqual([]);
+        expect(data.sectionCounts["returned-to-you"]).toBe(0);
+    });
+
+    it("keeps the GitHub total when every fetched row still matches the section", async () => {
+        const github = createFakeGithub();
+        github.addAccount(TOKEN, { login: "quentin" });
+        github.addPullRequest(TOKEN, {
+            repository: "acme/api",
+            number: 8,
+            author: "quentin",
+            reviewDecision: "changes-requested",
+        });
+
+        const { data } = await fetchInboxSections({
+            github,
+            token: TOKEN,
+            viewerLogin: "quentin",
+            selected: ["acme/api"],
+            sectionLayout: defaultSectionLayout(),
+            existing: emptyInboxQueryData(),
+        });
+
+        expect(data.sectionPullRequests["returned-to-you"]?.map((entry) => entry.number)).toEqual([8]);
+        expect(data.sectionCounts["returned-to-you"]).toBe(1);
+    });
 });
 
 describe("patchInboxPullRequest", () => {

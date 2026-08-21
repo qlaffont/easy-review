@@ -3,12 +3,11 @@ import { describe, expect, it } from "vitest";
 import type { PullRequestSummary } from "#/lib/session/types.ts";
 
 import {
-    buildLinearStackChain,
     formatStackBranches,
     formatStackGhCheckoutCommands,
     formatStackUrls,
     formatTrunkLabel,
-    resolvePullRequestStack,
+    resolveGithubPullRequestStack,
 } from "#/lib/session/pull-request-stacks.ts";
 
 function summary(
@@ -42,8 +41,8 @@ function summary(
     };
 }
 
-describe("resolvePullRequestStack", () => {
-    it("returns a two-pull-request stack bottom to top", () => {
+describe("resolveGithubPullRequestStack", () => {
+    it("returns GitHub stack layers bottom to top", () => {
         const pullRequests = [
             summary({
                 key: "acme/api#148",
@@ -62,11 +61,11 @@ describe("resolvePullRequestStack", () => {
             }),
         ];
 
-        const stack = resolvePullRequestStack({
+        const stack = resolveGithubPullRequestStack({
             repository: "acme/api",
             number: 148,
+            githubStack: { number: 1, size: 2, position: 1, baseRefName: "dev" },
             pullRequests,
-            defaultBranch: "dev",
             hideClosed: false,
         });
 
@@ -80,19 +79,19 @@ describe("resolvePullRequestStack", () => {
         expect(stack?.pullRequests.map((entry) => entry.number)).toEqual([148, 195]);
     });
 
-    it("returns null for a single pull request", () => {
-        const stack = resolvePullRequestStack({
+    it("returns null when GitHub reports no stack", () => {
+        const stack = resolveGithubPullRequestStack({
             repository: "acme/api",
             number: 10,
+            githubStack: null,
             pullRequests: [summary({ key: "acme/api#10", repository: "acme/api", number: 10 })],
-            defaultBranch: "dev",
             hideClosed: false,
         });
 
         expect(stack).toBeNull();
     });
 
-    it("breaks the chain when multiple parents share the same head branch", () => {
+    it("does not infer a stack from branch names alone", () => {
         const pullRequests = [
             summary({
                 key: "acme/api#1",
@@ -106,27 +105,19 @@ describe("resolvePullRequestStack", () => {
                 repository: "acme/api",
                 number: 2,
                 headRefName: "feat-b",
-                baseRefName: "dev",
-            }),
-            summary({
-                key: "acme/api#3",
-                repository: "acme/api",
-                number: 3,
-                headRefName: "feat-c",
                 baseRefName: "feat-a",
             }),
         ];
 
-        const stack = resolvePullRequestStack({
-            repository: "acme/api",
-            number: 3,
-            pullRequests,
-            defaultBranch: "dev",
-            hideClosed: false,
-        });
-
-        expect(stack?.pullRequests.map((entry) => entry.number)).toEqual([1, 3]);
-        expect(stack?.position).toBe(2);
+        expect(
+            resolveGithubPullRequestStack({
+                repository: "acme/api",
+                number: 2,
+                githubStack: null,
+                pullRequests,
+                hideClosed: false,
+            }),
+        ).toBeNull();
     });
 
     it("hides closed pull requests when requested", () => {
@@ -149,11 +140,11 @@ describe("resolvePullRequestStack", () => {
         ];
 
         expect(
-            resolvePullRequestStack({
+            resolveGithubPullRequestStack({
                 repository: "acme/api",
                 number: 195,
+                githubStack: { number: 1, size: 2, position: 2, baseRefName: "dev" },
                 pullRequests,
-                defaultBranch: "dev",
                 hideClosed: true,
             }),
         ).toBeNull();
@@ -168,9 +159,10 @@ describe("formatTrunkLabel", () => {
 });
 
 describe("stack copy helpers", () => {
-    const stack = resolvePullRequestStack({
+    const stack = resolveGithubPullRequestStack({
         repository: "acme/api",
         number: 195,
+        githubStack: { number: 1, size: 2, position: 2, baseRefName: "dev" },
         pullRequests: [
             summary({
                 key: "acme/api#148",
@@ -187,7 +179,6 @@ describe("stack copy helpers", () => {
                 baseRefName: "feat-a",
             }),
         ],
-        defaultBranch: "dev",
         hideClosed: false,
     })!;
 
@@ -197,36 +188,5 @@ describe("stack copy helpers", () => {
         );
         expect(formatStackBranches(stack)).toBe("feat-a\nfeat-b");
         expect(formatStackGhCheckoutCommands(stack)).toBe("gh pr checkout 148\ngh pr checkout 195");
-    });
-});
-
-describe("buildLinearStackChain", () => {
-    it("orders three linked pull requests from trunk to top", () => {
-        const pullRequests = [
-            summary({
-                key: "acme/api#1",
-                repository: "acme/api",
-                number: 1,
-                headRefName: "a",
-                baseRefName: "dev",
-            }),
-            summary({
-                key: "acme/api#2",
-                repository: "acme/api",
-                number: 2,
-                headRefName: "b",
-                baseRefName: "a",
-            }),
-            summary({
-                key: "acme/api#3",
-                repository: "acme/api",
-                number: 3,
-                headRefName: "c",
-                baseRefName: "b",
-            }),
-        ];
-
-        const chain = buildLinearStackChain(pullRequests[1]!, pullRequests);
-        expect(chain.map((entry) => entry.number)).toEqual([1, 2, 3]);
     });
 });

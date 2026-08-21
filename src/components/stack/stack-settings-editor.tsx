@@ -17,17 +17,14 @@ export function StackSettingsEditor({ open, onOpenChange }: { open: boolean; onO
                     >
                         Stack Settings
                     </SettingsDialogTitle>
-                    <DialogDescription>
-                        Detect stacks from branch names, with Graphite stack comments as fallback. Saved in this
-                        browser.
-                    </DialogDescription>
+                    <DialogDescription>Show GitHub stacked pull requests. Saved in this browser.</DialogDescription>
                 </DialogHeader>
 
                 <div className="flex flex-col gap-3">
                     <SettingsPreferenceRow
                         icon={Layers}
                         title="Show pull request stacks"
-                        description="Show the stack panel on pull request pages. Disabled by default."
+                        description="Show the GitHub stack panel on pull request pages. Disabled by default."
                         checked={stackPreferences.enabled}
                         onCheckedChange={(enabled) => setStackPreferences({ enabled })}
                     />

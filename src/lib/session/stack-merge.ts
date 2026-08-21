@@ -154,29 +154,34 @@ export function computeStackMergeRows(
 
 export function evaluateStackMerge(
     stack: ResolvedPullRequestStack,
-    options?: { bypassRules?: boolean },
+    options?: { bypassRules?: boolean; upToNumber?: number },
 ): StackMergeEvaluation {
     const rows = computeStackMergeRows(stack.pullRequests, options);
-    const openPullRequests = rows
+    const lastIndex =
+        options?.upToNumber == null
+            ? rows.length - 1
+            : rows.findIndex((row) => row.pullRequest.number === options.upToNumber);
+    const considered = lastIndex < 0 ? rows : rows.slice(0, lastIndex + 1);
+    const openPullRequests = considered
         .map((row) => row.pullRequest)
         .filter((pullRequest) => pullRequest.state === "open" && !pullRequest.isDraft);
-    const mergeOrder = rows
+    const mergeOrder = considered
         .filter((row): row is StackMergeRow & { status: { kind: "open-ready" } } => row.status.kind === "open-ready")
         .map((row) => row.pullRequest);
-    const canMerge = openPullRequests.length >= 2 && mergeOrder.length === openPullRequests.length;
+    const canMerge = openPullRequests.length >= 1 && mergeOrder.length === openPullRequests.length;
 
     return {
         rows,
         mergeOrder,
         openCount: openPullRequests.length,
         canMerge,
-        blockMessage: canMerge ? null : stackMergeBlockMessage(rows, openPullRequests.length),
+        blockMessage: canMerge ? null : stackMergeBlockMessage(considered, openPullRequests.length),
     };
 }
 
 function stackMergeBlockMessage(rows: Array<StackMergeRow>, openCount: number): string {
-    if (openCount < 2) {
-        return "Need at least two open pull requests in this stack to merge as a stack.";
+    if (openCount < 1) {
+        return "There is no open pull request to merge in this stack.";
     }
 
     const blocked = rows.find((row) => row.status.kind === "open-blocked");

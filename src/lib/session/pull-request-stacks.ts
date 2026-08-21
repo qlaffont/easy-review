@@ -1,4 +1,4 @@
-import type { PullRequestSummary } from "#/lib/session/types.ts";
+import type { GithubPullRequestStack, PullRequestSummary } from "#/lib/session/types.ts";
 
 export type ResolvedPullRequestStack = {
     repository: string;
@@ -12,56 +12,6 @@ export type ResolvedPullRequestStack = {
     total: number;
 };
 
-function findUniqueParent(
-    pullRequest: PullRequestSummary,
-    pullRequests: ReadonlyArray<PullRequestSummary>,
-): PullRequestSummary | null {
-    const candidates = pullRequests.filter(
-        (candidate) => candidate.key !== pullRequest.key && candidate.headRefName === pullRequest.baseRefName,
-    );
-    return candidates.length === 1 ? candidates[0]! : null;
-}
-
-function findUniqueChild(
-    pullRequest: PullRequestSummary,
-    pullRequests: ReadonlyArray<PullRequestSummary>,
-): PullRequestSummary | null {
-    const candidates = pullRequests.filter(
-        (candidate) => candidate.key !== pullRequest.key && candidate.baseRefName === pullRequest.headRefName,
-    );
-    return candidates.length === 1 ? candidates[0]! : null;
-}
-
-/** Walk parent/child links to build the linear chain containing `focal`. */
-export function buildLinearStackChain(
-    focal: PullRequestSummary,
-    pullRequests: ReadonlyArray<PullRequestSummary>,
-): Array<PullRequestSummary> {
-    const chain: Array<PullRequestSummary> = [focal];
-
-    let current = focal;
-    while (true) {
-        const parent = findUniqueParent(current, pullRequests);
-        if (!parent || chain.some((entry) => entry.key === parent.key)) {
-            break;
-        }
-        chain.unshift(parent);
-        current = parent;
-    }
-
-    current = focal;
-    while (true) {
-        const child = findUniqueChild(current, pullRequests);
-        if (!child || chain.some((entry) => entry.key === child.key)) {
-            break;
-        }
-        chain.push(child);
-        current = child;
-    }
-
-    return chain;
-}
-
 export function formatTrunkLabel(baseRefName: string, defaultBranch: string | null): string {
     if (defaultBranch && baseRefName === defaultBranch) {
         return `${baseRefName} (trunk)`;
@@ -69,36 +19,40 @@ export function formatTrunkLabel(baseRefName: string, defaultBranch: string | nu
     return baseRefName;
 }
 
-export function resolvePullRequestStack(input: {
+/** Resolve a stack only from GitHub's native stacked-PR membership. */
+export function resolveGithubPullRequestStack(input: {
     repository: string;
     number: number;
+    githubStack: GithubPullRequestStack | null | undefined;
     pullRequests: ReadonlyArray<PullRequestSummary>;
-    defaultBranch: string | null;
     hideClosed: boolean;
 }): ResolvedPullRequestStack | null {
-    const scoped = input.pullRequests.filter((pullRequest) => pullRequest.repository === input.repository);
-    const visible = input.hideClosed ? scoped.filter((pullRequest) => pullRequest.state !== "closed") : scoped;
-
-    const focal = visible.find((pullRequest) => pullRequest.number === input.number);
-    if (!focal) {
+    if (!input.githubStack || input.githubStack.size < 2) {
         return null;
     }
 
-    const chain = buildLinearStackChain(focal, visible);
-    if (chain.length < 2) {
+    const visible = input.hideClosed
+        ? input.pullRequests.filter((pullRequest) => pullRequest.state !== "closed")
+        : [...input.pullRequests];
+
+    if (visible.length < 2) {
         return null;
     }
 
-    const position = chain.findIndex((pullRequest) => pullRequest.number === input.number) + 1;
-    const bottom = chain[0]!;
+    const position = visible.findIndex((pullRequest) => pullRequest.number === input.number) + 1;
+    if (position <= 0) {
+        return null;
+    }
+
+    const trunkRefName = input.githubStack.baseRefName;
 
     return {
         repository: input.repository,
-        pullRequests: chain,
-        trunkRefName: bottom.baseRefName,
-        trunkLabel: formatTrunkLabel(bottom.baseRefName, input.defaultBranch),
+        pullRequests: visible,
+        trunkRefName,
+        trunkLabel: formatTrunkLabel(trunkRefName, trunkRefName),
         position,
-        total: chain.length,
+        total: visible.length,
     };
 }
 

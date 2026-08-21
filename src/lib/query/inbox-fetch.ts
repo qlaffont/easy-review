@@ -45,6 +45,7 @@ function mergePullRequestSummary(previous: PullRequestSummary, incoming: PullReq
             previous.mergeStateStatus !== "unknown" ? previous.mergeStateStatus : incoming.mergeStateStatus,
         assignees: previous.assignees.length > 0 ? previous.assignees : incoming.assignees,
         labels: previous.labels.length > 0 ? previous.labels : incoming.labels,
+        githubStack: incoming.githubStack ?? previous.githubStack ?? null,
     };
 }
 
@@ -158,14 +159,21 @@ export async function fetchInboxSection(params: {
             repositories: [...selected],
             limit: INBOX_SECTION_LOAD_SIZE,
         });
-        const pullRequests = page.pullRequests.filter((pullRequest) =>
+        const fetched = page.pullRequests;
+        const pullRequests = fetched.filter((pullRequest) =>
             matchSectionFilter(pullRequest, definition.filter, viewerLogin),
         );
 
         return {
             id: definition.id,
             pullRequests,
-            totalCount: page.totalCount,
+            totalCount: sectionCountAfterClientFilter({
+                githubTotal: page.totalCount,
+                fetchedOnThisPage: fetched.length,
+                matchingOnThisPage: pullRequests.length,
+                matchingLoaded: pullRequests.length,
+                hasNextPage: page.pageInfo.hasNextPage,
+            }),
             pageInfo: page.pageInfo,
         };
     }
@@ -293,4 +301,20 @@ export function patchInboxPullRequest(
     );
 
     return { ...data, pullRequests, sectionPullRequests, sectionCounts };
+}
+
+/** GitHub search is a superset of the section filter — drop the extras from the badge count. */
+export function sectionCountAfterClientFilter(input: {
+    githubTotal: number;
+    fetchedOnThisPage: number;
+    matchingOnThisPage: number;
+    matchingLoaded: number;
+    hasNextPage: boolean;
+}): number {
+    if (!input.hasNextPage) {
+        return input.matchingLoaded;
+    }
+
+    const droppedOnThisPage = Math.max(0, input.fetchedOnThisPage - input.matchingOnThisPage);
+    return Math.max(input.matchingLoaded, input.githubTotal - droppedOnThisPage);
 }

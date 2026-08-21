@@ -59,7 +59,10 @@ export function StackMergeControls({ detail, stack }: { detail: PullRequestDetai
     const [preferences] = useDiffPreferences();
     const [bypassRules, setBypassRules] = useState(false);
     const [deleteHeadBranch, setDeleteHeadBranch] = useState(preferences.deleteHeadBranchOnMerge);
-    const evaluation = useMemo(() => evaluateStackMerge(stack, { bypassRules }), [stack, bypassRules]);
+    const evaluation = useMemo(
+        () => evaluateStackMerge(stack, { bypassRules, upToNumber: detail.number }),
+        [stack, bypassRules, detail.number],
+    );
     const mergeOptions = stackMergeMethodOptions(detail.allowedMergeMethods);
     const [mergeMethod, setMergeMethod] = useState<MergeMethod>(
         () =>
@@ -197,8 +200,8 @@ export function StackMergeControls({ detail, stack }: { detail: PullRequestDetai
                                 Merge stack {branchCount} pull request{branchCount === 1 ? "" : "s"}?
                             </AlertDialogTitle>
                             <AlertDialogDescription>
-                                {mergeMethodDescription(mergeMethod, branchCount)} Pull requests will merge bottom-up,
-                                starting with #{evaluation.mergeOrder[0]?.number}.
+                                {mergeMethodDescription(mergeMethod, branchCount)} GitHub will merge this pull request
+                                and every unmerged layer below it.
                             </AlertDialogDescription>
                         </AlertDialogHeader>
                         <label className="flex cursor-pointer items-center gap-2 text-sm">

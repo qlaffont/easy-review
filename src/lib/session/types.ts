@@ -63,6 +63,20 @@ export type PullRequestSummary = {
     assignees: Array<string>;
     /** Labels on the pull request — needed for section filters. */
     labels: Array<Label>;
+    /** GitHub stacked-PR membership; null when this pull request is not in a stack. */
+    githubStack?: GithubPullRequestStack | null;
+};
+
+/** Native GitHub stack membership (`PullRequest.stack` / `stackEntry`). */
+export type GithubPullRequestStack = {
+    /** Stack number unique within the repository. */
+    number: number;
+    /** Official GitHub size, including closed/merged layers. */
+    size: number;
+    /** 1-based position; 1 is closest to the stack base branch. */
+    position: number;
+    /** Branch the stack ultimately targets. */
+    baseRefName: string;
 };
 
 export type Label = {
@@ -219,6 +233,8 @@ export type PullRequestDetail = PullRequestSummary & {
     viewerCanUpdateBranch: boolean;
     autoMergeEnabled: boolean;
     autoMergeMethod: MergeMethod | null;
+    /** Stack layers bottom → top from GitHub `stack.entries`; empty when not in a stack. */
+    githubStackPullRequests: Array<PullRequestSummary>;
 };
 
 /** One commit on a pull request (the Commits tab list). */

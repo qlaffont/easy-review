@@ -32,6 +32,7 @@ import type {
     ReviewThread,
     ReviewThreadComment,
     DiffSide,
+    GithubPullRequestStack,
 } from "#/lib/session/types.ts";
 
 import { mediaKindForNameAndType, mediaMarkdown, sanitizeMediaFileName } from "#/lib/composer-media.ts";
@@ -83,10 +84,6 @@ const REPOSITORY_PAGE_LIMIT = 10;
 const INBOX_BATCH_SIZE = 10;
 export const OPEN_PULL_REQUESTS_PER_REPOSITORY = 30;
 export const MERGED_PULL_REQUESTS_PER_REPOSITORY = 10;
-/** Stack index scans more history than the Inbox because chains can include older merged/closed PRs. */
-const STACK_OPEN_PULL_REQUESTS = 100;
-const STACK_CLOSED_PULL_REQUESTS = 50;
-const STACK_MERGED_PULL_REQUESTS = 50;
 /** Related scans batch a few repos per search query (query length + rate limit). */
 const RELATED_SEARCH_REPO_BATCH_SIZE = 10;
 const RELATED_SEARCH_RESULT_CAP = 25;
@@ -652,32 +649,6 @@ export function createGithubHttpClient(
             }
 
             return [...byKey.values()].sort(comparePullRequestsByUpdatedAtDesc);
-        },
-
-        async listRepositoryStackIndex(token, repository) {
-            const [owner = "", name = ""] = repository.split("/");
-            const data = await graphql<RepositoryStackIndexQuery>(
-                token,
-                buildRepositoryStackIndexQuery(owner, name),
-                undefined,
-                { keepPartial: true },
-            );
-            const node = data.repository;
-
-            if (!node) {
-                throw new EasyReviewError("not-found", `${repository} does not exist, or this session cannot see it.`);
-            }
-
-            const byKey = new Map<string, PullRequestSummary>();
-            for (const pullRequest of [...node.open.nodes, ...node.closed.nodes, ...node.merged.nodes]) {
-                const summary = toPullRequestSummary(pullRequest);
-                byKey.set(summary.key, summary);
-            }
-
-            return {
-                defaultBranch: node.defaultBranchRef?.name ?? null,
-                pullRequests: [...byKey.values()],
-            };
         },
 
         async getPullRequest(token, repository, number) {
@@ -1371,6 +1342,20 @@ export function createGithubHttpClient(
             await restJson(token, "PUT", `/repos/${owner}/${name}/pulls/${number}/merge`, payload);
         },
 
+        async mergeStackedPullRequest(token, repository, number, method: MergeMethod, options) {
+            const [owner = "", name = ""] = repository.split("/");
+            const payload: Record<string, string> = { merge_method: method };
+            const commitTitle = options?.commitTitle?.trim();
+            const commitMessage = options?.commitMessage?.trim();
+            if (commitTitle) {
+                payload.commit_title = commitTitle;
+            }
+            if (commitMessage) {
+                payload.commit_message = commitMessage;
+            }
+            await mergePullRequestAsync(token, owner, name, number, payload);
+        },
+
         async closePullRequest(token, repository, number) {
             const [owner = "", name = ""] = repository.split("/");
             await restJson(token, "PATCH", `/repos/${owner}/${name}/pulls/${number}`, { state: "closed" });
@@ -1930,6 +1915,101 @@ export function createGithubHttpClient(
         return response.json();
     }
 
+    type MergeAsyncResult = {
+        status?: "pending" | "merged" | "enqueued" | "failed";
+        details?: {
+            message?: string;
+            uuid?: string;
+            sha?: string;
+        };
+    };
+
+    async function mergePullRequestAsync(
+        token: string,
+        owner: string,
+        name: string,
+        number: number,
+        payload: Record<string, string>,
+    ): Promise<void> {
+        const started = await requestMergeAsync(
+            token,
+            "PUT",
+            `/repos/${owner}/${name}/pulls/${number}/merge-async`,
+            payload,
+        );
+        await waitForMergeAsync(token, owner, name, number, started);
+    }
+
+    async function requestMergeAsync(
+        token: string,
+        method: string,
+        path: string,
+        body?: unknown,
+    ): Promise<MergeAsyncResult> {
+        let response: Response;
+
+        try {
+            response = await fetchImpl(`${REST_URL}${path}`, {
+                method,
+                headers: {
+                    ...authorizationHeaders(token),
+                    accept: "application/vnd.github+json",
+                    "x-github-api-version": "2026-03-10",
+                    ...(body === undefined ? {} : { "content-type": "application/json" }),
+                },
+                body: body === undefined ? undefined : JSON.stringify(body),
+                credentials,
+            });
+        } catch (cause) {
+            throw new EasyReviewError("network", "Could not reach GitHub. Check your connection and try again.", {
+                cause,
+            });
+        }
+
+        if (response.status === 200 || response.status === 202 || response.status === 409) {
+            return ((await response.json()) as MergeAsyncResult) ?? {};
+        }
+
+        throw await errorFromResponse(response);
+    }
+
+    async function waitForMergeAsync(
+        token: string,
+        owner: string,
+        name: string,
+        number: number,
+        started: MergeAsyncResult,
+    ): Promise<void> {
+        if (started.status === "merged" || started.status === "enqueued") {
+            return;
+        }
+        if (started.status === "failed") {
+            throw new EasyReviewError("unknown", started.details?.message ?? "GitHub could not merge this stack.");
+        }
+
+        const uuid = started.details?.uuid;
+        if (!uuid) {
+            throw new EasyReviewError("unknown", "GitHub did not return a merge request id.");
+        }
+
+        for (let attempt = 0; attempt < 120; attempt++) {
+            await new Promise((resolve) => setTimeout(resolve, 1000));
+            const result = await requestMergeAsync(
+                token,
+                "GET",
+                `/repos/${owner}/${name}/pulls/${number}/merge-async/${uuid}`,
+            );
+            if (result.status === "merged" || result.status === "enqueued") {
+                return;
+            }
+            if (result.status === "failed") {
+                throw new EasyReviewError("unknown", result.details?.message ?? "GitHub could not merge this stack.");
+            }
+        }
+
+        throw new EasyReviewError("unknown", "Timed out waiting for GitHub to merge this stack.");
+    }
+
     async function getRequestedReviewers(
         token: string,
         owner: string,
@@ -2212,11 +2292,20 @@ type PullRequestNode = {
             state: string;
         }>;
     };
-    commits: { nodes: Array<{ commit: { statusCheckRollup: { state: string } | null } }> };
+    commits?: { nodes: Array<{ commit: { statusCheckRollup: { state: string } | null } }> };
     mergeable: "MERGEABLE" | "CONFLICTING" | "UNKNOWN";
     mergeStateStatus?: string;
     labels: { nodes: Array<{ name: string; color: string }> } | null;
     assignees: { nodes: Array<{ login: string }> };
+    stackEntry?: { position: number } | null;
+    stack?: {
+        number: number;
+        size: number;
+        baseRefName: string;
+        entries?: {
+            nodes: Array<{ position: number; pullRequest: PullRequestNode | null } | null>;
+        };
+    } | null;
 };
 
 type RepositoryPullRequests = {
@@ -2297,13 +2386,13 @@ function toPullRequestSummary(node: PullRequestNode): PullRequestSummary {
         headRefName: node.headRefName,
         baseRefName: node.baseRefName,
         reviewDecision: toReviewDecision(node.reviewDecision),
-        reviewRequests: node.reviewRequests.nodes.flatMap((request) => {
+        reviewRequests: (node.reviewRequests?.nodes ?? []).flatMap((request) => {
             const reviewer = request.requestedReviewer;
             const name = reviewer?.login ?? reviewer?.name;
             return name ? [name] : [];
         }),
         reviewers: aggregateReviewerStatuses(
-            node.reviews.nodes.flatMap((review) =>
+            (node.reviews?.nodes ?? []).flatMap((review) =>
                 review.author && review.databaseId != null && review.submittedAt
                     ? [
                           {
@@ -2316,16 +2405,45 @@ function toPullRequestSummary(node: PullRequestNode): PullRequestSummary {
                     : [],
             ),
         ),
-        checks: toCheckState(node.commits.nodes[0]?.commit.statusCheckRollup?.state),
+        checks: toCheckState(node.commits?.nodes[0]?.commit.statusCheckRollup?.state),
         additions: node.additions,
         deletions: node.deletions,
         changedFiles: node.changedFiles,
         commentCount: node.totalCommentsCount ?? 0,
         mergeable: toMergeableState(node.mergeable),
         mergeStateStatus: toMergeStateStatus(node.mergeStateStatus),
-        assignees: node.assignees.nodes.map((assignee) => assignee.login),
+        assignees: (node.assignees?.nodes ?? []).map((assignee) => assignee.login),
         labels: node.labels?.nodes ?? [],
+        githubStack: toGithubStack(node),
     };
+}
+
+function toGithubStack(node: Pick<PullRequestNode, "stack" | "stackEntry">): GithubPullRequestStack | null {
+    const stack = node.stack;
+    const position = node.stackEntry?.position;
+    if (!stack || stack.size < 2 || position == null) {
+        return null;
+    }
+
+    return {
+        number: stack.number,
+        size: stack.size,
+        position,
+        baseRefName: stack.baseRefName,
+    };
+}
+
+function toGithubStackPullRequests(node: PullRequestNode): Array<PullRequestSummary> {
+    const entries = node.stack?.entries?.nodes ?? [];
+    return entries
+        .flatMap((entry) => {
+            if (!entry?.pullRequest) {
+                return [];
+            }
+            return [{ position: entry.position, pullRequest: toPullRequestSummary(entry.pullRequest) }];
+        })
+        .sort((left, right) => left.position - right.position)
+        .map((entry) => entry.pullRequest);
 }
 
 type SearchPullRequestNode = {
@@ -2514,6 +2632,7 @@ function toSearchPullRequestSummary(node: SearchPullRequestNode): PullRequestSum
         mergeStateStatus: "unknown",
         assignees: [],
         labels: [],
+        githubStack: null,
     };
 }
 
@@ -2611,46 +2730,6 @@ function buildInboxQuery(repositories: ReadonlyArray<string>, options?: ListPull
     `;
 }
 
-type RepositoryStackIndexQuery = {
-    repository: {
-        defaultBranchRef: { name: string } | null;
-        open: { nodes: Array<PullRequestNode> };
-        closed: { nodes: Array<PullRequestNode> };
-        merged: { nodes: Array<PullRequestNode> };
-    } | null;
-};
-
-function buildRepositoryStackIndexQuery(owner: string, name: string): string {
-    return `
-        query EasyReviewRepositoryStackIndex {
-            repository(owner: ${JSON.stringify(owner)}, name: ${JSON.stringify(name)}) {
-                defaultBranchRef {
-                    name
-                }
-                open: pullRequests(
-                    states: [OPEN]
-                    first: ${STACK_OPEN_PULL_REQUESTS}
-                    orderBy: { field: UPDATED_AT, direction: DESC }
-                ) { nodes { ...InboxPullRequest } }
-                closed: pullRequests(
-                    states: [CLOSED]
-                    first: ${STACK_CLOSED_PULL_REQUESTS}
-                    orderBy: { field: UPDATED_AT, direction: DESC }
-                ) { nodes { ...InboxPullRequest } }
-                merged: pullRequests(
-                    states: [MERGED]
-                    first: ${STACK_MERGED_PULL_REQUESTS}
-                    orderBy: { field: UPDATED_AT, direction: DESC }
-                ) { nodes { ...InboxPullRequest } }
-            }
-        }
-
-        fragment InboxPullRequest on PullRequest {
-            ${PULL_REQUEST_FIELDS}
-        }
-    `;
-}
-
 /** Rollup state for inbox rows and stack index — one commit is enough. */
 const PULL_REQUEST_CHECK_COMMIT = `
     commits(last: 1) {
@@ -2726,7 +2805,38 @@ const PULL_REQUEST_SUMMARY_FIELDS = `
     }
 `;
 
-const PULL_REQUEST_FIELDS = `${PULL_REQUEST_SUMMARY_FIELDS}${PULL_REQUEST_CHECK_COMMIT}`;
+const PULL_REQUEST_STACK_MEMBERSHIP_FIELDS = `
+    stackEntry {
+        position
+    }
+    stack {
+        number
+        size
+        baseRefName
+    }
+`;
+
+const PULL_REQUEST_STACK_DETAIL_FIELDS = `
+    stackEntry {
+        position
+    }
+    stack {
+        number
+        size
+        baseRefName
+        entries(first: 50) {
+            nodes {
+                position
+                pullRequest {
+                    ${PULL_REQUEST_SUMMARY_FIELDS}
+                    ${PULL_REQUEST_CHECK_COMMIT}
+                }
+            }
+        }
+    }
+`;
+
+const PULL_REQUEST_FIELDS = `${PULL_REQUEST_SUMMARY_FIELDS}${PULL_REQUEST_CHECK_COMMIT}${PULL_REQUEST_STACK_MEMBERSHIP_FIELDS}`;
 
 const SECTION_SEARCH_PULL_REQUESTS_QUERY = `
     query EasyReviewSectionPullRequests($query: String!, $first: Int!, $after: String) {
@@ -2882,6 +2992,7 @@ const PULL_REQUEST_QUERY = `
             mergeCommitMessage
             pullRequest(number: $number) {
                 ${PULL_REQUEST_SUMMARY_FIELDS}
+                ${PULL_REQUEST_STACK_DETAIL_FIELDS}
                 body
                 bodyHTML
                 lastEditedAt
@@ -4068,6 +4179,7 @@ function toPullRequestDetail(node: PullRequestDetailNode, settings: RepositoryMe
         autoMergeMethod: node.autoMergeRequest?.mergeMethod
             ? fromGraphqlMergeMethod(node.autoMergeRequest.mergeMethod)
             : null,
+        githubStackPullRequests: toGithubStackPullRequests(node),
     };
 }
 

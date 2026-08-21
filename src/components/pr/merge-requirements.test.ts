@@ -61,6 +61,7 @@ function detail(overrides: Partial<PullRequestDetail> = {}): PullRequestDetail {
         viewerCanUpdateBranch: false,
         autoMergeEnabled: false,
         autoMergeMethod: null,
+        githubStackPullRequests: [],
         ...overrides,
     };
 }

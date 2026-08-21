@@ -12,9 +12,8 @@ import {
     Link2,
     Terminal,
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 
-import type { PullRequestStackState } from "#/lib/session/session.ts";
 import type { StackMergeRowStatus } from "#/lib/session/stack-merge.ts";
 import type { PullRequestDetail, PullRequestSummary, ReviewDecision } from "#/lib/session/types.ts";
 
@@ -30,12 +29,11 @@ import {
 } from "#/components/ui/dropdown-menu.tsx";
 import { LoadingIcon } from "#/components/ui/loading.tsx";
 import { RelativeTime } from "#/components/ui/relative-time.tsx";
-import { usePullRequestStackQuery, useRepoStackIndexQuery } from "#/lib/query/stack.ts";
-import { useSessionState } from "#/lib/session/provider.tsx";
 import {
     formatStackBranches,
     formatStackGhCheckoutCommands,
     formatStackUrls,
+    resolveGithubPullRequestStack,
 } from "#/lib/session/pull-request-stacks.ts";
 import { evaluateStackMerge, stackMergeStatusLabel } from "#/lib/session/stack-merge.ts";
 import { useStackPreferences } from "#/lib/stack-preferences.ts";
@@ -107,41 +105,33 @@ async function copyText(label: string, value: string): Promise<void> {
     notifyCopied(label);
 }
 
-const idleStackState: PullRequestStackState = { status: "idle", stack: null, error: null };
+const idleStackState = { status: "idle" as const, stack: null, error: null };
 
-function usePullRequestStackState(repository: string, number: number): PullRequestStackState {
+function usePullRequestStackState(repository: string, number: number, detail: PullRequestDetail | null) {
     const [stackPreferences] = useStackPreferences();
-    const index = useRepoStackIndexQuery(repository);
-    const stackQuery = usePullRequestStackQuery(repository, number);
-    const overrideState = useSessionState((state) => state.pullRequestStackOverrides[`${repository}#${number}`]);
 
-    useEffect(() => {
-        if (!stackPreferences.enabled || stackQuery.stack) {
-            return;
+    return useMemo(() => {
+        if (!stackPreferences.enabled) {
+            return idleStackState;
         }
-
-        const indexStatus = index.status;
-        const overrideStatus = overrideState?.status ?? "idle";
-
-        if (indexStatus === "idle" || indexStatus === "loading") {
-            return;
+        if (!detail) {
+            return { status: "loading" as const, stack: null, error: null };
         }
-
-        if (overrideStatus === "loading" || overrideStatus === "ready") {
-            return;
-        }
-
-        void stackQuery.loadGraphite();
-    }, [stackPreferences.enabled, stackQuery.stack, stackQuery.loadGraphite, index.status, overrideState?.status]);
-
-    if (!stackPreferences.enabled) {
-        return idleStackState;
-    }
-
-    return stackQuery;
+        return {
+            status: "ready" as const,
+            stack: resolveGithubPullRequestStack({
+                repository,
+                number,
+                githubStack: detail.githubStack,
+                pullRequests: detail.githubStackPullRequests,
+                hideClosed: stackPreferences.hideClosed,
+            }),
+            error: null,
+        };
+    }, [stackPreferences.enabled, stackPreferences.hideClosed, detail, repository, number]);
 }
 
-/** Same-repo stack from branch names, with Graphite comment fallback when branches no longer chain. */
+/** GitHub stacked pull requests for this pull request. */
 export function PullRequestStackPanel({
     repository,
     number,
@@ -152,7 +142,7 @@ export function PullRequestStackPanel({
     detail: PullRequestDetail | null;
 }) {
     const stackPreferences = useStackPreferences()[0];
-    const stackState = usePullRequestStackState(repository, number);
+    const stackState = usePullRequestStackState(repository, number, detail);
     const [expanded, setExpanded] = useState(true);
     const stackMergeEvaluation = useMemo(
         () => (stackState.stack ? evaluateStackMerge(stackState.stack) : null),
@@ -210,7 +200,7 @@ export function PullRequestStackPanel({
                                 </span>
                             </div>
                             <p className="text-xs text-muted-foreground">
-                                Pull requests stacked on each other in {repository}.
+                                GitHub stacked pull requests in {repository}.
                             </p>
                         </div>
                     ) : (

@@ -99,14 +99,6 @@ function shouldSkipDetailRevalidate(lastLoadedAt: string | null | undefined, min
     return Date.now() - Date.parse(lastLoadedAt) < minIntervalMs;
 }
 
-/** After merge / label / review / close — refresh stack panel summaries for this repository. */
-export function invalidateRepositoryStackIndex(queryClient: QueryClient, repository: string): void {
-    void queryClient.invalidateQueries({
-        queryKey: queryKeys.repository.stackIndex(repository),
-        refetchType: "active",
-    });
-}
-
 /** After merge / label / review / close — refresh timeline surfaces (detail often patched inline). */
 export function invalidatePullRequestSecondaryAfterMutation(
     queryClient: QueryClient,
