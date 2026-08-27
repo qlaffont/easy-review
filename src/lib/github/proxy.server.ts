@@ -16,14 +16,14 @@ const HOP_BY_HOP = new Set([
     "cookie",
     "authorization",
     "content-length",
-    // Browser Accept-Encoding must not reach GitHub: Bun/fetch decompresses upstream
+    // Browser Accept-Encoding must not reach GitHub: fetch decompresses upstream
     // bodies but still exposes Content-Encoding, which would confuse the browser.
     "accept-encoding",
 ]);
 
 /**
  * Dropped on the way back to the browser. `fetch` already delivers a decoded body, but
- * runtimes (Bun) may still advertise `content-encoding: gzip` — forwarding that makes the
+ * some runtimes may still advertise `content-encoding: gzip` — forwarding that makes the
  * browser try to gunzip plaintext and throw `TypeError: Decoding failed.`
  */
 const STRIP_FROM_UPSTREAM_RESPONSE = new Set(["set-cookie", "content-encoding", "content-length", "transfer-encoding"]);

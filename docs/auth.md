@@ -29,5 +29,5 @@ Auto-reconnect does not run when the URL contains `?authError=` (failed OAuth at
 ## Security notes for operators
 
 - Treat the OAuth proxy as a public API boundary: allowlisted routes only.
-- XSS on the origin can still invoke the proxy with the user’s cookie — use CSP and dependency hygiene (`bun audit` / lockfile overrides).
+- XSS on the origin can still invoke the proxy with the user’s cookie — use CSP and dependency hygiene (`pnpm audit` / lockfile overrides).
 - `GITHUB_SESSION_SECRET` encrypts refresh-token payload when using expiring user tokens.

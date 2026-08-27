@@ -1,1 +1,1 @@
-bun audit --audit-level=high --only=prod
+pnpm audit --audit-level=high --prod
