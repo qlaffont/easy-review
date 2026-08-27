@@ -1947,8 +1947,23 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
     }
 
     async function setReviewEvent(repository: string, number: number, event: ReviewEvent): Promise<void> {
-        const draft = await ensureDraft(repository, number);
-        await persistDraft({ ...draft, event });
+        const key = pullRequestKey(repository, number);
+        const hadDraft = Boolean(state.state.reviewDrafts[key]);
+        await persistDraft({ ...getReviewDraft(repository, number), event });
+        if (hadDraft) {
+            return;
+        }
+
+        const detail = resolvePullRequestDetail(repository, number);
+        if (!detail) {
+            return;
+        }
+
+        await syncDraftWithHead(detail);
+        const merged = state.state.reviewDrafts[key];
+        if (merged && merged.event !== event) {
+            await persistDraft({ ...merged, event });
+        }
     }
 
     async function setReviewBody(repository: string, number: number, body: string): Promise<void> {

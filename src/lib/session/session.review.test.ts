@@ -153,6 +153,25 @@ describe("staged review drafts", () => {
         expect(threads.some((thread) => thread.comments.some((comment) => comment.body === "ship it now"))).toBe(true);
     });
 
+    it("selects a review event before GitHub pending-review sync finishes", async () => {
+        const session = createEasyReviewSession({ github, queryClient: createTestQueryClient(), store });
+        await session.connect(TOKEN);
+
+        const detail = await github.getPullRequest(TOKEN, "acme/api", 1);
+        setPullRequestDetailQueryData(session.queryClient, pullRequestKey("acme/api", 1), detail);
+
+        const release = github.deferNext();
+        const pending = session.setReviewEvent("acme/api", 1, "approve");
+        await Promise.resolve();
+        await Promise.resolve();
+
+        expect(session.getReviewDraft("acme/api", 1).event).toBe("approve");
+
+        release();
+        await pending;
+        expect(session.getReviewDraft("acme/api", 1).event).toBe("approve");
+    });
+
     it("submits a review when detail lives only in the query cache", async () => {
         const session = createEasyReviewSession({ github, queryClient: createTestQueryClient(), store });
         await session.connect(TOKEN);

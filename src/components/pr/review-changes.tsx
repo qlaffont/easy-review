@@ -58,7 +58,7 @@ import {
     usePullRequestPage,
     useReviewThreadsQuery,
 } from "#/lib/query/pull-request.ts";
-import { useReviewDraft } from "#/lib/query/review-draft.ts";
+import { useReviewDraftStaging } from "#/lib/query/review-draft.ts";
 import { shouldConfirmLargeFile } from "#/lib/session/diff-policy.ts";
 import { useSession } from "#/lib/session/provider.tsx";
 import { notifyAction, notifyError } from "#/lib/toast.ts";
@@ -79,7 +79,7 @@ export function ReviewChanges({
 }) {
     const session = useSession();
     const page = usePullRequestPage(repository, number);
-    const draft = useReviewDraft(repository, number);
+    const draft = useReviewDraftStaging(repository, number);
     const threads = useReviewThreadsQuery(repository, number);
     const commits = usePullRequestCommitsQuery(repository, number);
     const { files, refresh: refreshFiles } = usePullRequestFilesQuery(repository, number);
