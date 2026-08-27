@@ -214,6 +214,186 @@ describe("getPullRequest", () => {
         expect(detail.githubStackPullRequests[0]?.title).toBe("Bottom");
     });
 
+    it("maps a GitHub stack from entries when stackEntry is omitted", async () => {
+        const github = createGithubHttpClient(
+            respondWith({
+                data: {
+                    repository: {
+                        mergeCommitAllowed: true,
+                        squashMergeAllowed: true,
+                        rebaseMergeAllowed: true,
+                        viewerDefaultMergeMethod: "SQUASH",
+                        pullRequest: {
+                            ...pullRequestNode("acme/api", 195),
+                            body: "",
+                            reactionGroups: [],
+                            baseRefOid: "base",
+                            headRefOid: "head",
+                            mergeStateStatus: "CLEAN",
+                            viewerCanMergeAsAdmin: false,
+                            mergeable: "MERGEABLE",
+                            id: "PR_195",
+                            viewerCanUpdateBranch: false,
+                            autoMergeRequest: null,
+                            baseRef: {
+                                branchProtectionRule: {
+                                    requiresApprovingReviews: true,
+                                    requiredApprovingReviewCount: 1,
+                                },
+                            },
+                            userContentEdits: { totalCount: 0, nodes: [] },
+                            includesCreatedEdit: false,
+                            lastEditedAt: null,
+                            editor: null,
+                            headRepositoryOwner: { login: "acme" },
+                            stack: {
+                                number: 4,
+                                size: 2,
+                                baseRefName: "dev",
+                                entries: {
+                                    nodes: [
+                                        {
+                                            position: 1,
+                                            pullRequest: {
+                                                ...pullRequestNode("acme/api", 148),
+                                                title: "Bottom",
+                                                state: "MERGED",
+                                                headRefName: "feat-a",
+                                                baseRefName: "dev",
+                                            },
+                                        },
+                                        {
+                                            position: 2,
+                                            pullRequest: {
+                                                ...pullRequestNode("acme/api", 195),
+                                                title: "Top",
+                                                headRefName: "feat-b",
+                                                baseRefName: "feat-a",
+                                            },
+                                        },
+                                    ],
+                                },
+                            },
+                            commits: { totalCount: 1, nodes: [] },
+                        },
+                    },
+                },
+            }),
+        );
+
+        const detail = await github.getPullRequest("token", "acme/api", 195);
+
+        expect(detail.githubStack).toEqual({ number: 4, size: 2, position: 2, baseRefName: "dev" });
+        expect(detail.githubStackPullRequests.map((entry) => entry.number)).toEqual([148, 195]);
+    });
+
+    it("loads a GitHub Stacks CLI stack from the REST Stacks API when GraphQL omits membership", async () => {
+        const overview = {
+            mergeCommitAllowed: true,
+            squashMergeAllowed: true,
+            rebaseMergeAllowed: true,
+            viewerDefaultMergeMethod: "SQUASH",
+            pullRequest: {
+                ...pullRequestNode("acme/api", 195),
+                title: "Top",
+                headRefName: "feat-b",
+                baseRefName: "feat-a",
+                body: "",
+                reactionGroups: [],
+                baseRefOid: "base",
+                headRefOid: "head",
+                mergeStateStatus: "CLEAN",
+                viewerCanMergeAsAdmin: false,
+                mergeable: "MERGEABLE",
+                id: "PR_195",
+                viewerCanUpdateBranch: false,
+                autoMergeRequest: null,
+                baseRef: {
+                    branchProtectionRule: {
+                        requiresApprovingReviews: true,
+                        requiredApprovingReviewCount: 1,
+                    },
+                },
+                userContentEdits: { totalCount: 0, nodes: [] },
+                includesCreatedEdit: false,
+                lastEditedAt: null,
+                editor: null,
+                headRepositoryOwner: { login: "acme" },
+                commits: { totalCount: 1, nodes: [] },
+            },
+        };
+        const github = createGithubHttpClient(async (input, init) => {
+            const url = String(input);
+
+            if (url.includes("/graphql")) {
+                const body = JSON.parse(String(init?.body)) as { query?: string };
+                if (body.query?.includes("EasyReviewStackLayers")) {
+                    return new Response(
+                        JSON.stringify({
+                            data: {
+                                repository: {
+                                    layer0: {
+                                        ...pullRequestNode("acme/api", 148),
+                                        title: "Bottom",
+                                        state: "MERGED",
+                                        headRefName: "feat-a",
+                                        baseRefName: "dev",
+                                    },
+                                    layer1: {
+                                        ...pullRequestNode("acme/api", 195),
+                                        title: "Top",
+                                        headRefName: "feat-b",
+                                        baseRefName: "feat-a",
+                                    },
+                                },
+                            },
+                        }),
+                        { status: 200 },
+                    );
+                }
+
+                return new Response(JSON.stringify({ data: { repository: overview } }), { status: 200 });
+            }
+
+            if (url.includes("/repos/acme/api/stacks?pull_request=195")) {
+                expect(new Headers(init?.headers).get("x-github-api-version")).toBe("2026-03-10");
+                return new Response(
+                    JSON.stringify([
+                        {
+                            number: 4,
+                            base: { ref: "dev" },
+                            pull_requests: [
+                                {
+                                    number: 148,
+                                    state: "closed",
+                                    draft: false,
+                                    merged_at: "2026-08-26T00:00:00Z",
+                                    head: { ref: "feat-a", sha: "aaa" },
+                                },
+                                {
+                                    number: 195,
+                                    state: "open",
+                                    draft: false,
+                                    merged_at: null,
+                                    head: { ref: "feat-b", sha: "bbb" },
+                                },
+                            ],
+                        },
+                    ]),
+                    { status: 200 },
+                );
+            }
+
+            throw new Error(`Unexpected URL: ${url}`);
+        });
+
+        const detail = await github.getPullRequest("token", "acme/api", 195);
+
+        expect(detail.githubStack).toEqual({ number: 4, size: 2, position: 2, baseRefName: "dev" });
+        expect(detail.githubStackPullRequests.map((entry) => entry.number)).toEqual([148, 195]);
+        expect(detail.githubStackPullRequests[0]?.title).toBe("Bottom");
+    });
+
     it("reads required approving reviews from branch rulesets when classic protection is absent", async () => {
         const github = createGithubHttpClient(async (input) => {
             const url = String(input);
@@ -246,6 +426,10 @@ describe("getPullRequest", () => {
                     }),
                     { status: 200 },
                 );
+            }
+
+            if (url.includes("/repos/acme/api/stacks")) {
+                return new Response("[]", { status: 200 });
             }
 
             expect(url).toContain("/repos/acme/api/rules/branches/main");

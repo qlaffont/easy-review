@@ -682,8 +682,11 @@ export function createGithubHttpClient(
                 mergeCommitTitle: repo.mergeCommitTitle,
                 mergeCommitMessage: repo.mergeCommitMessage,
             });
-            if (detail.requiredApprovingReviewCount != null) {
-                return detail;
+            const withStack = hasUsableGithubStack(detail)
+                ? detail
+                : await attachRestGithubStack(token, owner, name, number, detail);
+            if (withStack.requiredApprovingReviewCount != null) {
+                return withStack;
             }
 
             // Classic `branchProtectionRule` is often null when the requirement comes from
@@ -691,7 +694,7 @@ export function createGithubHttpClient(
             const fromRulesets = await requiredApprovingReviewsFromBranchRules(token, owner, name, node.baseRefName);
 
             return {
-                ...detail,
+                ...withStack,
                 requiredApprovingReviewCount: fromRulesets,
             };
         },
@@ -1884,6 +1887,103 @@ export function createGithubHttpClient(
         },
     };
 
+    async function attachRestGithubStack(
+        token: string,
+        owner: string,
+        name: string,
+        number: number,
+        detail: PullRequestDetail,
+    ): Promise<PullRequestDetail> {
+        const restStack = await fetchRestPullRequestStack(token, owner, name, number);
+        if (!restStack) {
+            return detail;
+        }
+
+        const layers = await loadRestStackLayers(token, owner, name, detail, restStack);
+        if (layers.length < 2) {
+            return detail;
+        }
+
+        const githubStack: GithubPullRequestStack = {
+            number: restStack.number,
+            size: layers.length,
+            position: restStack.position,
+            baseRefName: restStack.baseRefName,
+        };
+
+        return {
+            ...detail,
+            githubStack,
+            githubStackPullRequests: layers.map((layer) => ({ ...layer, githubStack })),
+        };
+    }
+
+    async function fetchRestPullRequestStack(
+        token: string,
+        owner: string,
+        name: string,
+        number: number,
+    ): Promise<ResolvedRestPullRequestStack | null> {
+        let response: Response;
+
+        try {
+            response = await fetchImpl(`${REST_URL}/repos/${owner}/${name}/stacks?pull_request=${number}`, {
+                headers: {
+                    ...authorizationHeaders(token),
+                    accept: "application/vnd.github+json",
+                    "x-github-api-version": "2026-03-10",
+                },
+                credentials,
+            });
+        } catch {
+            return null;
+        }
+
+        if (!response.ok) {
+            return null;
+        }
+
+        try {
+            const payload = (await response.json()) as unknown;
+            return parseRestPullRequestStack(payload, number);
+        } catch {
+            return null;
+        }
+    }
+
+    async function loadRestStackLayers(
+        token: string,
+        owner: string,
+        name: string,
+        detail: PullRequestDetail,
+        restStack: ResolvedRestPullRequestStack,
+    ): Promise<Array<PullRequestSummary>> {
+        const numbers = restStack.pullRequests.map((layer) => layer.number);
+        let nodes: Record<string, PullRequestNode | null> = {};
+        try {
+            const data = await graphql<StackLayersQuery>(
+                token,
+                buildStackLayersQuery(numbers),
+                { owner, name },
+                { keepPartial: true },
+            );
+            nodes = data.repository ?? {};
+        } catch {
+            nodes = {};
+        }
+
+        return restStack.pullRequests.map((layer, index) => {
+            const node = nodes[`layer${index}`];
+            if (node) {
+                return toPullRequestSummary(node);
+            }
+            if (layer.number === detail.number) {
+                return summaryFromDetail(detail);
+            }
+            return summaryFromRestStackLayer(detail, layer);
+        });
+    }
+
     async function restJson(token: string, method: string, path: string, body?: unknown): Promise<unknown> {
         let response: Response;
 
@@ -2418,10 +2518,16 @@ function toPullRequestSummary(node: PullRequestNode): PullRequestSummary {
     };
 }
 
-function toGithubStack(node: Pick<PullRequestNode, "stack" | "stackEntry">): GithubPullRequestStack | null {
+function toGithubStack(node: Pick<PullRequestNode, "number" | "stack" | "stackEntry">): GithubPullRequestStack | null {
     const stack = node.stack;
-    const position = node.stackEntry?.position;
-    if (!stack || stack.size < 2 || position == null) {
+    if (!stack || stack.size < 2) {
+        return null;
+    }
+
+    const position =
+        node.stackEntry?.position ??
+        stack.entries?.nodes?.find((entry) => entry?.pullRequest?.number === node.number)?.position;
+    if (position == null) {
         return null;
     }
 
@@ -2444,6 +2550,160 @@ function toGithubStackPullRequests(node: PullRequestNode): Array<PullRequestSumm
         })
         .sort((left, right) => left.position - right.position)
         .map((entry) => entry.pullRequest);
+}
+
+function hasUsableGithubStack(detail: PullRequestDetail): boolean {
+    return Boolean(detail.githubStack && detail.githubStackPullRequests.length >= 2);
+}
+
+type RestStackPullRequest = {
+    number: number;
+    state?: string;
+    draft?: boolean;
+    merged_at?: string | null;
+    head?: { ref?: string };
+};
+
+type ResolvedRestPullRequestStack = {
+    number: number;
+    position: number;
+    baseRefName: string;
+    pullRequests: Array<RestStackPullRequest>;
+};
+
+type StackLayersQuery = {
+    repository: Record<string, PullRequestNode | null> | null;
+};
+
+function parseRestPullRequestStack(payload: unknown, number: number): ResolvedRestPullRequestStack | null {
+    if (!Array.isArray(payload) || payload.length === 0) {
+        return null;
+    }
+
+    const stack = payload[0] as {
+        number?: unknown;
+        base?: { ref?: unknown };
+        pull_requests?: unknown;
+    };
+    if (typeof stack.number !== "number" || !Array.isArray(stack.pull_requests)) {
+        return null;
+    }
+
+    const pullRequests = stack.pull_requests.flatMap((entry): Array<RestStackPullRequest> => {
+        if (!entry || typeof entry !== "object" || !("number" in entry) || typeof entry.number !== "number") {
+            return [];
+        }
+        const layer = entry as RestStackPullRequest;
+        return [layer];
+    });
+    if (pullRequests.length < 2) {
+        return null;
+    }
+
+    const position = pullRequests.findIndex((layer) => layer.number === number) + 1;
+    if (position <= 0) {
+        return null;
+    }
+
+    const baseRefName = typeof stack.base?.ref === "string" ? stack.base.ref : "";
+    if (!baseRefName) {
+        return null;
+    }
+
+    return {
+        number: stack.number,
+        position,
+        baseRefName,
+        pullRequests,
+    };
+}
+
+function buildStackLayersQuery(numbers: ReadonlyArray<number>): string {
+    const selections = numbers
+        .map(
+            (layerNumber, index) => `
+                layer${index}: pullRequest(number: ${layerNumber}) {
+                    ${PULL_REQUEST_SUMMARY_FIELDS}
+                    ${PULL_REQUEST_CHECK_COMMIT}
+                }
+            `,
+        )
+        .join("\n");
+
+    return `
+        query EasyReviewStackLayers($owner: String!, $name: String!) {
+            repository(owner: $owner, name: $name) {
+                ${selections}
+            }
+        }
+    `;
+}
+
+function summaryFromDetail(detail: PullRequestDetail): PullRequestSummary {
+    return {
+        key: detail.key,
+        repository: detail.repository,
+        number: detail.number,
+        title: detail.title,
+        url: detail.url,
+        author: detail.author,
+        authorAvatarUrl: detail.authorAvatarUrl,
+        state: detail.state,
+        isDraft: detail.isDraft,
+        createdAt: detail.createdAt,
+        updatedAt: detail.updatedAt,
+        mergedAt: detail.mergedAt,
+        headRefName: detail.headRefName,
+        baseRefName: detail.baseRefName,
+        reviewDecision: detail.reviewDecision,
+        reviewRequests: detail.reviewRequests,
+        reviewers: detail.reviewers,
+        checks: detail.checks,
+        additions: detail.additions,
+        deletions: detail.deletions,
+        changedFiles: detail.changedFiles,
+        commentCount: detail.commentCount,
+        mergeable: detail.mergeable,
+        mergeStateStatus: detail.mergeStateStatus,
+        assignees: detail.assignees,
+        labels: detail.labels,
+        githubStack: detail.githubStack,
+    };
+}
+
+function summaryFromRestStackLayer(detail: PullRequestDetail, layer: RestStackPullRequest): PullRequestSummary {
+    const state = layer.merged_at ? "merged" : layer.state === "closed" ? "closed" : "open";
+    const headRefName = layer.head?.ref ?? "";
+
+    return {
+        key: `${detail.repository}#${layer.number}`,
+        repository: detail.repository,
+        number: layer.number,
+        title: headRefName || `#${layer.number}`,
+        url: detail.url.replace(/\/pull\/\d+(?:\/.*)?$/, `/pull/${layer.number}`),
+        author: "ghost",
+        authorAvatarUrl: null,
+        state,
+        isDraft: Boolean(layer.draft),
+        createdAt: detail.createdAt,
+        updatedAt: detail.updatedAt,
+        mergedAt: layer.merged_at ?? null,
+        headRefName,
+        baseRefName: detail.baseRefName,
+        reviewDecision: null,
+        reviewRequests: [],
+        reviewers: [],
+        checks: "none",
+        additions: 0,
+        deletions: 0,
+        changedFiles: 0,
+        commentCount: 0,
+        mergeable: "unknown",
+        mergeStateStatus: "unknown",
+        assignees: [],
+        labels: [],
+        githubStack: null,
+    };
 }
 
 type SearchPullRequestNode = {
