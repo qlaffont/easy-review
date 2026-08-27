@@ -1970,13 +1970,22 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
         const key = pullRequestKey(repository, number);
         const attempt = (latestDraftBodyWrites.get(key) ?? 0) + 1;
         latestDraftBodyWrites.set(key, attempt);
-        await ensureDraft(repository, number);
+
+        const draft = state.state.reviewDrafts[key] ?? getReviewDraft(repository, number);
+        const next = { ...draft, body };
+
+        // Apply the body before any await so a controlled composer does not revert mid-keystroke
+        // (which parks the caret at the end).
+        state.setState((prev) => ({
+            ...prev,
+            reviewDrafts: { ...prev.reviewDrafts, [key]: next },
+        }));
+
         if (attempt !== latestDraftBodyWrites.get(key)) {
             return;
         }
 
-        const draft = state.state.reviewDrafts[key] ?? (await ensureDraft(repository, number));
-        await persistDraft({ ...draft, body });
+        await persistDraft(next);
     }
 
     async function addPendingComment(

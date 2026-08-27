@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 import {
     useEffect,
+    useLayoutEffect,
     useMemo,
     useRef,
     useState,
@@ -194,14 +195,16 @@ export function MarkdownComposer({
 
     valueRef.current = value;
 
-    useEffect(() => {
+    useLayoutEffect(() => {
         const pending = pendingSelection.current;
         const node = textareaRef.current;
         if (!pending || !node) {
             return;
         }
         pendingSelection.current = null;
-        node.focus();
+        if (document.activeElement !== node) {
+            node.focus();
+        }
         node.setSelectionRange(pending.start, pending.end);
         setCaret(pending.end);
     }, [value]);
@@ -543,13 +546,22 @@ export function MarkdownComposer({
                         autoFocus={autoFocus}
                         placeholder={writePlaceholder}
                         className={cn(
-                            "resize-y rounded-none border-0 shadow-none focus-visible:ring-0",
+                            "field-sizing-fixed resize-y rounded-none border-0 shadow-none focus-visible:ring-0",
                             compact ? "min-h-16 px-3 py-2 text-sm" : "min-h-24",
                             draggingMedia && "bg-sky-500/5 ring-2 ring-inset ring-sky-500/40",
                         )}
                         onChange={(event) => {
-                            onChange(event.target.value);
-                            setCaret(event.target.selectionStart);
+                            const node = event.currentTarget;
+                            const composing =
+                                "isComposing" in event.nativeEvent && Boolean(event.nativeEvent.isComposing);
+                            if (!composing) {
+                                pendingSelection.current = {
+                                    start: node.selectionStart,
+                                    end: node.selectionEnd,
+                                };
+                            }
+                            onChange(node.value);
+                            setCaret(node.selectionStart);
                         }}
                         onClick={() => syncCaret()}
                         onKeyUp={() => syncCaret()}

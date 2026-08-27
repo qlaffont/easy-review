@@ -172,6 +172,17 @@ describe("staged review drafts", () => {
         expect(session.getReviewDraft("acme/api", 1).event).toBe("approve");
     });
 
+    it("updates the in-memory review body before storage finishes", async () => {
+        const session = await connectedWithPr();
+        await session.setReviewEvent("acme/api", 1, "comment");
+
+        const pending = session.setReviewBody("acme/api", 1, "Please fix naming.");
+        expect(session.getReviewDraft("acme/api", 1).body).toBe("Please fix naming.");
+
+        await pending;
+        expect(session.getReviewDraft("acme/api", 1).body).toBe("Please fix naming.");
+    });
+
     it("submits a review when detail lives only in the query cache", async () => {
         const session = createEasyReviewSession({ github, queryClient: createTestQueryClient(), store });
         await session.connect(TOKEN);
