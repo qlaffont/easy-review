@@ -37,7 +37,13 @@ const PAN_STEP = 48;
 
 let mermaidInitTheme: "dark" | "default" | null = null;
 
-async function renderMermaidSvg(code: string, renderId: string, dark: boolean): Promise<string> {
+function removeMermaidTempElements(renderId: string) {
+    document.getElementById(`d${renderId}`)?.remove();
+    document.getElementById(renderId)?.remove();
+    document.getElementById(`i${renderId}`)?.remove();
+}
+
+export async function renderMermaidSvg(code: string, renderId: string, dark: boolean): Promise<string> {
     const mermaid = (await import("mermaid")).default;
     const theme = dark ? "dark" : "default";
 
@@ -45,14 +51,19 @@ async function renderMermaidSvg(code: string, renderId: string, dark: boolean): 
         mermaid.initialize({
             startOnLoad: false,
             securityLevel: "strict",
+            suppressErrorRendering: true,
             theme,
             fontFamily: "ui-sans-serif, system-ui, sans-serif",
         });
         mermaidInitTheme = theme;
     }
 
-    const { svg } = await mermaid.render(renderId, code);
-    return svg;
+    try {
+        const { svg } = await mermaid.render(renderId, code);
+        return svg;
+    } finally {
+        removeMermaidTempElements(renderId);
+    }
 }
 
 function clampScale(scale: number): number {
