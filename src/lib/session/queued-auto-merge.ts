@@ -67,9 +67,27 @@ export function applyQueuedAutoMerge(
     };
 }
 
+export function shouldUpdateBranchForAutoMerge(
+    pullRequest: Pick<
+        PullRequestDetail,
+        "state" | "isDraft" | "mergeable" | "mergeStateStatus" | "viewerCanUpdateBranch"
+    >,
+): boolean {
+    if (pullRequest.state !== "open" || pullRequest.isDraft) {
+        return false;
+    }
+
+    if (pullRequest.mergeable === "conflicting" || pullRequest.mergeStateStatus === "dirty") {
+        return false;
+    }
+
+    return pullRequest.mergeStateStatus === "behind" && pullRequest.viewerCanUpdateBranch;
+}
+
 /**
  * True when Easy Review should actually merge. Unknown / blocked / behind stay queued
- * until GitHub reports a mergeable status.
+ * until GitHub reports a mergeable status. Behind pull requests are updated first when
+ * {@link shouldUpdateBranchForAutoMerge} is true.
  */
 export function isPullRequestReadyToAutoMerge(
     pullRequest: Pick<PullRequestDetail, "state" | "isDraft" | "mergeable" | "mergeStateStatus" | "reviewDecision">,
@@ -87,6 +105,25 @@ export function isPullRequestReadyToAutoMerge(
     }
 
     return pullRequest.mergeStateStatus === "clean" || pullRequest.mergeStateStatus === "has_hooks";
+}
+
+/** Toast copy after a bulk auto-merge: how many merged now vs still waiting. */
+export function describeAutoMergeBatchResult(result: { queued: number; merged: ReadonlyArray<unknown> }): string {
+    const mergedCount = result.merged.length;
+    const remaining = Math.max(0, result.queued - mergedCount);
+
+    if (mergedCount === 0 && remaining === 0) {
+        return "No pull requests to auto-merge";
+    }
+    if (remaining === 0) {
+        return mergedCount === 1 ? "Merged 1 pull request" : `Merged ${mergedCount} pull requests`;
+    }
+    if (mergedCount === 0) {
+        return remaining === 1
+            ? "1 pull request queued until it's ready"
+            : `${remaining} pull requests queued until they're ready`;
+    }
+    return `Merged ${mergedCount} · ${remaining} queued until ready`;
 }
 
 function asQueuedAutoMerge(value: unknown): QueuedAutoMerge | null {

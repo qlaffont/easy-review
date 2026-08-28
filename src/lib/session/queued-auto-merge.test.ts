@@ -4,11 +4,13 @@ import type { PullRequestDetail } from "#/lib/session/types.ts";
 
 import {
     applyQueuedAutoMerge,
+    describeAutoMergeBatchResult,
     isPullRequestReadyToAutoMerge,
     parseQueuedAutoMerges,
     queuedAutoMergeKey,
     queuedAutoMergeStorageKey,
     serializeQueuedAutoMerges,
+    shouldUpdateBranchForAutoMerge,
     type QueuedAutoMerge,
 } from "#/lib/session/queued-auto-merge.ts";
 import { DEFAULT_MERGE_COMMIT_SETTINGS } from "#/lib/session/types.ts";
@@ -120,5 +122,39 @@ describe("queued auto-merge", () => {
         expect(isPullRequestReadyToAutoMerge(detail({ mergeable: "conflicting", mergeStateStatus: "dirty" }))).toBe(
             false,
         );
+    });
+
+    it("updates the branch when the pull request is behind and GitHub allows it", () => {
+        expect(
+            shouldUpdateBranchForAutoMerge(detail({ mergeStateStatus: "behind", viewerCanUpdateBranch: true })),
+        ).toBe(true);
+        expect(
+            shouldUpdateBranchForAutoMerge(detail({ mergeStateStatus: "behind", viewerCanUpdateBranch: false })),
+        ).toBe(false);
+        expect(shouldUpdateBranchForAutoMerge(detail({ mergeStateStatus: "clean", viewerCanUpdateBranch: true }))).toBe(
+            false,
+        );
+        expect(
+            shouldUpdateBranchForAutoMerge(
+                detail({ mergeable: "conflicting", mergeStateStatus: "dirty", viewerCanUpdateBranch: true }),
+            ),
+        ).toBe(false);
+        expect(
+            shouldUpdateBranchForAutoMerge(
+                detail({ isDraft: true, mergeStateStatus: "behind", viewerCanUpdateBranch: true }),
+            ),
+        ).toBe(false);
+    });
+});
+
+describe("describeAutoMergeBatchResult", () => {
+    it("explains merged vs still-queued pull requests", () => {
+        expect(describeAutoMergeBatchResult({ queued: 3, merged: [{}] })).toBe("Merged 1 · 2 queued until ready");
+        expect(describeAutoMergeBatchResult({ queued: 3, merged: [{}, {}, {}] })).toBe("Merged 3 pull requests");
+        expect(describeAutoMergeBatchResult({ queued: 2, merged: [] })).toBe(
+            "2 pull requests queued until they're ready",
+        );
+        expect(describeAutoMergeBatchResult({ queued: 1, merged: [{}] })).toBe("Merged 1 pull request");
+        expect(describeAutoMergeBatchResult({ queued: 0, merged: [] })).toBe("No pull requests to auto-merge");
     });
 });

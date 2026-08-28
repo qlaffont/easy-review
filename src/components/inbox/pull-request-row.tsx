@@ -182,10 +182,12 @@ export const PullRequestRow = memo(function PullRequestRow({
     pullRequest,
     selected = false,
     stackBadge = null,
+    autoMergeQueued = false,
 }: {
     pullRequest: PullRequestSummary;
     selected?: boolean;
     stackBadge?: { position: number; total: number } | null;
+    autoMergeQueued?: boolean;
 }) {
     const [preferences] = useInboxPreferences();
     const [owner = "", repo = ""] = pullRequest.repository.split("/");
@@ -217,6 +219,14 @@ export const PullRequestRow = memo(function PullRequestRow({
                             <span className="inline-flex shrink-0 items-center gap-1 text-xs font-medium text-amber-700 dark:text-amber-400">
                                 <AlertTriangle className="size-3" aria-hidden="true" />
                                 Conflicts
+                            </span>
+                        </HelpTooltip>
+                    ) : null}
+                    {autoMergeQueued ? (
+                        <HelpTooltip label="Easy Review will merge this pull request when it is ready">
+                            <span className="inline-flex shrink-0 items-center gap-1 text-xs font-medium text-emerald-700 dark:text-emerald-400">
+                                <GitMerge className="size-3" aria-hidden="true" />
+                                Auto-merging
                             </span>
                         </HelpTooltip>
                     ) : null}

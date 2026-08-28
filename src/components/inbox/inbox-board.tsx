@@ -1,9 +1,19 @@
 import { useNavigate } from "@tanstack/react-router";
-import { ChevronRight, FolderGit2, GitMerge, Keyboard, RefreshCw, Settings } from "lucide-react";
+import {
+    Check,
+    ChevronDown,
+    ChevronRight,
+    FolderGit2,
+    GitMerge,
+    Keyboard,
+    Loader2,
+    RefreshCw,
+    Settings,
+} from "lucide-react";
 import { lazy, Suspense, useEffect, useEffectEvent, useRef, useState } from "react";
 
 import type { InboxSection, InboxSectionId, SectionColorId, SectionIconId } from "#/lib/session/inbox-sections.ts";
-import type { PullRequestSummary } from "#/lib/session/types.ts";
+import type { MergeMethod, PullRequestSummary } from "#/lib/session/types.ts";
 
 import { targetFromSummary, useSetActionTarget } from "#/components/actions/actions-provider.tsx";
 import { emptySectionRow, PullRequestRow } from "#/components/inbox/pull-request-row.tsx";
@@ -25,6 +35,7 @@ import {
     DropdownMenu,
     DropdownMenuContent,
     DropdownMenuItem,
+    DropdownMenuSeparator,
     DropdownMenuTrigger,
 } from "#/components/ui/dropdown-menu.tsx";
 import { HelpTooltip } from "#/components/ui/help-tooltip.tsx";
@@ -35,6 +46,7 @@ import { useInboxStackBadges } from "#/lib/query/inbox-stack.ts";
 import { useInboxQuery } from "#/lib/query/inbox.ts";
 import { invalidateInboxAfterRepoSelection } from "#/lib/query/invalidate.ts";
 import { useSession, useSessionState } from "#/lib/session/provider.tsx";
+import { describeAutoMergeBatchResult, queuedAutoMergeKey } from "#/lib/session/queued-auto-merge.ts";
 import { useQuietRevalidate } from "#/lib/session/quiet-revalidate.ts";
 import { notifyAction } from "#/lib/toast.ts";
 import { cn } from "#/lib/utils.ts";
@@ -52,6 +64,36 @@ const SectionAppearanceEditor = lazy(() =>
 /** How many pull requests each expanded section shows before “Load more…”. */
 const INBOX_SECTION_PAGE_SIZE = 10;
 const APPROVED_SECTION_ID = "approved";
+const MERGE_BUTTON_CLASS = "bg-[#1f883d] text-white hover:bg-[#1a7f37] dark:bg-[#238636] dark:hover:bg-[#2ea043]";
+const INBOX_AUTO_MERGE_METHODS: Array<{
+    value: MergeMethod;
+    label: string;
+    buttonLabel: string;
+    description: string;
+    verb: string;
+}> = [
+    {
+        value: "merge",
+        label: "Create a merge commit",
+        buttonLabel: "Merge all",
+        description: "All commits from each branch are added to the base branch via a merge commit.",
+        verb: "merge",
+    },
+    {
+        value: "squash",
+        label: "Squash and merge",
+        buttonLabel: "Squash and merge all",
+        description: "Each pull request is combined into one commit on the base branch.",
+        verb: "squash",
+    },
+    {
+        value: "rebase",
+        label: "Rebase and merge",
+        buttonLabel: "Rebase and merge all",
+        description: "All commits from each branch are rebased onto the base branch.",
+        verb: "rebase",
+    },
+];
 
 export function InboxBoard() {
     const session = useSession();
@@ -72,6 +114,7 @@ export function InboxBoard() {
     } = useInboxQuery();
     const login = useSessionState((state) => state.auth.viewer?.login ?? "");
     const inboxUi = useSessionState((state) => state.inbox);
+    const queuedAutoMerges = useSessionState((state) => state.queuedAutoMerges);
     const selectedCount = useSessionState((state) => state.repos.selected.length);
     const sectionLayout = inboxUi.sectionLayout;
     const [selectedKey, setSelectedKey] = useState<string | null>(null);
@@ -88,6 +131,9 @@ export function InboxBoard() {
         .filter((section) => inboxUi.expandedSections.includes(section.id))
         .flatMap((section) => section.pullRequests.slice(0, visibleCountFor(section.id)));
     const stackBadges = useInboxStackBadges(flatRows);
+    const queuedAutoMergeKeys = new Set(
+        queuedAutoMerges.map((item) => queuedAutoMergeKey(item.repository, item.number)),
+    );
     const selected = flatRows.find((pullRequest) => pullRequest.key === selectedKey) ?? flatRows[0] ?? null;
 
     useSetActionTarget(selected ? targetFromSummary(selected) : null);
@@ -293,6 +339,7 @@ export function InboxBoard() {
                                 isFetching={sectionFetching[section.id] ?? false}
                                 sectionError={sectionErrors[section.id] ?? null}
                                 stackBadges={stackBadges}
+                                queuedAutoMergeKeys={queuedAutoMergeKeys}
                                 visibleCount={visibleCount}
                                 onToggle={() => {
                                     if (isExpanded) {
@@ -313,7 +360,7 @@ export function InboxBoard() {
                                 }
                                 onAutoMergeAll={
                                     section.id === APPROVED_SECTION_ID
-                                        ? async () => {
+                                        ? async (method) => {
                                               while (session.canLoadMoreInboxSection(section.id)) {
                                                   await session.loadMoreInboxSection(section.id);
                                               }
@@ -335,7 +382,9 @@ export function InboxBoard() {
                                                   throw new Error("No open pull requests to auto-merge.");
                                               }
 
-                                              await session.queuePullRequestAutoMerges(targets, "squash");
+                                              const result = await session.queuePullRequestAutoMerges(targets, method);
+                                              await refreshSection(section.id);
+                                              return result;
                                           }
                                         : undefined
                                 }
@@ -402,6 +451,7 @@ function InboxSectionPanel({
     isFetching,
     sectionError,
     stackBadges,
+    queuedAutoMergeKeys,
     visibleCount,
     onToggle,
     onRefresh,
@@ -422,10 +472,14 @@ function InboxSectionPanel({
     isFetching?: boolean;
     sectionError?: string | null;
     stackBadges: Map<string, { position: number; total: number }>;
+    queuedAutoMergeKeys: ReadonlySet<string>;
     visibleCount: number;
     onToggle: () => void;
     onRefresh: () => void;
-    onAutoMergeAll?: () => Promise<void>;
+    onAutoMergeAll?: (method: MergeMethod) => Promise<{
+        queued: number;
+        merged: ReadonlyArray<{ repository: string; number: number }>;
+    }>;
     onEditFilters: () => void;
     onChangeAppearance: () => void;
     onLoadMore: () => void;
@@ -440,6 +494,7 @@ function InboxSectionPanel({
     const visiblePullRequests = section.pullRequests.slice(0, visibleCount);
     const hiddenLoaded = Math.max(0, loaded - visiblePullRequests.length);
     const showLoadMore = hiddenLoaded > 0 || canLoadMoreFromGitHub;
+    const queuedCount = section.pullRequests.filter((pullRequest) => queuedAutoMergeKeys.has(pullRequest.key)).length;
 
     return (
         <section
@@ -471,6 +526,11 @@ function InboxSectionPanel({
                         />
                     </span>
                     <span className="min-w-0 truncate">{section.label}</span>
+                    {queuedCount > 0 ? (
+                        <span className="shrink-0 text-xs font-medium text-emerald-700 dark:text-emerald-400">
+                            {queuedCount === 1 ? "1 auto-merging" : `${queuedCount} auto-merging`}
+                        </span>
+                    ) : null}
                     <span
                         className={cn(
                             "ml-auto rounded-full px-2 py-0.5 text-xs font-medium tabular-nums",
@@ -483,49 +543,12 @@ function InboxSectionPanel({
                 </button>
                 <div className="flex shrink-0 items-center pr-1">
                     {onAutoMergeAll ? (
-                        <AlertDialog>
-                            <HelpTooltip label="Queue squash auto-merge for every pull request in this section">
-                                <span className="inline-flex">
-                                    <AlertDialogTrigger asChild>
-                                        <Button
-                                            type="button"
-                                            size="sm"
-                                            className="my-1 h-7 gap-1.5 bg-[#1f883d] px-2.5 text-white hover:bg-[#1a7f37] dark:bg-[#238636] dark:hover:bg-[#2ea043]"
-                                            disabled={count === 0 || isFetching}
-                                            aria-label={`Auto-merge all in ${section.label}`}
-                                        >
-                                            <GitMerge className="size-3.5" aria-hidden="true" />
-                                            Auto-merge all
-                                        </Button>
-                                    </AlertDialogTrigger>
-                                </span>
-                            </HelpTooltip>
-                            <AlertDialogContent size="sm">
-                                <AlertDialogHeader>
-                                    <AlertDialogTitle>Auto-merge all in {section.label}?</AlertDialogTitle>
-                                    <AlertDialogDescription>
-                                        Easy Review will queue squash auto-merge for{" "}
-                                        {count === 1 ? "1 pull request" : `${count} pull requests`} in this section.
-                                        Ready ones merge now; the rest wait until checks and reviews pass.
-                                    </AlertDialogDescription>
-                                </AlertDialogHeader>
-                                <AlertDialogFooter>
-                                    <AlertDialogCancel>Cancel</AlertDialogCancel>
-                                    <AlertDialogAction
-                                        className="bg-[#1f883d] text-white hover:bg-[#1a7f37] dark:bg-[#238636] dark:hover:bg-[#2ea043]"
-                                        onClick={() =>
-                                            void notifyAction(() => onAutoMergeAll(), {
-                                                loading: "Queueing auto-merge…",
-                                                success: "Auto-merge queued",
-                                                error: "Could not queue auto-merge.",
-                                            })
-                                        }
-                                    >
-                                        Auto-merge all
-                                    </AlertDialogAction>
-                                </AlertDialogFooter>
-                            </AlertDialogContent>
-                        </AlertDialog>
+                        <InboxAutoMergeAllButton
+                            sectionLabel={section.label}
+                            count={count}
+                            disabled={count === 0 || Boolean(isFetching)}
+                            onAutoMergeAll={onAutoMergeAll}
+                        />
                     ) : null}
                     <HelpTooltip label={`Refresh ${section.label}`}>
                         <span className="inline-flex">
@@ -575,6 +598,7 @@ function InboxSectionPanel({
                                 pullRequest={pullRequest}
                                 selected={pullRequest.key === selectedKey}
                                 stackBadge={stackBadges.get(pullRequest.key) ?? null}
+                                autoMergeQueued={queuedAutoMergeKeys.has(pullRequest.key)}
                                 onSelect={onSelect}
                             />
                         ))}
@@ -602,20 +626,146 @@ function InboxSectionPanel({
     );
 }
 
+function InboxAutoMergeAllButton({
+    sectionLabel,
+    count,
+    disabled,
+    onAutoMergeAll,
+}: {
+    sectionLabel: string;
+    count: number;
+    disabled: boolean;
+    onAutoMergeAll: (method: MergeMethod) => Promise<{
+        queued: number;
+        merged: ReadonlyArray<{ repository: string; number: number }>;
+    }>;
+}) {
+    const [method, setMethod] = useState<MergeMethod>("squash");
+    const [pending, setPending] = useState(false);
+    const selected = INBOX_AUTO_MERGE_METHODS.find((entry) => entry.value === method) ?? INBOX_AUTO_MERGE_METHODS[1]!;
+    const busy = disabled || pending;
+
+    return (
+        <AlertDialog>
+            <div className="inline-flex my-1">
+                <HelpTooltip
+                    label={
+                        pending
+                            ? "Merging pull requests…"
+                            : `Queue ${selected.verb} auto-merge for every pull request in this section`
+                    }
+                >
+                    <span className="inline-flex">
+                        <AlertDialogTrigger asChild>
+                            <Button
+                                type="button"
+                                size="sm"
+                                disabled={busy}
+                                aria-busy={pending}
+                                className={cn("h-7 gap-1.5 rounded-r-none px-2.5", MERGE_BUTTON_CLASS)}
+                                aria-label={`${selected.buttonLabel} in ${sectionLabel}`}
+                            >
+                                {pending ? (
+                                    <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />
+                                ) : (
+                                    <GitMerge className="size-3.5" aria-hidden="true" />
+                                )}
+                                {pending ? "Merging…" : selected.buttonLabel}
+                            </Button>
+                        </AlertDialogTrigger>
+                    </span>
+                </HelpTooltip>
+                <DropdownMenu>
+                    <DropdownMenuTrigger asChild disabled={busy}>
+                        <Button
+                            type="button"
+                            size="sm"
+                            disabled={busy}
+                            className={cn("h-7 rounded-l-none border-l border-white/25 px-2", MERGE_BUTTON_CLASS)}
+                            aria-label="Select auto-merge method"
+                        >
+                            <ChevronDown className="size-3.5" aria-hidden="true" />
+                        </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end" className="w-80">
+                        {INBOX_AUTO_MERGE_METHODS.map((entry, index) => (
+                            <div key={entry.value}>
+                                {index > 0 ? <DropdownMenuSeparator /> : null}
+                                <DropdownMenuItem
+                                    className="items-start gap-2 py-2"
+                                    onSelect={() => setMethod(entry.value)}
+                                >
+                                    <Check
+                                        className={cn(
+                                            "mt-0.5 size-3.5 shrink-0",
+                                            method === entry.value ? "opacity-100" : "opacity-0",
+                                        )}
+                                        aria-hidden="true"
+                                    />
+                                    <span className="flex min-w-0 flex-col gap-0.5">
+                                        <span className="font-medium">{entry.label}</span>
+                                        <span className="text-xs text-muted-foreground">{entry.description}</span>
+                                    </span>
+                                </DropdownMenuItem>
+                            </div>
+                        ))}
+                    </DropdownMenuContent>
+                </DropdownMenu>
+            </div>
+            <AlertDialogContent className="max-w-lg">
+                <AlertDialogHeader>
+                    <AlertDialogTitle>
+                        {selected.buttonLabel} in {sectionLabel}?
+                    </AlertDialogTitle>
+                    <AlertDialogDescription>
+                        Easy Review will queue {selected.verb} auto-merge for{" "}
+                        {count === 1 ? "1 pull request" : `${count} pull requests`} in this section. Ready ones merge
+                        now; the rest wait until checks and reviews pass.
+                    </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                    <AlertDialogCancel>Cancel</AlertDialogCancel>
+                    <AlertDialogAction
+                        className={MERGE_BUTTON_CLASS}
+                        disabled={pending}
+                        onClick={() => {
+                            setPending(true);
+                            void notifyAction(() => onAutoMergeAll(method), {
+                                loading: "Merging pull requests…",
+                                success: describeAutoMergeBatchResult,
+                                error: "Could not auto-merge pull requests.",
+                            }).finally(() => setPending(false));
+                        }}
+                    >
+                        {selected.buttonLabel}
+                    </AlertDialogAction>
+                </AlertDialogFooter>
+            </AlertDialogContent>
+        </AlertDialog>
+    );
+}
+
 function SelectableRow({
     pullRequest,
     selected,
     stackBadge,
+    autoMergeQueued,
     onSelect,
 }: {
     pullRequest: PullRequestSummary;
     selected: boolean;
     stackBadge: { position: number; total: number } | null;
+    autoMergeQueued: boolean;
     onSelect: (key: string) => void;
 }) {
     return (
         <div onMouseEnter={() => onSelect(pullRequest.key)} onFocusCapture={() => onSelect(pullRequest.key)}>
-            <PullRequestRow pullRequest={pullRequest} selected={selected} stackBadge={stackBadge} />
+            <PullRequestRow
+                pullRequest={pullRequest}
+                selected={selected}
+                stackBadge={stackBadge}
+                autoMergeQueued={autoMergeQueued}
+            />
         </div>
     );
 }

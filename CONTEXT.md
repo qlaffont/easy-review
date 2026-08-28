@@ -36,3 +36,4 @@ Single-context glossary for product behavior. ADRs live under `docs/adr/` when w
 | --- | --- |
 | **Queued auto-merge** | An Easy Review intent to merge a pull request with a chosen method once GitHub reports it ready. Stored in the browser; Easy Review performs the merge. Independent of GitHub’s repository **Allow auto-merge** setting. |
 | **Ready to auto-merge** | Open, not draft, no conflicts, reviews and required checks satisfied (`mergeStateStatus` is `clean` or `has_hooks`). |
+| **Update branch** | GitHub “Update branch”: merge the base into the PR head when the PR is `behind`. Auto-merge does this when `viewerCanUpdateBranch` is true, then waits until the PR is ready. |

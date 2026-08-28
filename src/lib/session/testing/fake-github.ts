@@ -1263,8 +1263,31 @@ export function createFakeGithub(): FakeGithub {
                 patchPullRequest(token, repository, number, { state: "open" });
             });
         },
-        updatePullRequestBranch(_token, _pullRequestNodeId, _expectedHeadOid) {
-            return respond("updatePullRequestBranch", () => {});
+        updatePullRequestBranch(token, pullRequestNodeId, expectedHeadOid) {
+            return respond("updatePullRequestBranch", () => {
+                authenticate(token);
+                const pullRequest = (pullRequestsByToken.get(token) ?? []).find(
+                    (entry) => entry.pullRequestNodeId === pullRequestNodeId,
+                );
+                if (!pullRequest) {
+                    throw new EasyReviewError("unknown", "Pull request not found.");
+                }
+                requireOpen(pullRequest);
+                if (expectedHeadOid && pullRequest.headSha !== expectedHeadOid) {
+                    throw new EasyReviewError("unknown", "The pull request head has changed.");
+                }
+                const mergeStateStatus =
+                    pullRequest.checks === "success" &&
+                    pullRequest.reviewDecision !== "review-required" &&
+                    pullRequest.reviewDecision !== "changes-requested"
+                        ? "clean"
+                        : "unstable";
+                patchPullRequest(token, pullRequest.repository, pullRequest.number, {
+                    mergeStateStatus,
+                    viewerCanUpdateBranch: false,
+                    headSha: `${pullRequest.headSha}-updated`,
+                });
+            });
         },
         enablePullRequestAutoMerge(token, pullRequestNodeId, method) {
             return respond("enablePullRequestAutoMerge", () => {

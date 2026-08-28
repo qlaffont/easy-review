@@ -13,7 +13,7 @@ export async function notifyAction<T>(
     action: () => Promise<T>,
     messages: {
         loading: string;
-        success: string;
+        success: string | ((value: T) => string);
         error?: string;
     },
 ): Promise<T> {

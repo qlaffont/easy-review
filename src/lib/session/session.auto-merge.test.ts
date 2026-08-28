@@ -168,5 +168,80 @@ describe("in-app auto-merge", () => {
         expect(github.calls).toContain("mergePullRequest");
         expect(store.entries()[queuedAutoMergeStorageKey("quentin")]).toContain('"number":7');
         expect(store.entries()[queuedAutoMergeStorageKey("quentin")]).not.toContain('"number":8');
+        expect(session.state.state.queuedAutoMerges.map((item) => item.number)).toEqual([7]);
+    });
+
+    it("updates a behind branch then merges when the pull request is otherwise ready", async () => {
+        github.addPullRequest(TOKEN, {
+            repository: "acme/api",
+            number: 9,
+            title: "Behind",
+            author: "octocat",
+            isDraft: false,
+            reviewDecision: "approved",
+            mergeStateStatus: "behind",
+            checks: "success",
+            mergeable: "mergeable",
+            viewerCanUpdateBranch: true,
+        });
+        const session = createEasyReviewSession({ github, queryClient: createTestQueryClient(), store });
+        await session.connect(TOKEN);
+        await session.setSelectedRepositories(["acme/api"]);
+        await session.loadPullRequest("acme/api", 9);
+
+        await session.enablePullRequestAutoMerge("acme/api", 9, "squash", { deleteHeadBranch: false });
+
+        expect(github.calls).toContain("updatePullRequestBranch");
+        expect(github.calls).toContain("mergePullRequest");
+        expect(session.getPullRequestPage("acme/api", 9).detail?.state).toBe("merged");
+        expect(store.entries()[queuedAutoMergeStorageKey("quentin")]).toBe("[]");
+    });
+
+    it("updates a behind branch and stays queued when checks are still running", async () => {
+        github.addPullRequest(TOKEN, {
+            repository: "acme/api",
+            number: 10,
+            title: "Behind pending",
+            author: "octocat",
+            isDraft: false,
+            reviewDecision: "approved",
+            mergeStateStatus: "behind",
+            checks: "pending",
+            mergeable: "mergeable",
+            viewerCanUpdateBranch: true,
+        });
+        const session = createEasyReviewSession({ github, queryClient: createTestQueryClient(), store });
+        await session.connect(TOKEN);
+        await session.setSelectedRepositories(["acme/api"]);
+
+        await session.enablePullRequestAutoMerge("acme/api", 10, "squash", { deleteHeadBranch: false });
+
+        expect(github.calls).toContain("updatePullRequestBranch");
+        expect(github.calls).not.toContain("mergePullRequest");
+        expect(store.entries()[queuedAutoMergeStorageKey("quentin")]).toContain('"number":10');
+    });
+
+    it("does not update a behind branch when GitHub disallows it", async () => {
+        github.addPullRequest(TOKEN, {
+            repository: "acme/api",
+            number: 11,
+            title: "Behind locked",
+            author: "octocat",
+            isDraft: false,
+            reviewDecision: "approved",
+            mergeStateStatus: "behind",
+            checks: "success",
+            mergeable: "mergeable",
+            viewerCanUpdateBranch: false,
+        });
+        const session = createEasyReviewSession({ github, queryClient: createTestQueryClient(), store });
+        await session.connect(TOKEN);
+        await session.setSelectedRepositories(["acme/api"]);
+
+        await session.enablePullRequestAutoMerge("acme/api", 11, "squash", { deleteHeadBranch: false });
+
+        expect(github.calls).not.toContain("updatePullRequestBranch");
+        expect(github.calls).not.toContain("mergePullRequest");
+        expect(store.entries()[queuedAutoMergeStorageKey("quentin")]).toContain('"number":11');
     });
 });

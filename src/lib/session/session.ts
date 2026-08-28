@@ -99,6 +99,7 @@ import {
     queuedAutoMergeKey,
     queuedAutoMergeStorageKey,
     serializeQueuedAutoMerges,
+    shouldUpdateBranchForAutoMerge,
     type QueuedAutoMerge,
 } from "#/lib/session/queued-auto-merge.ts";
 import { selectRelatedPullRequests } from "#/lib/session/related-pull-requests.ts";
@@ -260,6 +261,8 @@ export type SessionState = {
     auth: AuthState;
     repos: RepositoriesState;
     inbox: InboxState;
+    /** In-app auto-merge queue, keyed in the map by `owner/repo#number`. */
+    queuedAutoMerges: Array<QueuedAutoMerge>;
     /** Keyed by `owner/repo#number`. */
     pullRequests: Record<string, PullRequestView>;
     /** Staged reviews keyed by `owner/repo#number`. */
@@ -398,6 +401,7 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
         auth: initialAuthState,
         repos: initialRepositoriesState,
         inbox: initialInboxState,
+        queuedAutoMerges: [],
         pullRequests: {},
         reviewDrafts: {},
         reviewThreads: {},
@@ -578,6 +582,7 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
 
         setRepos({ ...initialRepositoriesState });
         setInbox({ ...initialInboxState });
+        queuedAutoMerges = new Map();
         state.setState((prev) => ({
             ...prev,
             pullRequests: {},
@@ -587,6 +592,7 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
             pullRequestCommits: {},
             relatedPullRequests: {},
             repositoryMetadata: {},
+            queuedAutoMerges: [],
         }));
     }
 
@@ -671,14 +677,20 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
 
     async function loadQueuedAutoMerges(login: string): Promise<void> {
         queuedAutoMerges = parseQueuedAutoMerges(await store.get(queuedAutoMergeStorageKey(login)));
+        paintQueuedAutoMerges();
     }
 
     async function persistQueuedAutoMerges(): Promise<void> {
+        paintQueuedAutoMerges();
         const login = state.state.auth.viewer?.login;
         if (!login) {
             return;
         }
         await store.set(queuedAutoMergeStorageKey(login), serializeQueuedAutoMerges(queuedAutoMerges));
+    }
+
+    function paintQueuedAutoMerges(): void {
+        state.setState((prev) => ({ ...prev, queuedAutoMerges: [...queuedAutoMerges.values()] }));
     }
 
     function decoratePullRequestDetail(detail: PullRequestDetail): PullRequestDetail {
@@ -3350,6 +3362,11 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
             }
 
             paintDecoratedPullRequest(detail);
+            if (shouldUpdateBranchForAutoMerge(detail)) {
+                await github.updatePullRequestBranch(requireToken(), detail.pullRequestNodeId, detail.headSha);
+                detail = await github.getPullRequest(requireToken(), repository, number);
+                paintDecoratedPullRequest(detail);
+            }
             if (!isPullRequestReadyToAutoMerge(detail)) {
                 return false;
             }
