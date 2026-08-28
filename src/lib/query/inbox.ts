@@ -7,7 +7,11 @@ import type { GithubClient } from "#/lib/session/ports.ts";
 
 import { CACHE_POLICY } from "#/lib/query/cache-policy.ts";
 import { emptyInboxQueryData, fetchInboxSection, mergeSectionResultsIntoInbox } from "#/lib/query/inbox-fetch.ts";
-import { revalidateInboxInBackground, invalidateInboxForRefresh } from "#/lib/query/invalidate.ts";
+import {
+    revalidateInboxInBackground,
+    invalidateInboxForRefresh,
+    invalidateInboxSectionForRefresh,
+} from "#/lib/query/invalidate.ts";
 import { queryKeys } from "#/lib/query/query-keys.ts";
 import { EasyReviewError, toSessionError } from "#/lib/session/errors.ts";
 import { inboxSectionsFromLoaded, visibleSectionDefinitions } from "#/lib/session/inbox-sections.ts";
@@ -194,6 +198,13 @@ export function useInboxQuery() {
         await invalidateInboxForRefresh(queryClient, login);
     }, [queryClient, login]);
 
+    const refreshSection = useCallback(
+        async (sectionId: string) => {
+            await invalidateInboxSectionForRefresh(queryClient, login, sectionId);
+        },
+        [queryClient, login],
+    );
+
     const revalidate = useCallback(
         async (options?: { background?: boolean }) => {
             if (options?.background) {
@@ -219,6 +230,7 @@ export function useInboxQuery() {
         isError,
         error,
         refresh,
+        refreshSection,
         revalidate,
         invalidate,
     };

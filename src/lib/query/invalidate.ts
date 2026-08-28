@@ -24,6 +24,18 @@ export async function invalidateInboxForRefresh(queryClient: QueryClient, login:
     await queryClient.invalidateQueries({ queryKey: inboxSectionQueryPrefix(login), refetchType: "active" });
 }
 
+/** User clicked a section refresh — refetch that bucket only. */
+export async function invalidateInboxSectionForRefresh(
+    queryClient: QueryClient,
+    login: string,
+    sectionId: string,
+): Promise<void> {
+    await queryClient.invalidateQueries({
+        queryKey: queryKeys.inbox.section(login, sectionId),
+        refetchType: "active",
+    });
+}
+
 /** Repo allowlist changed — inbox classification may shift. */
 export function invalidateInboxAfterRepoSelection(queryClient: QueryClient, login: string): void {
     void queryClient.invalidateQueries({ queryKey: inboxSectionQueryPrefix(login), refetchType: "active" });

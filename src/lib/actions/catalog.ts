@@ -436,7 +436,7 @@ export const APP_ACTIONS: ReadonlyArray<AppAction> = [
                     ),
                 {
                     loading: "Enabling auto-merge…",
-                    success: "Auto-merge enabled",
+                    success: "Auto-merge queued",
                     error: "Could not enable auto-merge.",
                 },
             );

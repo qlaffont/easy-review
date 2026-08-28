@@ -10,6 +10,7 @@ import { AppHeader } from "#/components/app-header.tsx";
 import { ConnectGithubScreen } from "#/components/auth/connect-github-screen.tsx";
 import { CommandPalette } from "#/components/command-palette.tsx";
 import { InboxBackgroundWatcher } from "#/components/inbox/inbox-background-watcher.tsx";
+import { QueuedAutoMergeWatcher } from "#/components/pr/queued-auto-merge-watcher.tsx";
 import { RepoPickerProvider } from "#/components/repos/repo-picker.tsx";
 import { BootLoadingScreen } from "#/components/ui/loading.tsx";
 import { useSessionState } from "#/lib/session/provider.tsx";
@@ -49,6 +50,7 @@ export function SessionGate({ children }: { children: React.ReactNode }) {
                         <RefreshPullRequestHotkey />
                         <CommandPalette />
                         <InboxBackgroundWatcher />
+                        <QueuedAutoMergeWatcher />
                     </ClipboardHotkeys>
                 </ActionsProvider>
             </HotkeysProvider>

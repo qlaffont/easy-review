@@ -23,7 +23,7 @@ export async function fetchPullRequestDetail(
 ): Promise<PullRequestDetailQueryData> {
     void signal;
     const detail = await session.github.getPullRequest(session.requireToken(), repository, number);
-    return { detail, lastLoadedAt: new Date().toISOString() };
+    return { detail: session.decoratePullRequestDetail(detail), lastLoadedAt: new Date().toISOString() };
 }
 
 export async function fetchPullRequestFiles(

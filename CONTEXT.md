@@ -29,3 +29,10 @@ Single-context glossary for product behavior. ADRs live under `docs/adr/` when w
 | **Quiet revalidate** | Background inbox refetch while the tab is **visible**, throttled (~3 minutes). |
 | **Background sync** | Inbox refetch every ~5 minutes while the tab is **hidden**, only when desktop notifications are enabled. |
 | **Desktop notification** | Browser `Notification` (opt-in in Inbox settings); fires when a PR in an **expanded** section changes while the tab is in the background. Not web push. |
+
+## Merge
+
+| Term | Meaning |
+| --- | --- |
+| **Queued auto-merge** | An Easy Review intent to merge a pull request with a chosen method once GitHub reports it ready. Stored in the browser; Easy Review performs the merge. Independent of GitHub’s repository **Allow auto-merge** setting. |
+| **Ready to auto-merge** | Open, not draft, no conflicts, reviews and required checks satisfied (`mergeStateStatus` is `clean` or `has_hooks`). |

@@ -13,7 +13,16 @@ import {
     UnfoldVertical,
     X,
 } from "lucide-react";
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
+import {
+    useCallback,
+    useEffect,
+    useLayoutEffect,
+    useMemo,
+    useRef,
+    useState,
+    type ReactNode,
+    type RefObject,
+} from "react";
 import { createPortal } from "react-dom";
 
 import type { DiffLayout } from "#/lib/diff-preferences.ts";
@@ -43,6 +52,11 @@ import { Input } from "#/components/ui/input.tsx";
 import { DiffLoadingSkeleton } from "#/components/ui/loading.tsx";
 import { tokensForDiffLine, useFileSyntaxHighlight, type FileSyntaxMaps } from "#/hooks/use-file-syntax-highlight.ts";
 import { collectDiffSearchMatches, searchHighlightsForCell, type DiffSearchMatch } from "#/lib/diff-file-search.ts";
+import {
+    isLineVisibleInScroller,
+    selectionCommentAnchor,
+    selectionCommentCoordsFromAnchor,
+} from "#/lib/diff-selection-comment.ts";
 import { DIFF_EXPAND_CHUNK, expandDiffGap, materializeFileDiff } from "#/lib/session/build-file-diff.ts";
 import { buildSuggestionComment, hasSuggestionFence, stripSuggestionFence } from "#/lib/session/suggestion.ts";
 import { notifyCopied, notifyError, notifySuccess } from "#/lib/toast.ts";
@@ -780,7 +794,10 @@ function unifiedLineTargets(path: string, line: DiffLine): { left: LineTarget | 
     return { left, right };
 }
 
-function lineTargetFromSelection(container: HTMLElement, path: string): { target: LineTarget; rect: DOMRect } | null {
+function lineTargetFromSelection(
+    container: HTMLElement,
+    path: string,
+): { target: LineTarget; codeEl: HTMLElement } | null {
     const selection = window.getSelection();
     if (!selection || selection.isCollapsed || !selection.anchorNode) {
         return null;
@@ -793,7 +810,7 @@ function lineTargetFromSelection(container: HTMLElement, path: string): { target
 
     const anchor = selection.anchorNode instanceof Element ? selection.anchorNode : selection.anchorNode.parentElement;
     const codeEl = anchor?.closest("[data-diff-code]");
-    if (!codeEl || !container.contains(codeEl)) {
+    if (!(codeEl instanceof HTMLElement) || !container.contains(codeEl)) {
         return null;
     }
 
@@ -804,18 +821,17 @@ function lineTargetFromSelection(container: HTMLElement, path: string): { target
         return null;
     }
 
-    const range = selection.getRangeAt(0);
-    const rect = range.getBoundingClientRect();
-    const clientRects = range.getClientRects();
-    const anchorRect = rect.width > 0 || rect.height > 0 ? rect : clientRects.length > 0 ? clientRects[0]! : null;
-    if (!anchorRect) {
-        return null;
-    }
-
     return {
         target: { path, line, side, text: selectedText },
-        rect: anchorRect,
+        codeEl,
     };
+}
+
+function codeElementForTarget(container: HTMLElement, target: LineTarget): HTMLElement | null {
+    const el = container.querySelector(
+        `[data-diff-code][data-diff-path="${CSS.escape(target.path)}"][data-diff-side="${target.side}"][data-diff-line="${String(target.line)}"]`,
+    );
+    return el instanceof HTMLElement ? el : null;
 }
 
 function DiffLineNumber({
@@ -906,45 +922,36 @@ function DiffCodeCell({
     );
 }
 
-type SelectionPopupState = { target: LineTarget; x: number; y: number };
+type SelectionPopupState = { target: LineTarget; x: number; y: number; xOffset: number };
 
 function DiffSelectionCommentPopup({
     popup,
     onComment,
-    onDismiss,
 }: {
     popup: SelectionPopupState;
     onComment: (target: LineTarget) => void;
-    onDismiss: () => void;
 }) {
     if (typeof document === "undefined") {
         return null;
     }
 
     return createPortal(
-        <>
-            <button
+        <div
+            data-diff-selection-comment=""
+            className="pointer-events-none fixed z-50 -translate-x-1/2 -translate-y-full pb-1.5"
+            style={{ left: popup.x, top: popup.y }}
+        >
+            <Button
                 type="button"
-                aria-label="Dismiss"
-                className="fixed inset-0 z-40 cursor-default"
-                onMouseDown={onDismiss}
-            />
-            <div
-                className="pointer-events-none fixed z-50 -translate-x-1/2 -translate-y-full pb-1.5"
-                style={{ left: popup.x, top: popup.y }}
+                size="sm"
+                className="pointer-events-auto h-7 gap-1.5 shadow-md"
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => onComment(popup.target)}
             >
-                <Button
-                    type="button"
-                    size="sm"
-                    className="pointer-events-auto h-7 gap-1.5 shadow-md"
-                    onMouseDown={(event) => event.preventDefault()}
-                    onClick={() => onComment(popup.target)}
-                >
-                    <MessageSquare className="size-3.5" aria-hidden="true" />
-                    Comment
-                </Button>
-            </div>
-        </>,
+                <MessageSquare className="size-3.5" aria-hidden="true" />
+                Comment
+            </Button>
+        </div>,
         document.body,
     );
 }
@@ -1363,6 +1370,8 @@ function VirtualDiffLines({
     const rightProbeRef = useRef<HTMLDivElement>(null);
     const unifiedProbeRef = useRef<HTMLDivElement>(null);
     const [selectionPopup, setSelectionPopup] = useState<SelectionPopupState | null>(null);
+    const selectionPopupRef = useRef<SelectionPopupState | null>(null);
+    selectionPopupRef.current = selectionPopup;
     /** Left pane share in split layout (0.2–0.8). */
     const [splitLeftRatio, setSplitLeftRatio] = useState(0.5);
 
@@ -1455,28 +1464,58 @@ function VirtualDiffLines({
         }
     }, [selected]);
 
+    const repositionSelectionPopup = useCallback(() => {
+        const scroller = parentRef.current;
+        const current = selectionPopupRef.current;
+        if (!scroller || !current) {
+            return;
+        }
+
+        const lineEl = codeElementForTarget(scroller, current.target);
+        const lineRect = lineEl?.getBoundingClientRect() ?? null;
+        const scrollerRect = scroller.getBoundingClientRect();
+        if (!lineRect || !isLineVisibleInScroller(lineRect, scrollerRect)) {
+            setSelectionPopup(null);
+            return;
+        }
+
+        const coords = selectionCommentCoordsFromAnchor({ lineRect, xOffset: current.xOffset });
+        setSelectionPopup((prev) => {
+            if (!prev) {
+                return null;
+            }
+            if (prev.x === coords.x && prev.y === coords.y) {
+                return prev;
+            }
+            return { ...prev, ...coords };
+        });
+    }, []);
+
     useEffect(() => {
         const scroller = parentRef.current;
         if (!scroller || disabled) {
             return;
         }
 
-        const onMouseUp = () => {
+        const onMouseUp = (event: MouseEvent) => {
+            const mouseX = event.clientX;
             requestAnimationFrame(() => {
                 const match = lineTargetFromSelection(scroller, path);
-                if (match) {
-                    setSelectionPopup({
-                        target: match.target,
-                        x: match.rect.left + match.rect.width / 2,
-                        y: match.rect.top,
-                    });
+                if (!match) {
+                    setSelectionPopup(null);
                     return;
                 }
-                setSelectionPopup(null);
+                const lineRect = match.codeEl.getBoundingClientRect();
+                const anchor = selectionCommentAnchor({ lineRect, mouseX });
+                setSelectionPopup({
+                    target: match.target,
+                    x: anchor.x,
+                    y: anchor.y,
+                    xOffset: anchor.xOffset,
+                });
             });
         };
 
-        const onScroll = () => setSelectionPopup(null);
         const onKeyDown = (event: KeyboardEvent) => {
             if (event.key === "Escape") {
                 setSelectionPopup(null);
@@ -1484,14 +1523,45 @@ function VirtualDiffLines({
         };
 
         scroller.addEventListener("mouseup", onMouseUp);
-        scroller.addEventListener("scroll", onScroll, { passive: true });
+        scroller.addEventListener("scroll", repositionSelectionPopup, { passive: true });
+        window.addEventListener("scroll", repositionSelectionPopup, { passive: true, capture: true });
         window.addEventListener("keydown", onKeyDown);
         return () => {
             scroller.removeEventListener("mouseup", onMouseUp);
-            scroller.removeEventListener("scroll", onScroll);
+            scroller.removeEventListener("scroll", repositionSelectionPopup);
+            window.removeEventListener("scroll", repositionSelectionPopup, { capture: true });
             window.removeEventListener("keydown", onKeyDown);
         };
-    }, [path, disabled]);
+    }, [path, disabled, repositionSelectionPopup]);
+
+    useEffect(() => {
+        repositionSelectionPopup();
+    }, [leftScroll, rightScroll, unifiedScroll, repositionSelectionPopup]);
+
+    useEffect(() => {
+        if (!selectionPopup) {
+            return;
+        }
+
+        const scroller = parentRef.current;
+        const onPointerDown = (event: PointerEvent) => {
+            const node = event.target;
+            if (!(node instanceof Node)) {
+                setSelectionPopup(null);
+                return;
+            }
+            if (scroller?.contains(node)) {
+                return;
+            }
+            if (node instanceof Element && node.closest("[data-diff-selection-comment]")) {
+                return;
+            }
+            setSelectionPopup(null);
+        };
+
+        window.addEventListener("pointerdown", onPointerDown);
+        return () => window.removeEventListener("pointerdown", onPointerDown);
+    }, [selectionPopup]);
 
     useEffect(() => {
         setLeftScroll(0);
@@ -1780,7 +1850,6 @@ function VirtualDiffLines({
             {selectionPopup ? (
                 <DiffSelectionCommentPopup
                     popup={selectionPopup}
-                    onDismiss={() => setSelectionPopup(null)}
                     onComment={(target) => {
                         onSelect(target);
                         setSelectionPopup(null);

@@ -51,6 +51,7 @@ import type {
     ReviewThreadComment,
 } from "#/lib/session/types.ts";
 
+import { shouldDeleteHeadBranchOnMerge } from "#/lib/diff-preferences.ts";
 import { CACHE_POLICY } from "#/lib/query/cache-policy.ts";
 import {
     emptyInboxQueryData,
@@ -91,6 +92,15 @@ import {
     parsePullRequestUrl,
 } from "#/lib/session/pull-request-search.ts";
 import { resolveGithubPullRequestStack, type ResolvedPullRequestStack } from "#/lib/session/pull-request-stacks.ts";
+import {
+    applyQueuedAutoMerge,
+    isPullRequestReadyToAutoMerge,
+    parseQueuedAutoMerges,
+    queuedAutoMergeKey,
+    queuedAutoMergeStorageKey,
+    serializeQueuedAutoMerges,
+    type QueuedAutoMerge,
+} from "#/lib/session/queued-auto-merge.ts";
 import { selectRelatedPullRequests } from "#/lib/session/related-pull-requests.ts";
 import { sectionFilterToSearchQuery } from "#/lib/session/section-filters.ts";
 import {
@@ -418,6 +428,9 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
     const latestRepositoryMetadataLoads = new Map<string, number>();
     /** Last-write-wins for summary typing so overlapping persists cannot drop characters. */
     const latestDraftBodyWrites = new Map<string, number>();
+    /** In-app auto-merge queue — not GitHub’s repository auto-merge setting. */
+    let queuedAutoMerges = new Map<string, QueuedAutoMerge>();
+    const autoMergingKeys = new Set<string>();
 
     function setAuth(patch: Partial<AuthState>) {
         state.setState((prev) => ({ ...prev, auth: { ...prev.auth, ...patch } }));
@@ -601,6 +614,7 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
         if (account !== login) {
             await forgetAccountData();
             await store.set(REPOS_ACCOUNT_KEY, login);
+            await loadQueuedAutoMerges(login);
             return;
         }
 
@@ -651,6 +665,32 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
                 lastLoadedAt: repositories.lastLoadedAt,
             });
         }
+
+        await loadQueuedAutoMerges(login);
+    }
+
+    async function loadQueuedAutoMerges(login: string): Promise<void> {
+        queuedAutoMerges = parseQueuedAutoMerges(await store.get(queuedAutoMergeStorageKey(login)));
+    }
+
+    async function persistQueuedAutoMerges(): Promise<void> {
+        const login = state.state.auth.viewer?.login;
+        if (!login) {
+            return;
+        }
+        await store.set(queuedAutoMergeStorageKey(login), serializeQueuedAutoMerges(queuedAutoMerges));
+    }
+
+    function decoratePullRequestDetail(detail: PullRequestDetail): PullRequestDetail {
+        return applyQueuedAutoMerge(detail, queuedAutoMerges.get(queuedAutoMergeKey(detail.repository, detail.number)));
+    }
+
+    function paintDecoratedPullRequest(detail: PullRequestDetail): PullRequestDetail {
+        const decorated = decoratePullRequestDetail(detail);
+        const key = pullRequestKey(detail.repository, detail.number);
+        setPullRequest(key, { status: "ready", detail: decorated, error: null });
+        setPullRequestDetailQueryData(queryClient, key, decorated);
+        return decorated;
     }
 
     /**
@@ -808,6 +848,7 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
         await store.remove(LEGACY_BROWSER_TOKEN_KEY);
         await store.set(SIGNED_OUT_KEY, "1");
         queryClient.removeQueries({ queryKey: ["pullRequest"] });
+        queuedAutoMerges = new Map();
         resetSessionUi();
         setAuth({ status: "unauthenticated", viewer: null, tokenStored: false, error: null });
     }
@@ -1452,7 +1493,9 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
             const data = await queryClient.fetchQuery({
                 queryKey: queryKeys.pullRequest.detail(key),
                 queryFn: async () => {
-                    const detail = await github.getPullRequest(requireToken(), repository, number);
+                    const detail = decoratePullRequestDetail(
+                        await github.getPullRequest(requireToken(), repository, number),
+                    );
                     return { detail, lastLoadedAt: new Date().toISOString() };
                 },
             });
@@ -1515,7 +1558,8 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
         const fromQuery = queryClient.getQueryData<PullRequestDetailQueryData>(
             queryKeys.pullRequest.detail(key),
         )?.detail;
-        return fromQuery ?? state.state.pullRequests[key]?.detail ?? null;
+        const detail = fromQuery ?? state.state.pullRequests[key]?.detail ?? null;
+        return detail ? decoratePullRequestDetail(detail) : null;
     }
 
     function resolveReviewThreadItems(key: string): Array<ReviewThread> {
@@ -2626,7 +2670,7 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
         latestPullRequestLoads.set(key, attempt);
 
         try {
-            const detail = await github.getPullRequest(requireToken(), repository, number);
+            const detail = decoratePullRequestDetail(await github.getPullRequest(requireToken(), repository, number));
             if (attempt !== latestPullRequestLoads.get(key)) {
                 return;
             }
@@ -3196,24 +3240,135 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
         await refreshAfterMutation(repository, number, { reloadStack: true });
     }
 
-    async function enablePullRequestAutoMerge(repository: string, number: number, method: MergeMethod): Promise<void> {
+    async function enablePullRequestAutoMerge(
+        repository: string,
+        number: number,
+        method: MergeMethod,
+        options?: { deleteHeadBranch?: boolean },
+    ): Promise<void> {
+        const key = queuedAutoMergeKey(repository, number);
+        queuedAutoMerges.set(key, {
+            repository,
+            number,
+            method,
+            deleteHeadBranch: options?.deleteHeadBranch ?? shouldDeleteHeadBranchOnMerge(),
+        });
+        await persistQueuedAutoMerges();
         const detail = resolvePullRequestDetail(repository, number);
-        if (!detail) {
-            throw new EasyReviewError("unknown", "Load the pull request before enabling auto-merge.");
+        if (detail) {
+            paintDecoratedPullRequest(detail);
+        }
+        await completeQueuedAutoMerge(repository, number, { refresh: !detail });
+    }
+
+    /** Queue in-app auto-merge for many pull requests, then merge any that are already ready. */
+    async function queuePullRequestAutoMerges(
+        pullRequests: ReadonlyArray<{ repository: string; number: number }>,
+        method: MergeMethod,
+        options?: { deleteHeadBranch?: boolean },
+    ): Promise<{ queued: number; merged: Array<{ repository: string; number: number }> }> {
+        const deleteHeadBranch = options?.deleteHeadBranch ?? shouldDeleteHeadBranchOnMerge();
+        const unique = new Map<string, { repository: string; number: number }>();
+
+        for (const pullRequest of pullRequests) {
+            unique.set(queuedAutoMergeKey(pullRequest.repository, pullRequest.number), pullRequest);
         }
 
-        await github.enablePullRequestAutoMerge(requireToken(), detail.pullRequestNodeId, method);
-        await refreshAfterMutation(repository, number);
+        for (const pullRequest of unique.values()) {
+            queuedAutoMerges.set(queuedAutoMergeKey(pullRequest.repository, pullRequest.number), {
+                repository: pullRequest.repository,
+                number: pullRequest.number,
+                method,
+                deleteHeadBranch,
+            });
+            const detail = resolvePullRequestDetail(pullRequest.repository, pullRequest.number);
+            if (detail) {
+                paintDecoratedPullRequest(detail);
+            }
+        }
+
+        await persistQueuedAutoMerges();
+        const merged = await processQueuedAutoMerges();
+        return { queued: unique.size, merged };
     }
 
     async function disablePullRequestAutoMerge(repository: string, number: number): Promise<void> {
         const detail = resolvePullRequestDetail(repository, number);
-        if (!detail) {
-            throw new EasyReviewError("unknown", "Load the pull request before disabling auto-merge.");
+        queuedAutoMerges.delete(queuedAutoMergeKey(repository, number));
+        await persistQueuedAutoMerges();
+        if (detail) {
+            paintDecoratedPullRequest(detail);
+        }
+    }
+
+    /**
+     * Fetch queued pull requests and merge any that now meet requirements.
+     * Returns the ones that actually merged so the UI can toast.
+     */
+    async function processQueuedAutoMerges(): Promise<Array<{ repository: string; number: number }>> {
+        if (queuedAutoMerges.size === 0 || !token) {
+            return [];
         }
 
-        await github.disablePullRequestAutoMerge(requireToken(), detail.pullRequestNodeId);
-        await refreshAfterMutation(repository, number);
+        const merged: Array<{ repository: string; number: number }> = [];
+        const pending = Array.from(queuedAutoMerges.values());
+        for (const item of pending) {
+            try {
+                if (await completeQueuedAutoMerge(item.repository, item.number)) {
+                    merged.push({ repository: item.repository, number: item.number });
+                }
+            } catch {
+                // Stay queued; the next pass retries.
+            }
+        }
+        return merged;
+    }
+
+    async function completeQueuedAutoMerge(
+        repository: string,
+        number: number,
+        options?: { refresh?: boolean },
+    ): Promise<boolean> {
+        const key = queuedAutoMergeKey(repository, number);
+        const queued = queuedAutoMerges.get(key);
+        if (!queued || autoMergingKeys.has(key)) {
+            return false;
+        }
+
+        autoMergingKeys.add(key);
+        try {
+            let detail = options?.refresh === false ? resolvePullRequestDetail(repository, number) : null;
+            if (!detail || options?.refresh !== false) {
+                detail = await github.getPullRequest(requireToken(), repository, number);
+            }
+
+            if (detail.state !== "open") {
+                queuedAutoMerges.delete(key);
+                await persistQueuedAutoMerges();
+                paintDecoratedPullRequest(detail);
+                return false;
+            }
+
+            paintDecoratedPullRequest(detail);
+            if (!isPullRequestReadyToAutoMerge(detail)) {
+                return false;
+            }
+
+            queuedAutoMerges.delete(key);
+            try {
+                await mergePullRequest(repository, number, queued.method, {
+                    deleteHeadBranch: queued.deleteHeadBranch,
+                });
+                await persistQueuedAutoMerges();
+                return true;
+            } catch (error) {
+                queuedAutoMerges.set(key, queued);
+                await persistQueuedAutoMerges();
+                throw error;
+            }
+        } finally {
+            autoMergingKeys.delete(key);
+        }
     }
 
     async function updateIssueComment(
@@ -3513,7 +3668,10 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
         reopenPullRequest,
         updatePullRequestBranch,
         enablePullRequestAutoMerge,
+        queuePullRequestAutoMerges,
         disablePullRequestAutoMerge,
+        decoratePullRequestDetail,
+        processQueuedAutoMerges,
         updateIssueComment,
         updateReviewComment,
         updatePullRequestReview,

@@ -227,10 +227,11 @@ export type PullRequestDetail = PullRequestSummary & {
     mergeStateStatus: MergeStateStatus;
     /** True when the signed-in viewer may bypass branch rules and merge anyway. */
     viewerCanMergeAsAdmin: boolean;
-    /** GraphQL node id — required for auto-merge and update-branch mutations. */
+    /** GraphQL node id — required for update-branch mutations. */
     pullRequestNodeId: string;
     /** GitHub shows “Update branch” when the PR head is behind the base. */
     viewerCanUpdateBranch: boolean;
+    /** Easy Review will merge when requirements pass. Independent of GitHub’s repository auto-merge setting. */
     autoMergeEnabled: boolean;
     autoMergeMethod: MergeMethod | null;
     /** Stack layers bottom → top from GitHub `stack.entries`; empty when not in a stack. */

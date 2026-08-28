@@ -476,7 +476,7 @@ export function PullRequestControls({ detail }: { detail: PullRequestDetail }) {
                                             },
                                             {
                                                 loading: "Enabling auto-merge…",
-                                                success: "Auto-merge enabled",
+                                                success: "Auto-merge queued",
                                                 error: "Could not enable auto-merge.",
                                             },
                                         )
@@ -656,14 +656,14 @@ export function PullRequestControls({ detail }: { detail: PullRequestDetail }) {
 
 function autoMergeHelpText(detail: PullRequestDetail, mergeBlocked: boolean): string {
     if (detail.autoMergeEnabled) {
-        return "A merge is queued on GitHub. It runs automatically once required reviews and checks pass. Cancel to merge manually instead.";
+        return "Easy Review will merge this pull request when reviews and checks pass. Keep Easy Review open. Cancel to merge manually instead.";
     }
 
     if (mergeBlocked) {
-        return "Queue a merge on GitHub that runs when required reviews and checks pass. You can enable this before requirements are met—pick squash, merge commit, or rebase from the menu.";
+        return "Queue a merge that Easy Review runs when required reviews and checks pass. GitHub’s repository auto-merge setting is not required.";
     }
 
-    return "Merge automatically when this pull request is ready. Choose squash, merge commit, or rebase from the menu.";
+    return "Merge automatically when this pull request is ready. Easy Review performs the merge — GitHub’s auto-merge setting is not required.";
 }
 
 function StatusRow({

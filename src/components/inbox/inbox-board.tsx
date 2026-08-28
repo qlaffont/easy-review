@@ -1,5 +1,5 @@
 import { useNavigate } from "@tanstack/react-router";
-import { ChevronRight, FolderGit2, Keyboard, RefreshCw, Settings } from "lucide-react";
+import { ChevronRight, FolderGit2, GitMerge, Keyboard, RefreshCw, Settings } from "lucide-react";
 import { lazy, Suspense, useEffect, useEffectEvent, useRef, useState } from "react";
 
 import type { InboxSection, InboxSectionId, SectionColorId, SectionIconId } from "#/lib/session/inbox-sections.ts";
@@ -9,6 +9,17 @@ import { targetFromSummary, useSetActionTarget } from "#/components/actions/acti
 import { emptySectionRow, PullRequestRow } from "#/components/inbox/pull-request-row.tsx";
 import { visualForSection } from "#/components/inbox/section-visuals.ts";
 import { useOpenRepoPicker } from "#/components/repos/repo-picker.tsx";
+import {
+    AlertDialog,
+    AlertDialogAction,
+    AlertDialogCancel,
+    AlertDialogContent,
+    AlertDialogDescription,
+    AlertDialogFooter,
+    AlertDialogHeader,
+    AlertDialogTitle,
+    AlertDialogTrigger,
+} from "#/components/ui/alert-dialog.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import {
     DropdownMenu,
@@ -16,6 +27,7 @@ import {
     DropdownMenuItem,
     DropdownMenuTrigger,
 } from "#/components/ui/dropdown-menu.tsx";
+import { HelpTooltip } from "#/components/ui/help-tooltip.tsx";
 import { InboxLoadingSkeleton, LazyChunkFallback } from "#/components/ui/loading.tsx";
 import { RelativeTime } from "#/components/ui/relative-time.tsx";
 import { openInboxPullRequest } from "#/lib/inbox/inbox-navigation.ts";
@@ -39,6 +51,7 @@ const SectionAppearanceEditor = lazy(() =>
 
 /** How many pull requests each expanded section shows before “Load more…”. */
 const INBOX_SECTION_PAGE_SIZE = 10;
+const APPROVED_SECTION_ID = "approved";
 
 export function InboxBoard() {
     const session = useSession();
@@ -54,6 +67,7 @@ export function InboxBoard() {
         isError,
         error,
         refresh,
+        refreshSection,
         revalidate,
     } = useInboxQuery();
     const login = useSessionState((state) => state.auth.viewer?.login ?? "");
@@ -290,6 +304,41 @@ export function InboxBoard() {
                                     }
                                     void session.toggleSection(section.id);
                                 }}
+                                onRefresh={() =>
+                                    void notifyAction(() => refreshSection(section.id), {
+                                        loading: `Refreshing ${section.label}…`,
+                                        success: `${section.label} refreshed`,
+                                        error: `Could not refresh ${section.label}.`,
+                                    })
+                                }
+                                onAutoMergeAll={
+                                    section.id === APPROVED_SECTION_ID
+                                        ? async () => {
+                                              while (session.canLoadMoreInboxSection(section.id)) {
+                                                  await session.loadMoreInboxSection(section.id);
+                                              }
+
+                                              const latest = session
+                                                  .getInboxSections()
+                                                  .find((entry) => entry.id === section.id);
+                                              const targets = (latest?.pullRequests ?? [])
+                                                  .filter(
+                                                      (pullRequest) =>
+                                                          pullRequest.state === "open" && !pullRequest.isDraft,
+                                                  )
+                                                  .map((pullRequest) => ({
+                                                      repository: pullRequest.repository,
+                                                      number: pullRequest.number,
+                                                  }));
+
+                                              if (targets.length === 0) {
+                                                  throw new Error("No open pull requests to auto-merge.");
+                                              }
+
+                                              await session.queuePullRequestAutoMerges(targets, "squash");
+                                          }
+                                        : undefined
+                                }
                                 onEditFilters={() => setFilterSectionId(section.id)}
                                 onChangeAppearance={() => setAppearanceSectionId(section.id)}
                                 onLoadMore={() => {
@@ -355,6 +404,8 @@ function InboxSectionPanel({
     stackBadges,
     visibleCount,
     onToggle,
+    onRefresh,
+    onAutoMergeAll,
     onEditFilters,
     onChangeAppearance,
     onLoadMore,
@@ -373,6 +424,8 @@ function InboxSectionPanel({
     stackBadges: Map<string, { position: number; total: number }>;
     visibleCount: number;
     onToggle: () => void;
+    onRefresh: () => void;
+    onAutoMergeAll?: () => Promise<void>;
     onEditFilters: () => void;
     onChangeAppearance: () => void;
     onLoadMore: () => void;
@@ -418,41 +471,95 @@ function InboxSectionPanel({
                         />
                     </span>
                     <span className="min-w-0 truncate">{section.label}</span>
-                    {isFetching ? (
-                        <RefreshCw
-                            className="ml-auto size-3.5 shrink-0 animate-spin text-muted-foreground"
-                            aria-hidden="true"
-                        />
-                    ) : null}
                     <span
                         className={cn(
-                            "rounded-full px-2 py-0.5 text-xs font-medium tabular-nums",
+                            "ml-auto rounded-full px-2 py-0.5 text-xs font-medium tabular-nums",
                             count > 0 ? visual.countClass : "bg-muted/80 text-muted-foreground",
-                            !isFetching && "ml-auto",
-                            isFetching && "shrink-0",
                         )}
                         style={count > 0 ? visual.tones?.count : undefined}
                     >
                         {count}
                     </span>
                 </button>
-                <DropdownMenu>
-                    <DropdownMenuTrigger asChild>
-                        <Button
-                            type="button"
-                            size="icon-sm"
-                            variant="ghost"
-                            className="my-1 mr-1 shrink-0"
-                            aria-label={`Section options for ${section.label}`}
-                        >
-                            <Settings className="size-4" />
-                        </Button>
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent align="end">
-                        <DropdownMenuItem onSelect={onEditFilters}>Edit filters…</DropdownMenuItem>
-                        <DropdownMenuItem onSelect={onChangeAppearance}>Change appearance…</DropdownMenuItem>
-                    </DropdownMenuContent>
-                </DropdownMenu>
+                <div className="flex shrink-0 items-center pr-1">
+                    {onAutoMergeAll ? (
+                        <AlertDialog>
+                            <HelpTooltip label="Queue squash auto-merge for every pull request in this section">
+                                <span className="inline-flex">
+                                    <AlertDialogTrigger asChild>
+                                        <Button
+                                            type="button"
+                                            size="sm"
+                                            className="my-1 h-7 gap-1.5 bg-[#1f883d] px-2.5 text-white hover:bg-[#1a7f37] dark:bg-[#238636] dark:hover:bg-[#2ea043]"
+                                            disabled={count === 0 || isFetching}
+                                            aria-label={`Auto-merge all in ${section.label}`}
+                                        >
+                                            <GitMerge className="size-3.5" aria-hidden="true" />
+                                            Auto-merge all
+                                        </Button>
+                                    </AlertDialogTrigger>
+                                </span>
+                            </HelpTooltip>
+                            <AlertDialogContent size="sm">
+                                <AlertDialogHeader>
+                                    <AlertDialogTitle>Auto-merge all in {section.label}?</AlertDialogTitle>
+                                    <AlertDialogDescription>
+                                        Easy Review will queue squash auto-merge for{" "}
+                                        {count === 1 ? "1 pull request" : `${count} pull requests`} in this section.
+                                        Ready ones merge now; the rest wait until checks and reviews pass.
+                                    </AlertDialogDescription>
+                                </AlertDialogHeader>
+                                <AlertDialogFooter>
+                                    <AlertDialogCancel>Cancel</AlertDialogCancel>
+                                    <AlertDialogAction
+                                        className="bg-[#1f883d] text-white hover:bg-[#1a7f37] dark:bg-[#238636] dark:hover:bg-[#2ea043]"
+                                        onClick={() =>
+                                            void notifyAction(() => onAutoMergeAll(), {
+                                                loading: "Queueing auto-merge…",
+                                                success: "Auto-merge queued",
+                                                error: "Could not queue auto-merge.",
+                                            })
+                                        }
+                                    >
+                                        Auto-merge all
+                                    </AlertDialogAction>
+                                </AlertDialogFooter>
+                            </AlertDialogContent>
+                        </AlertDialog>
+                    ) : null}
+                    <HelpTooltip label={`Refresh ${section.label}`}>
+                        <span className="inline-flex">
+                            <Button
+                                type="button"
+                                size="icon-sm"
+                                variant="ghost"
+                                className="my-1 size-7"
+                                disabled={isFetching}
+                                aria-label={`Refresh ${section.label}`}
+                                onClick={onRefresh}
+                            >
+                                <RefreshCw className={cn("size-4", isFetching && "animate-spin")} />
+                            </Button>
+                        </span>
+                    </HelpTooltip>
+                    <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                            <Button
+                                type="button"
+                                size="icon-sm"
+                                variant="ghost"
+                                className="my-1 size-7"
+                                aria-label={`Section options for ${section.label}`}
+                            >
+                                <Settings className="size-4" />
+                            </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end">
+                            <DropdownMenuItem onSelect={onEditFilters}>Edit filters…</DropdownMenuItem>
+                            <DropdownMenuItem onSelect={onChangeAppearance}>Change appearance…</DropdownMenuItem>
+                        </DropdownMenuContent>
+                    </DropdownMenu>
+                </div>
             </h2>
 
             {isExpanded ? (

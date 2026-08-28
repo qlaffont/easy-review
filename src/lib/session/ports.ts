@@ -339,9 +339,9 @@ export type GithubClient = {
     reopenPullRequest(token: string, repository: string, number: number): Promise<void>;
     /** Merge the base branch into the PR head (GitHub “Update branch”). */
     updatePullRequestBranch(token: string, pullRequestNodeId: string, expectedHeadOid?: string): Promise<void>;
-    /** Enable auto-merge when requirements are met. */
+    /** GitHub repository auto-merge. Easy Review queues merges locally instead. */
     enablePullRequestAutoMerge(token: string, pullRequestNodeId: string, method: MergeMethod): Promise<void>;
-    /** Cancel a scheduled auto-merge. */
+    /** Cancel GitHub repository auto-merge. */
     disablePullRequestAutoMerge(token: string, pullRequestNodeId: string): Promise<void>;
     /** Delete a branch ref after merge. */
     deleteHeadBranch(token: string, repository: string, headRefName: string): Promise<void>;
