@@ -57,6 +57,10 @@ const REST_RULES: Array<Rule> = [
     { methods: GET, pattern: /^\/repos\/[^/]+\/[^/]+\/pulls\/\d+\/requested_reviewers$/ },
     { methods: new Set(["POST", "DELETE"]), pattern: /^\/repos\/[^/]+\/[^/]+\/pulls\/\d+\/requested_reviewers$/ },
     { methods: new Set(["PUT"]), pattern: /^\/repos\/[^/]+\/[^/]+\/pulls\/\d+\/merge$/ },
+    /** Stacked PRs: list the stack for a pull request, then merge it asynchronously. */
+    { methods: GET, pattern: /^\/repos\/[^/]+\/[^/]+\/stacks$/ },
+    { methods: new Set(["PUT"]), pattern: /^\/repos\/[^/]+\/[^/]+\/pulls\/\d+\/merge-async$/ },
+    { methods: GET, pattern: /^\/repos\/[^/]+\/[^/]+\/pulls\/\d+\/merge-async\/[^/]+$/ },
     { methods: new Set(["PATCH"]), pattern: /^\/repos\/[^/]+\/[^/]+\/pulls\/\d+$/ },
     { methods: GET, pattern: /^\/repos\/[^/]+\/[^/]+\/git\/commits\/[^/]+$/ },
     /** Media upload + apply-suggestions: read/create/update git objects and refs. */

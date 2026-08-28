@@ -40,6 +40,13 @@ describe("isAllowedGithubProxyRequest", () => {
             isAllowedGithubProxyRequest("DELETE", "/repos/acme/api/pulls/1/requested_reviewers", new ArrayBuffer(0)),
         ).toBe(true);
         expect(isAllowedGithubProxyRequest("PUT", "/repos/acme/api/pulls/1/merge", new ArrayBuffer(0))).toBe(true);
+        expect(isAllowedGithubProxyRequest("GET", "/repos/acme/api/stacks", undefined)).toBe(true);
+        expect(isAllowedGithubProxyRequest("PUT", "/repos/acme/api/pulls/1/merge-async", new ArrayBuffer(0))).toBe(
+            true,
+        );
+        expect(isAllowedGithubProxyRequest("GET", "/repos/acme/api/pulls/1/merge-async/job-uuid", undefined)).toBe(
+            true,
+        );
         expect(isAllowedGithubProxyRequest("PATCH", "/repos/acme/api/git/refs/heads/main", new ArrayBuffer(0))).toBe(
             true,
         );
