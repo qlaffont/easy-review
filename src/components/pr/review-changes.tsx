@@ -281,7 +281,16 @@ export function ReviewChanges({
     ]);
 
     const pendingOnFile = draft.comments.filter((comment) => comment.path === selectedPath);
-    const threadsOnFile = selectedPath ? threads.items.filter((thread) => thread.path === selectedPath) : [];
+    const pendingGithubCommentIds = new Set(
+        pendingOnFile.flatMap((comment) => (comment.githubCommentId === undefined ? [] : [comment.githubCommentId])),
+    );
+    const threadsOnFile = selectedPath
+        ? threads.items.filter(
+              (thread) =>
+                  thread.path === selectedPath &&
+                  !thread.comments.some((comment) => pendingGithubCommentIds.has(comment.databaseId)),
+          )
+        : [];
     const fileCount = filesStatus === "ready" ? filesItems.length : null;
     const activeDiff = isolatingRange ? rangeDiff : (selectedDiff?.diff ?? null);
     const displayDiff = activeDiff && selectedPath && activeDiff.path === selectedPath ? activeDiff : null;

@@ -1116,7 +1116,7 @@ export function createGithubHttpClient(
             const data = await graphql<{
                 addPullRequestReviewThread: {
                     thread: {
-                        comments: { nodes: Array<{ databaseId: number | null }> };
+                        comments: { nodes: Array<{ id: string; databaseId: number | null }> };
                     } | null;
                 };
             }>(token, ADD_REVIEW_THREAD_MUTATION, {
@@ -1130,12 +1130,12 @@ export function createGithubHttpClient(
                 },
             });
 
-            const databaseId = data.addPullRequestReviewThread.thread?.comments.nodes[0]?.databaseId;
-            if (databaseId == null) {
+            const comment = data.addPullRequestReviewThread.thread?.comments.nodes[0];
+            if (!comment || comment.databaseId == null) {
                 throw new EasyReviewError("unknown", "Could not read the new comment from GitHub.");
             }
 
-            return { commentId: databaseId };
+            return { commentId: comment.databaseId, commentNodeId: comment.id };
         },
 
         async setReviewThreadResolved(token, threadId, resolved) {
@@ -1529,9 +1529,10 @@ export function createGithubHttpClient(
             const rows = (await restJson(
                 token,
                 "GET",
-                `/repos/${owner}/${name}/pulls/${number}/comments?pull_request_review_id=${reviewId}&per_page=100`,
+                `/repos/${owner}/${name}/pulls/${number}/reviews/${reviewId}/comments?per_page=100`,
             )) as Array<{
                 id: number;
+                node_id: string;
                 path: string;
                 line: number | null;
                 side: string | null;
@@ -1541,6 +1542,7 @@ export function createGithubHttpClient(
                 .filter((row) => row.line != null)
                 .map((row) => ({
                     id: row.id,
+                    nodeId: row.node_id,
                     path: row.path,
                     line: row.line!,
                     side: (row.side === "LEFT" ? "LEFT" : "RIGHT") as DiffSide,
@@ -1548,9 +1550,38 @@ export function createGithubHttpClient(
                 }));
         },
 
-        async deleteReviewComment(token, repository, commentId) {
-            const [owner = "", name = ""] = repository.split("/");
-            await restJson(token, "DELETE", `/repos/${owner}/${name}/pulls/comments/${commentId}`);
+        async updatePendingReviewComment(token, commentNodeId, body) {
+            await graphql(
+                token,
+                `
+                    mutation EasyReviewUpdatePendingReviewComment($pullRequestReviewCommentId: ID!, $body: String!) {
+                        updatePullRequestReviewComment(
+                            input: { pullRequestReviewCommentId: $pullRequestReviewCommentId, body: $body }
+                        ) {
+                            pullRequestReviewComment {
+                                id
+                            }
+                        }
+                    }
+                `,
+                { pullRequestReviewCommentId: commentNodeId, body },
+            );
+        },
+
+        async deletePendingReviewComment(token, commentNodeId) {
+            await graphql(
+                token,
+                `
+                    mutation EasyReviewDeletePendingReviewComment($pullRequestReviewCommentId: ID!) {
+                        deletePullRequestReviewComment(input: { id: $pullRequestReviewCommentId }) {
+                            pullRequestReview {
+                                id
+                            }
+                        }
+                    }
+                `,
+                { pullRequestReviewCommentId: commentNodeId },
+            );
         },
 
         async uploadPullRequestMedia(token, input) {
@@ -4654,6 +4685,7 @@ const ADD_REVIEW_THREAD_MUTATION = `
                 id
                 comments(first: 1) {
                     nodes {
+                        id
                         databaseId
                     }
                 }

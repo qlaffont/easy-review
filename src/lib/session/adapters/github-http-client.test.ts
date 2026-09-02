@@ -1092,3 +1092,65 @@ describe("REST validation errors", () => {
         });
     });
 });
+
+describe("pending review comments", () => {
+    it("loads comments from the review-scoped endpoint", async () => {
+        const requestedUrls: Array<string> = [];
+        const github = createGithubHttpClient(async (input) => {
+            requestedUrls.push(String(input));
+            return new Response(
+                JSON.stringify([
+                    {
+                        id: 7,
+                        node_id: "PRRC_pending",
+                        path: "src/a.ts",
+                        line: 14,
+                        side: "RIGHT",
+                        body: "Keep this pending.",
+                    },
+                ]),
+                { status: 200, headers: { "content-type": "application/json" } },
+            );
+        });
+
+        const comments = await github.listPendingReviewComments("token", "acme/api", 1, 42);
+
+        expect(requestedUrls).toEqual([
+            "https://api.github.com/repos/acme/api/pulls/1/reviews/42/comments?per_page=100",
+        ]);
+        expect(comments).toEqual([
+            {
+                id: 7,
+                nodeId: "PRRC_pending",
+                path: "src/a.ts",
+                line: 14,
+                side: "RIGHT",
+                body: "Keep this pending.",
+            },
+        ]);
+    });
+
+    it("edits and deletes pending comments by GraphQL node id", async () => {
+        const requests: Array<{ query: string; variables: Record<string, unknown> }> = [];
+        const github = createGithubHttpClient(async (_input, init) => {
+            requests.push(JSON.parse(String(init?.body)) as (typeof requests)[number]);
+            return new Response(JSON.stringify({ data: {} }), {
+                status: 200,
+                headers: { "content-type": "application/json" },
+            });
+        });
+
+        await github.updatePendingReviewComment("token", "PRRC_pending", "Updated");
+        await github.deletePendingReviewComment("token", "PRRC_pending");
+
+        expect(requests[0]?.query).toContain("updatePullRequestReviewComment");
+        expect(requests[0]?.variables).toEqual({
+            pullRequestReviewCommentId: "PRRC_pending",
+            body: "Updated",
+        });
+        expect(requests[1]?.query).toContain("deletePullRequestReviewComment");
+        expect(requests[1]?.variables).toEqual({
+            pullRequestReviewCommentId: "PRRC_pending",
+        });
+    });
+});

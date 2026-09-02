@@ -1101,7 +1101,7 @@ export function createFakeGithub(): FakeGithub {
                     ],
                 };
                 threadsByPullRequest.set(key, [...(threadsByPullRequest.get(key) ?? []), thread]);
-                return { commentId: databaseId };
+                return { commentId: databaseId, commentNodeId: `${threadId}-c0` };
             });
         },
         setReviewThreadResolved(token, threadId, resolved) {
@@ -1370,8 +1370,11 @@ export function createFakeGithub(): FakeGithub {
         listPendingReviewComments(_token, _repository, _number, _reviewId) {
             return respond("listPendingReviewComments", () => []);
         },
-        deleteReviewComment(_token, _repository, _commentId) {
-            return respond("deleteReviewComment", () => {});
+        updatePendingReviewComment(_token, _commentNodeId, _body) {
+            return respond("updatePendingReviewComment", () => {});
+        },
+        deletePendingReviewComment(_token, _commentNodeId) {
+            return respond("deletePendingReviewComment", () => {});
         },
         uploadPullRequestMedia(token, input) {
             return respond("uploadPullRequestMedia", () => {

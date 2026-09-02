@@ -94,6 +94,44 @@ describe("staged review drafts", () => {
         expect(draft.stale).toBe(false);
     });
 
+    it("restores and edits a GitHub pending comment after refresh", async () => {
+        const updates: Array<{ nodeId: string; body: string }> = [];
+        github.getViewerPendingReview = async () => ({
+            reviewId: 42,
+            reviewNodeId: "PRR_pending",
+            body: "",
+            commitId: "sha-aaa",
+        });
+        github.listPendingReviewComments = async () => [
+            {
+                id: 7,
+                nodeId: "PRRC_pending",
+                path: "src/a.ts",
+                line: 1,
+                side: "RIGHT",
+                body: "Still pending",
+            },
+        ];
+        github.updatePendingReviewComment = async (_token, nodeId, body) => {
+            updates.push({ nodeId, body });
+        };
+
+        const session = await connectedWithPr();
+        const comment = session.getReviewDraft("acme/api", 1).comments[0];
+
+        expect(comment).toMatchObject({
+            id: "gh-7",
+            body: "Still pending",
+            githubCommentId: 7,
+            githubCommentNodeId: "PRRC_pending",
+        });
+
+        await session.updatePendingComment("acme/api", 1, "gh-7", "Updated pending");
+
+        expect(updates).toEqual([{ nodeId: "PRRC_pending", body: "Updated pending" }]);
+        expect(session.getReviewDraft("acme/api", 1).comments[0]?.body).toBe("Updated pending");
+    });
+
     it("marks the draft stale when the head SHA moves", async () => {
         const session = await connectedWithPr();
         await session.addPendingComment("acme/api", 1, {

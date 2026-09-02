@@ -1876,6 +1876,7 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
                 side: row.side,
                 body: row.body,
                 githubCommentId: row.id,
+                githubCommentNodeId: row.nodeId,
             }));
             const localOnly = draft.comments.filter((comment) => !comment.githubCommentId);
             const mergedComments = [
@@ -2069,7 +2070,7 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
         if (detail) {
             nextDraft = await ensureGithubPendingReview(detail, nextDraft);
             if (nextDraft.githubReviewNodeId) {
-                const { commentId } = await github.addPullRequestReviewThread(requireToken(), {
+                const { commentId, commentNodeId } = await github.addPullRequestReviewThread(requireToken(), {
                     pullRequestNodeId: detail.pullRequestNodeId,
                     pullRequestReviewNodeId: nextDraft.githubReviewNodeId,
                     path: input.path,
@@ -2078,10 +2079,13 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
                     body: input.body,
                 });
                 comment.githubCommentId = commentId;
+                comment.githubCommentNodeId = commentNodeId;
                 nextDraft = {
                     ...nextDraft,
                     comments: nextDraft.comments.map((entry) =>
-                        entry.id === comment.id ? { ...entry, githubCommentId: commentId } : entry,
+                        entry.id === comment.id
+                            ? { ...entry, githubCommentId: commentId, githubCommentNodeId: commentNodeId }
+                            : entry,
                     ),
                 };
             }
@@ -2105,8 +2109,8 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
             comments: draft.comments.map((comment) => (comment.id === commentId ? { ...comment, body } : comment)),
         };
 
-        if (existing?.githubCommentId) {
-            await github.updateReviewComment(requireToken(), repository, existing.githubCommentId, body);
+        if (existing?.githubCommentNodeId) {
+            await github.updatePendingReviewComment(requireToken(), existing.githubCommentNodeId, body);
         }
 
         await persistDraft(nextDraft);
@@ -2117,8 +2121,8 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
         const existing = draft.comments.find((comment) => comment.id === commentId);
         const comments = draft.comments.filter((comment) => comment.id !== commentId);
 
-        if (existing?.githubCommentId) {
-            await github.deleteReviewComment(requireToken(), repository, existing.githubCommentId);
+        if (existing?.githubCommentNodeId) {
+            await github.deletePendingReviewComment(requireToken(), existing.githubCommentNodeId);
         }
 
         await persistDraft({ ...draft, comments });

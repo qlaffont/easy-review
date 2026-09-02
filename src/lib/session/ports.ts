@@ -195,7 +195,7 @@ export type GithubClient = {
             /** When set, attach the thread to an existing pending review instead of publishing immediately. */
             pullRequestReviewNodeId?: string;
         },
-    ): Promise<{ commentId: number }>;
+    ): Promise<{ commentId: number; commentNodeId: string }>;
     /** Reply inside an existing thread. `threadId` is the GraphQL node id. */
     replyToReviewThread(token: string, threadId: string, body: string): Promise<ReviewThreadComment>;
     /** Resolve or unresolve a review thread. */
@@ -403,14 +403,17 @@ export type GithubClient = {
     ): Promise<
         Array<{
             id: number;
+            nodeId: string;
             path: string;
             line: number;
             side: DiffSide;
             body: string;
         }>
     >;
-    /** Remove a pending review line comment on GitHub. */
-    deleteReviewComment(token: string, repository: string, commentId: number): Promise<void>;
+    /** Edit a pending review line comment through its GraphQL node id. */
+    updatePendingReviewComment(token: string, commentNodeId: string, body: string): Promise<void>;
+    /** Remove a pending review line comment through its GraphQL node id. */
+    deletePendingReviewComment(token: string, commentNodeId: string): Promise<void>;
     /**
      * Upload an image/video for a PR comment composer. Stores the file on a hidden git ref
      * (`refs/uploads/pr/{number}`) so it never lands on the PR branch, then returns a raw blob URL.

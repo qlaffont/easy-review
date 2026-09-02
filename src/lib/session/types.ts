@@ -330,6 +330,8 @@ export type PendingLineComment = {
     body: string;
     /** Set when synced to a GitHub pending review comment. */
     githubCommentId?: number;
+    /** GraphQL node id required to edit or delete a pending review comment. */
+    githubCommentNodeId?: string;
 };
 
 /**
