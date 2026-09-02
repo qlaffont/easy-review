@@ -8,6 +8,7 @@ import {
     RefreshCw,
     Settings2,
     ShieldOff,
+    UserPlus,
     X,
     XCircle,
 } from "lucide-react";
@@ -46,6 +47,7 @@ import { Input } from "#/components/ui/input.tsx";
 import { Popover, PopoverContent, PopoverTrigger } from "#/components/ui/popover.tsx";
 import { Skeleton } from "#/components/ui/skeleton.tsx";
 import { Textarea } from "#/components/ui/textarea.tsx";
+import { useAuthViewer } from "#/lib/query/auth.ts";
 import { useRepositoryMetadataQuery } from "#/lib/query/pull-request.ts";
 import { useSession } from "#/lib/session/provider.tsx";
 import {
@@ -152,6 +154,7 @@ function ReviewersSection({
     canEdit: boolean;
 }) {
     const session = useSession();
+    const viewer = useAuthViewer();
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const visibleReviewers = excludeAuthorFromReviewers(detail.author, reviewers);
@@ -178,6 +181,20 @@ function ReviewersSection({
     async function toggle(login: string) {
         if (requested.has(login)) {
             await setRequests(visibleReviewRequests.filter((entry) => entry !== login));
+            return;
+        }
+
+        if (visibleReviewRequests.length >= MAX_REVIEWERS) {
+            setError(`You can request up to ${MAX_REVIEWERS} reviewers.`);
+            return;
+        }
+
+        await setRequests([...visibleReviewRequests, login]);
+    }
+
+    async function addSelf() {
+        const login = viewer?.login;
+        if (!login || login === detail.author || requested.has(login)) {
             return;
         }
 
@@ -239,6 +256,31 @@ function ReviewersSection({
             filterItem={(user, query) => matchesUser(user, query)}
             onToggle={(user) => void toggle(user.login)}
             groupSelected="Requested"
+            headerAction={
+                viewer && viewer.login !== detail.author ? (
+                    <HelpTooltip
+                        label={
+                            requested.has(viewer.login)
+                                ? "You are already a requested reviewer"
+                                : "Add yourself as reviewer"
+                        }
+                    >
+                        <Button
+                            type="button"
+                            size="icon-sm"
+                            variant="ghost"
+                            disabled={
+                                busy || requested.has(viewer.login) || visibleReviewRequests.length >= MAX_REVIEWERS
+                            }
+                            className="size-6 text-muted-foreground"
+                            aria-label="Add yourself as reviewer"
+                            onClick={() => void addSelf()}
+                        >
+                            <UserPlus aria-hidden="true" />
+                        </Button>
+                    </HelpTooltip>
+                ) : undefined
+            }
         >
             {visibleReviewers.length > 0 ? (
                 <ul className="flex flex-col gap-1">
@@ -704,6 +746,7 @@ function MetadataSection<T>({
     onClear,
     clearLabel,
     groupSelected,
+    headerAction,
     footer,
     children,
 }: {
@@ -723,6 +766,7 @@ function MetadataSection<T>({
     onClear?: () => void;
     clearLabel?: string;
     groupSelected?: string;
+    headerAction?: ReactNode;
     footer?: ReactNode;
     children: ReactNode;
 }) {
@@ -740,93 +784,96 @@ function MetadataSection<T>({
             <div className="flex items-center justify-between gap-2">
                 <h2 className="text-xs font-medium text-muted-foreground">{title}</h2>
                 {canEdit ? (
-                    <Popover
-                        open={open}
-                        onOpenChange={(next) => {
-                            setOpen(next);
-                            if (!next) {
-                                setQuery("");
-                            }
-                        }}
-                    >
-                        <HelpTooltip label={`Edit ${title.toLowerCase()}`}>
-                            <PopoverTrigger asChild>
-                                <button
-                                    type="button"
-                                    disabled={busy}
-                                    aria-label={`Edit ${title.toLowerCase()}`}
-                                    className="cursor-pointer rounded-md p-1 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
-                                >
-                                    <Settings2 className="size-3.5" aria-hidden="true" />
-                                </button>
-                            </PopoverTrigger>
-                        </HelpTooltip>
-                        <PopoverContent
-                            align="end"
-                            className="w-72 gap-0 overflow-hidden rounded-lg border p-0 shadow-md"
+                    <div className="flex items-center gap-0.5">
+                        {headerAction}
+                        <Popover
+                            open={open}
+                            onOpenChange={(next) => {
+                                setOpen(next);
+                                if (!next) {
+                                    setQuery("");
+                                }
+                            }}
                         >
-                            <div className="border-b px-3 py-2">
-                                <p className="text-xs font-medium text-muted-foreground">{pickerTitle}</p>
-                            </div>
-                            <div className="border-b px-2 py-2">
-                                <Input
-                                    autoFocus
-                                    value={query}
-                                    placeholder={searchPlaceholder}
-                                    className="h-8 rounded-md text-sm shadow-none"
-                                    onChange={(event) => setQuery(event.target.value)}
-                                />
-                            </div>
-                            {onClear ? (
-                                <button
-                                    type="button"
-                                    disabled={busy}
-                                    className="flex w-full cursor-pointer items-center gap-2 border-b px-3 py-1.5 text-left text-xs text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
-                                    onClick={onClear}
-                                >
-                                    <X className="size-3.5" aria-hidden="true" />
-                                    {clearLabel ?? "Clear"}
-                                </button>
-                            ) : null}
-                            <div className="max-h-64 overflow-y-auto py-1">
-                                {loading && items.length === 0 ? (
-                                    <p className="px-3 py-3 text-xs text-muted-foreground">Loading…</p>
-                                ) : filtered.length === 0 ? (
-                                    <p className="px-3 py-3 text-xs text-muted-foreground">Nothing matched.</p>
-                                ) : (
-                                    <>
-                                        {selectedItems.length > 0 ? (
-                                            <PickerGroup label={groupSelected}>
-                                                {selectedItems.map((item) => (
-                                                    <PickerButton
-                                                        key={getKey(item)}
-                                                        disabled={busy}
-                                                        onClick={() => onToggle(item)}
-                                                    >
-                                                        {renderItem(item, true)}
-                                                    </PickerButton>
-                                                ))}
-                                            </PickerGroup>
-                                        ) : null}
-                                        {otherItems.length > 0 ? (
-                                            <PickerGroup>
-                                                {otherItems.map((item) => (
-                                                    <PickerButton
-                                                        key={getKey(item)}
-                                                        disabled={busy}
-                                                        onClick={() => onToggle(item)}
-                                                    >
-                                                        {renderItem(item, false)}
-                                                    </PickerButton>
-                                                ))}
-                                            </PickerGroup>
-                                        ) : null}
-                                    </>
-                                )}
-                            </div>
-                            {footer}
-                        </PopoverContent>
-                    </Popover>
+                            <HelpTooltip label={`Edit ${title.toLowerCase()}`}>
+                                <PopoverTrigger asChild>
+                                    <button
+                                        type="button"
+                                        disabled={busy}
+                                        aria-label={`Edit ${title.toLowerCase()}`}
+                                        className="cursor-pointer rounded-md p-1 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+                                    >
+                                        <Settings2 className="size-3.5" aria-hidden="true" />
+                                    </button>
+                                </PopoverTrigger>
+                            </HelpTooltip>
+                            <PopoverContent
+                                align="end"
+                                className="w-72 gap-0 overflow-hidden rounded-lg border p-0 shadow-md"
+                            >
+                                <div className="border-b px-3 py-2">
+                                    <p className="text-xs font-medium text-muted-foreground">{pickerTitle}</p>
+                                </div>
+                                <div className="border-b px-2 py-2">
+                                    <Input
+                                        autoFocus
+                                        value={query}
+                                        placeholder={searchPlaceholder}
+                                        className="h-8 rounded-md text-sm shadow-none"
+                                        onChange={(event) => setQuery(event.target.value)}
+                                    />
+                                </div>
+                                {onClear ? (
+                                    <button
+                                        type="button"
+                                        disabled={busy}
+                                        className="flex w-full cursor-pointer items-center gap-2 border-b px-3 py-1.5 text-left text-xs text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+                                        onClick={onClear}
+                                    >
+                                        <X className="size-3.5" aria-hidden="true" />
+                                        {clearLabel ?? "Clear"}
+                                    </button>
+                                ) : null}
+                                <div className="max-h-64 overflow-y-auto py-1">
+                                    {loading && items.length === 0 ? (
+                                        <p className="px-3 py-3 text-xs text-muted-foreground">Loading…</p>
+                                    ) : filtered.length === 0 ? (
+                                        <p className="px-3 py-3 text-xs text-muted-foreground">Nothing matched.</p>
+                                    ) : (
+                                        <>
+                                            {selectedItems.length > 0 ? (
+                                                <PickerGroup label={groupSelected}>
+                                                    {selectedItems.map((item) => (
+                                                        <PickerButton
+                                                            key={getKey(item)}
+                                                            disabled={busy}
+                                                            onClick={() => onToggle(item)}
+                                                        >
+                                                            {renderItem(item, true)}
+                                                        </PickerButton>
+                                                    ))}
+                                                </PickerGroup>
+                                            ) : null}
+                                            {otherItems.length > 0 ? (
+                                                <PickerGroup>
+                                                    {otherItems.map((item) => (
+                                                        <PickerButton
+                                                            key={getKey(item)}
+                                                            disabled={busy}
+                                                            onClick={() => onToggle(item)}
+                                                        >
+                                                            {renderItem(item, false)}
+                                                        </PickerButton>
+                                                    ))}
+                                                </PickerGroup>
+                                            ) : null}
+                                        </>
+                                    )}
+                                </div>
+                                {footer}
+                            </PopoverContent>
+                        </Popover>
+                    </div>
                 ) : null}
             </div>
             {children}
