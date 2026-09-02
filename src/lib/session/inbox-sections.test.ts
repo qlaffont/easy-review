@@ -60,13 +60,44 @@ describe("default section filters", () => {
         expect(matchSectionFilter(subject, defaultFilterForPreset("needs-your-review"), VIEWER)).toBe(true);
     });
 
-    it("does not keep a pull request in Needs your review after you approved when reviewRequests lag", () => {
+    it("puts a re-requested review back in Needs your review after you approved", () => {
         const subject = pullRequest({
             reviewRequests: [VIEWER],
             reviewers: [{ login: VIEWER, state: "approved", reviewId: 1 }],
         });
-        expect(matchSectionFilter(subject, defaultFilterForPreset("needs-your-review"), VIEWER)).toBe(false);
-        expect(matchSectionFilter(subject, defaultFilterForPreset("waiting-for-author"), VIEWER)).toBe(true);
+        expect(matchSectionFilter(subject, defaultFilterForPreset("needs-your-review"), VIEWER)).toBe(true);
+        expect(matchSectionFilter(subject, defaultFilterForPreset("waiting-for-author"), VIEWER)).toBe(false);
+    });
+
+    it("puts a re-requested review back in Needs your review after you requested changes", () => {
+        const subject = pullRequest({
+            reviewRequests: [VIEWER],
+            reviewers: [{ login: VIEWER, state: "changes-requested", reviewId: 2 }],
+        });
+        expect(matchSectionFilter(subject, defaultFilterForPreset("needs-your-review"), VIEWER)).toBe(true);
+        expect(matchSectionFilter(subject, defaultFilterForPreset("waiting-for-author"), VIEWER)).toBe(false);
+    });
+
+    it("treats a re-requested reviewer as pending for My review filters", () => {
+        const subject = pullRequest({
+            reviewRequests: [VIEWER],
+            reviewers: [{ login: VIEWER, state: "approved", reviewId: 1 }],
+        });
+        expect(
+            matchSectionFilter(
+                subject,
+                {
+                    cases: [
+                        {
+                            id: "case_pending",
+                            name: "Pending again",
+                            conditions: [{ id: "c1", field: "viewerReviewState", op: "is", value: "pending" }],
+                        },
+                    ],
+                },
+                VIEWER,
+            ),
+        ).toBe(true);
     });
 
     it("puts a pull request you already reviewed in Waiting for author", () => {
@@ -206,6 +237,69 @@ describe("default section filters", () => {
         expect(
             drafts?.filter.cases[0]?.conditions.some(
                 (condition) => condition.field === "state" && condition.op === "is" && condition.value === "open",
+            ),
+        ).toBe(true);
+    });
+
+    it("upgrades a Needs your review default that hid re-requests after a prior review", () => {
+        const layout = normalizeSectionLayout([
+            {
+                id: "needs-your-review",
+                filter: {
+                    cases: [
+                        {
+                            id: "case_old",
+                            name: "Review requested of me",
+                            conditions: [
+                                { id: "c1", field: "state", op: "is", value: "open" },
+                                { id: "c2", field: "isDraft", op: "is", value: false },
+                                { id: "c3", field: "reviewRequests", op: "includes", value: "@me" },
+                                { id: "c4", field: "viewerReviewState", op: "is_not", value: "approved" },
+                                { id: "c5", field: "viewerReviewState", op: "is_not", value: "changes-requested" },
+                            ],
+                        },
+                    ],
+                },
+            },
+        ]);
+        const needsReview = layout.find((entry) => entry.id === "needs-your-review");
+        expect(
+            needsReview?.filter.cases[0]?.conditions.some((condition) => condition.field === "viewerReviewState"),
+        ).toBe(false);
+        const reRequested = pullRequest({
+            reviewRequests: [VIEWER],
+            reviewers: [{ login: VIEWER, state: "approved", reviewId: 1 }],
+        });
+        expect(matchSectionFilter(reRequested, needsReview!.filter, VIEWER)).toBe(true);
+    });
+
+    it("upgrades a Waiting for author default to exclude outstanding re-requests", () => {
+        const layout = normalizeSectionLayout([
+            {
+                id: "waiting-for-author",
+                filter: {
+                    cases: [
+                        {
+                            id: "case_old",
+                            name: "I reviewed, ball in their court",
+                            conditions: [
+                                { id: "c1", field: "state", op: "is", value: "open" },
+                                { id: "c2", field: "isDraft", op: "is", value: false },
+                                { id: "c3", field: "author", op: "is_not", value: "@me" },
+                                { id: "c4", field: "involvement", op: "is", value: "i-have-reviewed" },
+                            ],
+                        },
+                    ],
+                },
+            },
+        ]);
+        const waiting = layout.find((entry) => entry.id === "waiting-for-author");
+        expect(
+            waiting?.filter.cases[0]?.conditions.some(
+                (condition) =>
+                    condition.field === "reviewRequests" &&
+                    condition.op === "does_not_include" &&
+                    condition.value === "@me",
             ),
         ).toBe(true);
     });

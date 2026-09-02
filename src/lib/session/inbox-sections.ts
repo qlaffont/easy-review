@@ -380,8 +380,14 @@ function migratePresetFilter(id: InboxSectionId, filter: SectionFilter): Section
             return filter;
         }
         const fingerprints = new Set(filter.cases[0]!.conditions.map(conditionFingerprint));
-        const legacy = new Set(["state|is|open", "isDraft|is|false", "reviewRequests|includes|@me"]);
-        if (fingerprints.size !== legacy.size || [...legacy].some((entry) => !fingerprints.has(entry))) {
+        const hidReRequests = new Set([
+            "state|is|open",
+            "isDraft|is|false",
+            "reviewRequests|includes|@me",
+            "viewerReviewState|is_not|approved",
+            "viewerReviewState|is_not|changes-requested",
+        ]);
+        if (fingerprints.size !== hidReRequests.size || [...hidReRequests].some((entry) => !fingerprints.has(entry))) {
             return filter;
         }
         return defaultFilterForPreset("needs-your-review");
@@ -427,14 +433,16 @@ function migratePresetFilter(id: InboxSectionId, filter: SectionFilter): Section
             return filter;
         }
         const fingerprints = new Set(filter.cases[0]!.conditions.map(conditionFingerprint));
-        const legacy = new Set([
+        const withoutRequestExclusion = new Set([
             "state|is|open",
             "isDraft|is|false",
             "author|is_not|@me",
-            "reviewRequests|does_not_include|@me",
             "involvement|is|i-have-reviewed",
         ]);
-        if (fingerprints.size !== legacy.size || [...legacy].some((entry) => !fingerprints.has(entry))) {
+        if (
+            fingerprints.size !== withoutRequestExclusion.size ||
+            [...withoutRequestExclusion].some((entry) => !fingerprints.has(entry))
+        ) {
             return filter;
         }
         return defaultFilterForPreset("waiting-for-author");

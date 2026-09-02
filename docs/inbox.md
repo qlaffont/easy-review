@@ -6,10 +6,12 @@ Graphite-like triage board over the selected repository allowlist.
 
 Default presets include **Needs your review**, **Returned to you**, **Waiting for reviewers (me)**, **Approved**, **Drafts**, and others. Classification is GitHub-derived (`src/lib/session/section-filters.ts`); filters are editable per section in **Inbox settings**.
 
-Notable author flows:
+Notable flows:
 
+- **Needs your review** — an open, non-draft PR currently requested of you, including when the author re-requested you after you already approved or requested changes.
 - **Returned to you** — your open PR has changes requested and nobody is currently asked to re-review.
 - **Waiting for reviewers (me)** — your PR still has changes requested, but you re-requested at least one reviewer (they show as pending in the sidebar and on inbox rows even if their last review was “request changes”).
+- **Waiting for author** — you already reviewed someone else’s PR and there is no outstanding request of you.
 
 ## Opening a pull request
 

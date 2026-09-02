@@ -1,4 +1,10 @@
 {
+  "scripts": {
+    "dev": {
+      "type": "service",
+      "command": "pnpm dev"
+    }
+  },
   "metadataGeneration": {
     "commitMessage": {
       "instructions": "Use Conventional Commits with a scope"
