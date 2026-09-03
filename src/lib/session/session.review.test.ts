@@ -191,6 +191,15 @@ describe("staged review drafts", () => {
         expect(threads.some((thread) => thread.comments.some((comment) => comment.body === "ship it now"))).toBe(true);
     });
 
+    it("edits a review thread comment by GraphQL node id", async () => {
+        const session = await connectedWithPr();
+
+        await session.updateReviewComment("acme/api", 1, "c1", "Updated body");
+
+        expect(github.calls).toContain("updateReviewComment");
+        expect(session.getReviewThreads("acme/api", 1).items[0]?.comments[0]?.body).toBe("Updated body");
+    });
+
     it("selects a review event before GitHub pending-review sync finishes", async () => {
         const session = createEasyReviewSession({ github, queryClient: createTestQueryClient(), store });
         await session.connect(TOKEN);

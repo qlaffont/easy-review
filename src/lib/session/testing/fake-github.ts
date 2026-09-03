@@ -1343,9 +1343,18 @@ export function createFakeGithub(): FakeGithub {
         updateReviewComment(token, _repository, commentId, body) {
             return respond("updateReviewComment", () => {
                 const account = authenticate(token);
+                for (const [, threads] of threadsByPullRequest) {
+                    for (const thread of threads) {
+                        const comment = thread.comments.find((entry) => entry.id === commentId);
+                        if (comment) {
+                            comment.body = body;
+                            return { ...comment };
+                        }
+                    }
+                }
                 return {
-                    id: String(commentId),
-                    databaseId: commentId,
+                    id: commentId,
+                    databaseId: 1,
                     author: account.login,
                     authorAvatarUrl: null,
                     body,

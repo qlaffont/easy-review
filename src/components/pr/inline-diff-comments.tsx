@@ -491,7 +491,7 @@ function ReviewThreadInlineComment({
                     canEdit={isAuthor}
                     editing={editing}
                     onEditingChange={setEditing}
-                    onSave={(body) => session.updateReviewComment(repository, number, comment.databaseId, body)}
+                    onSave={(body) => session.updateReviewComment(repository, number, comment.id, body)}
                     markdownProps={{
                         suggestionOriginal,
                         suggestionStartLine,

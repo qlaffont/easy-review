@@ -1113,6 +1113,39 @@ export function createGithubHttpClient(
         },
 
         async addPullRequestReviewThread(token, input) {
+            // Without a review id, addPullRequestReviewThread attaches to (or creates) a pending
+            // review. "Add single comment" must publish immediately: submit a COMMENT review in one go.
+            if (!input.pullRequestReviewNodeId) {
+                const data = await graphql<{
+                    addPullRequestReview: {
+                        pullRequestReview: {
+                            id: string;
+                            comments: { nodes: Array<{ id: string; databaseId: number | null }> };
+                        } | null;
+                    };
+                }>(token, PUBLISH_SINGLE_COMMENT_MUTATION, {
+                    input: {
+                        pullRequestId: input.pullRequestNodeId,
+                        event: "COMMENT",
+                        threads: [
+                            {
+                                path: input.path,
+                                line: input.line,
+                                side: input.side,
+                                body: input.body,
+                            },
+                        ],
+                    },
+                });
+
+                const comment = data.addPullRequestReview.pullRequestReview?.comments.nodes[0];
+                if (!comment || comment.databaseId == null) {
+                    throw new EasyReviewError("unknown", "Could not read the new comment from GitHub.");
+                }
+
+                return { commentId: comment.databaseId, commentNodeId: comment.id };
+            }
+
             const data = await graphql<{
                 addPullRequestReviewThread: {
                     thread: {
@@ -1122,11 +1155,11 @@ export function createGithubHttpClient(
             }>(token, ADD_REVIEW_THREAD_MUTATION, {
                 input: {
                     pullRequestId: input.pullRequestNodeId,
+                    pullRequestReviewId: input.pullRequestReviewNodeId,
                     body: input.body,
                     path: input.path,
                     line: input.line,
                     side: input.side,
-                    ...(input.pullRequestReviewNodeId ? { pullRequestReviewId: input.pullRequestReviewNodeId } : {}),
                 },
             });
 
@@ -1428,28 +1461,23 @@ export function createGithubHttpClient(
             return toPullRequestComment(node);
         },
 
-        async updateReviewComment(token, repository, commentId, body) {
-            const [owner = "", name = ""] = repository.split("/");
-            const node = (await restJson(token, "PATCH", `/repos/${owner}/${name}/pulls/comments/${commentId}`, {
+        async updateReviewComment(token, _repository, commentId, body) {
+            const data = await graphql<{
+                updatePullRequestReviewComment: {
+                    pullRequestReviewComment: ReviewThreadCommentNode | null;
+                };
+            }>(token, UPDATE_REVIEW_COMMENT_MUTATION, {
+                pullRequestReviewCommentId: commentId,
                 body,
-            })) as {
-                id: number;
-                node_id: string;
-                body: string;
-                created_at: string;
-                html_url: string;
-                user: { login: string; avatar_url: string | null } | null;
-            };
-            return {
-                id: node.node_id || String(node.id),
-                databaseId: node.id,
-                author: node.user?.login ?? "ghost",
-                authorAvatarUrl: node.user?.avatar_url ?? null,
-                body: node.body,
-                createdAt: node.created_at,
-                url: node.html_url,
-                reactionGroups: [],
-            };
+            });
+
+            const node = data.updatePullRequestReviewComment?.pullRequestReviewComment;
+            const mapped = node ? toThreadComment(node) : null;
+            if (!mapped) {
+                throw new EasyReviewError("unknown", "Could not read the updated comment from GitHub.");
+            }
+
+            return mapped;
         },
 
         async updatePullRequestReview(token, reviewNodeId, body) {
@@ -4678,6 +4706,22 @@ const REPLY_TO_THREAD_MUTATION = `
     }
 `;
 
+const PUBLISH_SINGLE_COMMENT_MUTATION = `
+    mutation EasyReviewPublishSingleComment($input: AddPullRequestReviewInput!) {
+        addPullRequestReview(input: $input) {
+            pullRequestReview {
+                id
+                comments(first: 1) {
+                    nodes {
+                        id
+                        databaseId
+                    }
+                }
+            }
+        }
+    }
+`;
+
 const ADD_REVIEW_THREAD_MUTATION = `
     mutation EasyReviewAddReviewThread($input: AddPullRequestReviewThreadInput!) {
         addPullRequestReviewThread(input: $input) {
@@ -4687,6 +4731,34 @@ const ADD_REVIEW_THREAD_MUTATION = `
                     nodes {
                         id
                         databaseId
+                    }
+                }
+            }
+        }
+    }
+`;
+
+const UPDATE_REVIEW_COMMENT_MUTATION = `
+    mutation EasyReviewUpdateReviewComment($pullRequestReviewCommentId: ID!, $body: String!) {
+        updatePullRequestReviewComment(
+            input: { pullRequestReviewCommentId: $pullRequestReviewCommentId, body: $body }
+        ) {
+            pullRequestReviewComment {
+                id
+                databaseId
+                body
+                bodyHTML
+                createdAt
+                url
+                author {
+                    login
+                    avatarUrl
+                }
+                reactionGroups {
+                    content
+                    viewerHasReacted
+                    reactors {
+                        totalCount
                     }
                 }
             }

@@ -347,11 +347,11 @@ export type GithubClient = {
     deleteHeadBranch(token: string, repository: string, headRefName: string): Promise<void>;
     /** Edit a conversation (issue) comment body. */
     updateIssueComment(token: string, repository: string, commentId: number, body: string): Promise<PullRequestComment>;
-    /** Edit a review (diff) comment body. */
+    /** Edit a review (diff) comment body. `commentId` is the GraphQL node id. */
     updateReviewComment(
         token: string,
         repository: string,
-        commentId: number,
+        commentId: string,
         body: string,
     ): Promise<ReviewThreadComment>;
     /** Edit a submitted pull request review summary body. */

@@ -3440,7 +3440,7 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
     async function updateReviewComment(
         repository: string,
         number: number,
-        commentId: number,
+        commentId: string,
         body: string,
     ): Promise<void> {
         const trimmed = body.trim();
@@ -3448,7 +3448,40 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
             throw new EasyReviewError("unknown", "Comment body is required.");
         }
 
-        await github.updateReviewComment(requireToken(), repository, commentId, trimmed);
+        const updated = await github.updateReviewComment(requireToken(), repository, commentId, trimmed);
+        const key = pullRequestKey(repository, number);
+        state.setState((prev) => {
+            const nextItems = resolveReviewThreadItems(key).map((thread) => ({
+                ...thread,
+                comments: thread.comments.map((entry) =>
+                    entry.id === commentId ? { ...entry, body: updated.body } : entry,
+                ),
+            }));
+            queryClient.setQueryData<ReviewThreadsQueryData>(queryKeys.pullRequest.threads(key), { items: nextItems });
+            return {
+                ...prev,
+                reviewThreads: {
+                    ...prev.reviewThreads,
+                    [key]: {
+                        status: "ready",
+                        items: nextItems,
+                        error: null,
+                    },
+                },
+            };
+        });
+
+        const draft = getReviewDraft(repository, number);
+        if (draft.comments.some((comment) => comment.githubCommentNodeId === commentId)) {
+            const nextDraft: ReviewDraft = {
+                ...draft,
+                comments: draft.comments.map((comment) =>
+                    comment.githubCommentNodeId === commentId ? { ...comment, body: trimmed } : comment,
+                ),
+            };
+            await persistDraft(nextDraft);
+        }
+
         await refreshAfterMutation(repository, number, { reloadReviewSurfaces: true });
     }
 

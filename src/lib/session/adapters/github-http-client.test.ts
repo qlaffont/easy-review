@@ -1154,3 +1154,127 @@ describe("pending review comments", () => {
         });
     });
 });
+
+describe("addPullRequestReviewThread", () => {
+    it("publishes a single comment as a submitted COMMENT review", async () => {
+        const requests: Array<{ query: string; variables: Record<string, unknown> }> = [];
+        const github = createGithubHttpClient(async (_input, init) => {
+            requests.push(JSON.parse(String(init?.body)) as (typeof requests)[number]);
+            return new Response(
+                JSON.stringify({
+                    data: {
+                        addPullRequestReview: {
+                            pullRequestReview: {
+                                id: "PRR_1",
+                                comments: { nodes: [{ id: "PRRC_1", databaseId: 99 }] },
+                            },
+                        },
+                    },
+                }),
+                { status: 200, headers: { "content-type": "application/json" } },
+            );
+        });
+
+        const result = await github.addPullRequestReviewThread("token", {
+            pullRequestNodeId: "PR_1",
+            body: "ship it",
+            path: "src/a.ts",
+            line: 10,
+            side: "RIGHT",
+        });
+
+        expect(requests[0]?.query).toContain("EasyReviewPublishSingleComment");
+        expect(requests[0]?.query).toContain("addPullRequestReview");
+        expect(requests[0]?.variables).toEqual({
+            input: {
+                pullRequestId: "PR_1",
+                event: "COMMENT",
+                threads: [{ path: "src/a.ts", line: 10, side: "RIGHT", body: "ship it" }],
+            },
+        });
+        expect(result).toEqual({ commentId: 99, commentNodeId: "PRRC_1" });
+    });
+
+    it("attaches a thread to an existing pending review", async () => {
+        const requests: Array<{ query: string; variables: Record<string, unknown> }> = [];
+        const github = createGithubHttpClient(async (_input, init) => {
+            requests.push(JSON.parse(String(init?.body)) as (typeof requests)[number]);
+            return new Response(
+                JSON.stringify({
+                    data: {
+                        addPullRequestReviewThread: {
+                            thread: {
+                                comments: { nodes: [{ id: "PRRC_pending", databaseId: 7 }] },
+                            },
+                        },
+                    },
+                }),
+                { status: 200, headers: { "content-type": "application/json" } },
+            );
+        });
+
+        const result = await github.addPullRequestReviewThread("token", {
+            pullRequestNodeId: "PR_1",
+            pullRequestReviewNodeId: "PRR_pending",
+            body: "staged",
+            path: "src/a.ts",
+            line: 10,
+            side: "RIGHT",
+        });
+
+        expect(requests[0]?.query).toContain("EasyReviewAddReviewThread");
+        expect(requests[0]?.variables).toEqual({
+            input: {
+                pullRequestId: "PR_1",
+                pullRequestReviewId: "PRR_pending",
+                body: "staged",
+                path: "src/a.ts",
+                line: 10,
+                side: "RIGHT",
+            },
+        });
+        expect(result).toEqual({ commentId: 7, commentNodeId: "PRRC_pending" });
+    });
+});
+
+describe("updateReviewComment", () => {
+    it("edits a review comment by GraphQL node id", async () => {
+        const requests: Array<{ query: string; variables: Record<string, unknown> }> = [];
+        const github = createGithubHttpClient(async (_input, init) => {
+            requests.push(JSON.parse(String(init?.body)) as (typeof requests)[number]);
+            return new Response(
+                JSON.stringify({
+                    data: {
+                        updatePullRequestReviewComment: {
+                            pullRequestReviewComment: {
+                                id: "PRRC_1",
+                                databaseId: 42,
+                                url: "https://github.com/acme/api/pull/1#discussion_r42",
+                                body: "Updated",
+                                bodyHTML: "<p>Updated</p>",
+                                createdAt: "2026-09-03T00:00:00.000Z",
+                                author: { login: "quentin", avatarUrl: null },
+                                reactionGroups: [],
+                            },
+                        },
+                    },
+                }),
+                { status: 200, headers: { "content-type": "application/json" } },
+            );
+        });
+
+        const result = await github.updateReviewComment("token", "acme/api", "PRRC_1", "Updated");
+
+        expect(requests[0]?.query).toContain("EasyReviewUpdateReviewComment");
+        expect(requests[0]?.variables).toEqual({
+            pullRequestReviewCommentId: "PRRC_1",
+            body: "Updated",
+        });
+        expect(result).toMatchObject({
+            id: "PRRC_1",
+            databaseId: 42,
+            body: "Updated",
+            author: "quentin",
+        });
+    });
+});
