@@ -244,6 +244,30 @@ describe("oauth restore", () => {
         expect(session.state.state.auth.status).toBe("verifying");
     });
 
+    it("starts GitHub OAuth when a previously restored session expires", async () => {
+        github.addAccount("session", { login: "quentin" });
+        let loginStarted = false;
+        const session = createEasyReviewSession({
+            github,
+            queryClient: createTestQueryClient(),
+            store,
+            oauth: {
+                sessionCredential: "session",
+                logout: async () => undefined,
+                beginLogin: () => {
+                    loginStarted = true;
+                },
+            },
+        });
+
+        await session.restore();
+        github.revokeAccount("session");
+        await session.restore();
+
+        expect(loginStarted).toBe(true);
+        expect(session.state.state.auth.status).toBe("verifying");
+    });
+
     it("does not auto-reconnect after an explicit sign-out", async () => {
         await store.set("repos:account", "quentin");
         await store.set("auth:signed-out", "1");

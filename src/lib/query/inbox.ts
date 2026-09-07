@@ -195,8 +195,15 @@ export function useInboxQuery() {
     const sections = inboxSectionsFromLoaded(definitions, filteredSectionPullRequests, data.sectionCounts);
 
     const refresh = useCallback(async () => {
+        // A long-lived tab can retain an in-memory credential after GitHub has
+        // invalidated its cookie. Re-probe first so a manual refresh follows the
+        // same OAuth reconnect path as a full page reload.
+        await session.restore();
+        if (!session.state.state.auth.viewer) {
+            return;
+        }
         await invalidateInboxForRefresh(queryClient, login);
-    }, [queryClient, login]);
+    }, [session, queryClient, login]);
 
     const refreshSection = useCallback(
         async (sectionId: string) => {
