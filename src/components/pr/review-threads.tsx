@@ -46,6 +46,7 @@ function ThreadCard({ repository, number, thread }: { repository: string; number
     const session = useSession();
     const [reply, setReply] = useState("");
     const [sending, setSending] = useState(false);
+    const [reopening, setReopening] = useState(false);
     const { comments, isResolved } = thread;
     const baseUrl = `https://github.com/${repository}/`;
 
@@ -66,6 +67,25 @@ function ThreadCard({ repository, number, thread }: { repository: string; number
             // Toast already reports the failure.
         } finally {
             setSending(false);
+        }
+    }
+
+    async function reopen() {
+        if (reopening) {
+            return;
+        }
+
+        setReopening(true);
+        try {
+            await notifyAction(() => session.setReviewThreadResolved(repository, number, thread.id, false), {
+                loading: "Reopening conversation…",
+                success: "Conversation reopened",
+                error: "Could not reopen the conversation.",
+            });
+        } catch {
+            // Toast already reports the failure.
+        } finally {
+            setReopening(false);
         }
     }
 
@@ -93,7 +113,13 @@ function ThreadCard({ repository, number, thread }: { repository: string; number
                     </li>
                 ))}
             </ul>
-            {!isResolved ? (
+            {isResolved ? (
+                <div className="mt-2">
+                    <Button size="sm" variant="outline" disabled={reopening} onClick={() => void reopen()}>
+                        {reopening ? "Reopening…" : "Reopen conversation"}
+                    </Button>
+                </div>
+            ) : (
                 <div className="mt-2 flex flex-col gap-1.5">
                     <Textarea
                         rows={2}
@@ -105,7 +131,7 @@ function ThreadCard({ repository, number, thread }: { repository: string; number
                         {sending ? "Sending…" : "Reply"}
                     </Button>
                 </div>
-            ) : null}
+            )}
         </article>
     );
 }
