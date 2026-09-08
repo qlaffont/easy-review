@@ -97,6 +97,12 @@ export type RepositoryUser = {
     avatarUrl: string | null;
 };
 
+/** An organization team that can be requested to review a repository pull request. */
+export type RepositoryTeam = {
+    name: string;
+    slug: string;
+};
+
 /** One entry of the head commit's status rollup: a check run or a legacy commit status. */
 export type CheckRun = {
     name: string;

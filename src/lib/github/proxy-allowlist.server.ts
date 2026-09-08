@@ -21,6 +21,7 @@ const REST_RULES: Array<Rule> = [
     /** Legacy personal-repo listing (kept for older sessions / tests). */
     { methods: GET, pattern: /^\/user\/repos$/ },
     { methods: GET, pattern: /^\/repos\/[^/]+\/[^/]+\/assignees$/ },
+    { methods: GET, pattern: /^\/repos\/[^/]+\/[^/]+\/teams$/ },
     { methods: GET, pattern: /^\/repos\/[^/]+\/[^/]+\/labels$/ },
     { methods: GET, pattern: /^\/repos\/[^/]+\/[^/]+\/branches$/ },
     { methods: GET, pattern: /^\/repos\/[^/]+\/[^/]+\/rules\/branches\/[^/]+$/ },

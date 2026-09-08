@@ -10,6 +10,7 @@ import type {
     PullRequestTimelineItem,
     Repository,
     RepositoryLabel,
+    RepositoryTeam,
     RepositoryUser,
     ReviewThread,
 } from "#/lib/session/types.ts";
@@ -61,6 +62,7 @@ export type RelatedPullRequestsQueryData = {
 
 export type RepositoryMetadataQueryData = {
     users: Array<RepositoryUser>;
+    teams: Array<RepositoryTeam>;
     labels: Array<RepositoryLabel>;
 };
 

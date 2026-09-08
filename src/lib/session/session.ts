@@ -42,6 +42,7 @@ import type {
     PullRequestTimelineItem,
     Repository,
     RepositoryLabel,
+    RepositoryTeam,
     RepositoryUser,
     ReactionContent,
     ReactionGroup,
@@ -253,6 +254,7 @@ export type PullRequestStackState = {
 export type RepositoryMetadataState = {
     status: "idle" | "loading" | "ready" | "error";
     users: Array<RepositoryUser>;
+    teams: Array<RepositoryTeam>;
     labels: Array<RepositoryLabel>;
     error: SessionError | null;
 };
@@ -393,6 +395,7 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
     const initialRepositoryMetadata: RepositoryMetadataState = {
         status: "idle",
         users: [],
+        teams: [],
         labels: [],
         error: null,
     };
@@ -2797,6 +2800,7 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
                 [repository]: {
                     status: "loading",
                     users: prev.repositoryMetadata[repository]?.users ?? [],
+                    teams: prev.repositoryMetadata[repository]?.teams ?? [],
                     labels: prev.repositoryMetadata[repository]?.labels ?? [],
                     error: null,
                 },
@@ -2807,11 +2811,12 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
             const data = await queryClient.fetchQuery({
                 queryKey: queryKeys.repository.metadata(repository),
                 queryFn: async () => {
-                    const [users, labels] = await Promise.all([
+                    const [users, teams, labels] = await Promise.all([
                         github.listRepositoryAssignees(requireToken(), repository),
+                        github.listRepositoryTeams(requireToken(), repository),
                         github.listRepositoryLabels(requireToken(), repository),
                     ]);
-                    return { users, labels };
+                    return { users, teams, labels };
                 },
             });
 
@@ -2823,7 +2828,13 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
                 ...prev,
                 repositoryMetadata: {
                     ...prev.repositoryMetadata,
-                    [repository]: { status: "ready", users: data.users, labels: data.labels, error: null },
+                    [repository]: {
+                        status: "ready",
+                        users: data.users,
+                        teams: data.teams,
+                        labels: data.labels,
+                        error: null,
+                    },
                 },
             }));
         } catch (error) {
@@ -2838,6 +2849,7 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
                     [repository]: {
                         status: "error",
                         users: prev.repositoryMetadata[repository]?.users ?? [],
+                        teams: prev.repositoryMetadata[repository]?.teams ?? [],
                         labels: prev.repositoryMetadata[repository]?.labels ?? [],
                         error: toSessionError(error),
                     },
@@ -2849,7 +2861,7 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
     function getRepositoryMetadata(repository: string): RepositoryMetadataState {
         const cached = queryClient.getQueryData<RepositoryMetadataQueryData>(queryKeys.repository.metadata(repository));
         if (cached) {
-            return { status: "ready", users: cached.users, labels: cached.labels, error: null };
+            return { status: "ready", users: cached.users, teams: cached.teams, labels: cached.labels, error: null };
         }
         return state.state.repositoryMetadata[repository] ?? initialRepositoryMetadata;
     }
@@ -2891,6 +2903,11 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
             await github.removeReviewers(requireToken(), repository, number, toRemove);
         }
 
+        await refreshAfterMutation(repository, number, { reloadStack: true });
+    }
+
+    async function requestTeamReview(repository: string, number: number, team: RepositoryTeam): Promise<void> {
+        await github.requestTeamReview(requireToken(), repository, number, team);
         await refreshAfterMutation(repository, number, { reloadStack: true });
     }
 
@@ -3708,6 +3725,7 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
         setPullRequestLabels,
         setPullRequestAssignees,
         setReviewRequests,
+        requestTeamReview,
         reRequestReview,
         dismissReview,
         updatePullRequestBody,

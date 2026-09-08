@@ -78,6 +78,15 @@ describe("pull request lifecycle", () => {
         expect(session.getPullRequestPage("acme/api", 1).detail?.reviewRequests).toContain("mona");
     });
 
+    it("requests an eligible organization team by its slug", async () => {
+        const session = await connectedWithPr();
+
+        await session.requestTeamReview("acme/api", 1, { name: "Odyssée", slug: "odyssee" });
+
+        expect(github.calls).toContain("requestTeamReview");
+        expect(session.getPullRequestPage("acme/api", 1).detail?.reviewRequests).toContain("Odyssée");
+    });
+
     it("dismisses a review by id", async () => {
         github.addPullRequest(TOKEN, {
             repository: "acme/api",

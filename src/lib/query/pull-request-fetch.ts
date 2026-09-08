@@ -162,11 +162,12 @@ export async function fetchRepositoryMetadata(
     signal?: AbortSignal,
 ): Promise<RepositoryMetadataQueryData> {
     void signal;
-    const [users, labels] = await Promise.all([
+    const [users, teams, labels] = await Promise.all([
         session.github.listRepositoryAssignees(session.requireToken(), repository),
+        session.github.listRepositoryTeams(session.requireToken(), repository),
         session.github.listRepositoryLabels(session.requireToken(), repository),
     ]);
-    return { users, labels };
+    return { users, teams, labels };
 }
 
 export function sessionErrorFromUnknown(error: unknown) {

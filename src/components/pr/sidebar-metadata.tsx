@@ -9,6 +9,7 @@ import {
     Settings2,
     ShieldOff,
     UserPlus,
+    UsersRound,
     X,
     XCircle,
 } from "lucide-react";
@@ -18,6 +19,7 @@ import type {
     Label,
     PullRequestDetail,
     RepositoryLabel,
+    RepositoryTeam,
     RepositoryUser,
     ReviewerStatus,
     ReviewState,
@@ -60,6 +62,8 @@ import { cn } from "#/lib/utils.ts";
 
 const MAX_ASSIGNEES = 10;
 const MAX_REVIEWERS = 15;
+
+type ReviewerCandidate = { kind: "user"; user: RepositoryUser } | { kind: "team"; team: RepositoryTeam };
 
 const REVIEW_STATE_META: Record<ReviewState, { label: string; className: string; icon: ReactNode }> = {
     approved: {
@@ -116,6 +120,7 @@ export function PullRequestSidebarMetadata({
                 detail={detail}
                 reviewers={reviewers}
                 users={meta.users}
+                teams={meta.teams}
                 usersByLogin={usersByLogin}
                 loading={meta.status === "loading" && meta.users.length === 0}
                 canEdit={canEdit}
@@ -142,6 +147,7 @@ function ReviewersSection({
     detail,
     reviewers,
     users,
+    teams,
     usersByLogin,
     loading,
     canEdit,
@@ -149,6 +155,7 @@ function ReviewersSection({
     detail: PullRequestDetail;
     reviewers: Array<ReviewerStatus>;
     users: Array<RepositoryUser>;
+    teams: Array<RepositoryTeam>;
     usersByLogin: Map<string, RepositoryUser>;
     loading: boolean;
     canEdit: boolean;
@@ -161,6 +168,15 @@ function ReviewersSection({
     const visibleReviewRequests = excludeAuthorFromReviewRequests(detail.author, detail.reviewRequests);
     const requested = new Set(visibleReviewRequests);
     const reviewedLogins = new Set(visibleReviewers.map((reviewer) => reviewer.login));
+    const candidates: Array<ReviewerCandidate> = [
+        ...users.map((user) => ({ kind: "user" as const, user })),
+        ...teams.map((team) => ({ kind: "team" as const, team })),
+    ];
+    const teamsByName = new Map(teams.map((team) => [team.name, team]));
+    const selectedKeys = visibleReviewRequests.map((reviewer) => {
+        const team = teamsByName.get(reviewer);
+        return team ? `team:${team.slug}` : reviewer;
+    });
 
     async function setRequests(next: Array<string>) {
         setBusy(true);
@@ -206,6 +222,36 @@ function ReviewersSection({
         await setRequests([...visibleReviewRequests, login]);
     }
 
+    async function toggleCandidate(candidate: ReviewerCandidate) {
+        if (candidate.kind === "user") {
+            await toggle(candidate.user.login);
+            return;
+        }
+
+        if (requested.has(candidate.team.name)) {
+            await toggle(candidate.team.name);
+            return;
+        }
+        if (visibleReviewRequests.length >= MAX_REVIEWERS) {
+            setError(`You can request up to ${MAX_REVIEWERS} reviewers.`);
+            return;
+        }
+
+        setBusy(true);
+        setError(null);
+        try {
+            await notifyAction(() => session.requestTeamReview(detail.repository, detail.number, candidate.team), {
+                loading: "Updating reviewers…",
+                success: "Reviewers updated",
+                error: "Could not update reviewers.",
+            });
+        } catch (cause) {
+            setError(cause instanceof Error ? cause.message : "Could not update reviewers.");
+        } finally {
+            setBusy(false);
+        }
+    }
+
     async function reRequest(login: string) {
         setBusy(true);
         setError(null);
@@ -245,16 +291,26 @@ function ReviewersSection({
             title="Reviewers"
             canEdit={canEdit}
             pickerTitle={`Request up to ${MAX_REVIEWERS} reviewers`}
-            searchPlaceholder="Type or choose a user"
+            searchPlaceholder="Type or choose a user or team"
             busy={busy}
             error={error}
             loading={loading}
-            selectedKeys={visibleReviewRequests}
-            items={users.filter((user) => user.login !== detail.author)}
-            renderItem={(user, selected) => <UserRow user={user} selected={selected} />}
-            getKey={(user) => user.login}
-            filterItem={(user, query) => matchesUser(user, query)}
-            onToggle={(user) => void toggle(user.login)}
+            selectedKeys={selectedKeys}
+            items={candidates.filter(
+                (candidate) => candidate.kind === "team" || candidate.user.login !== detail.author,
+            )}
+            renderItem={(candidate, selected) =>
+                candidate.kind === "user" ? (
+                    <UserRow user={candidate.user} selected={selected} />
+                ) : (
+                    <TeamRow team={candidate.team} selected={selected} />
+                )
+            }
+            getKey={(candidate) => (candidate.kind === "user" ? candidate.user.login : `team:${candidate.team.slug}`)}
+            filterItem={(candidate, query) =>
+                candidate.kind === "user" ? matchesUser(candidate.user, query) : matchesTeam(candidate.team, query)
+            }
+            onToggle={(candidate) => void toggleCandidate(candidate)}
             groupSelected="Requested"
             headerAction={
                 viewer && viewer.login !== detail.author ? (
@@ -938,6 +994,18 @@ function UserRow({ user, selected }: { user: RepositoryUser; selected: boolean }
     );
 }
 
+function TeamRow({ team, selected }: { team: RepositoryTeam; selected: boolean }) {
+    return (
+        <>
+            <span className="flex size-4 shrink-0 items-center justify-center text-muted-foreground">
+                {selected ? <Check className="size-3.5" aria-hidden="true" /> : null}
+            </span>
+            <UsersRound className="size-5 shrink-0 text-muted-foreground" aria-hidden="true" />
+            <span className="min-w-0 flex-1 truncate text-sm">{team.name}</span>
+        </>
+    );
+}
+
 function LabelRow({ label, selected }: { label: RepositoryLabel; selected: boolean }) {
     return (
         <>
@@ -973,4 +1041,9 @@ function UserAvatar({ user }: { user: RepositoryUser }) {
 
 function matchesUser(user: RepositoryUser, query: string): boolean {
     return user.login.toLowerCase().includes(query) || (user.name?.toLowerCase().includes(query) ?? false);
+}
+
+function matchesTeam(team: RepositoryTeam, query: string): boolean {
+    const normalized = query.toLowerCase();
+    return team.name.toLowerCase().includes(normalized) || team.slug.toLowerCase().includes(normalized);
 }

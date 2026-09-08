@@ -125,6 +125,7 @@ function toMetadataState(query: ReturnType<typeof useQuery<RepositoryMetadataQue
     return {
         status: queryStatus(query, hasData),
         users: query.data?.users ?? [],
+        teams: query.data?.teams ?? [],
         labels: query.data?.labels ?? [],
         error: query.isError ? toSessionError(query.error) : null,
     };

@@ -14,6 +14,7 @@ import type {
     ReactionContent,
     Repository,
     RepositoryLabel,
+    RepositoryTeam,
     RepositoryUser,
     ReviewEvent,
     ReviewThread,
@@ -137,6 +138,8 @@ export type GithubClient = {
     getPullRequest(token: string, repository: string, number: number): Promise<PullRequestDetail>;
     /** Users who can be assigned (and usually requested as reviewers) on the repository. */
     listRepositoryAssignees(token: string, repository: string): Promise<Array<RepositoryUser>>;
+    /** Teams with access to the repository, eligible for review requests. */
+    listRepositoryTeams(token: string, repository: string): Promise<Array<RepositoryTeam>>;
     /** Labels defined on the repository. */
     listRepositoryLabels(token: string, repository: string): Promise<Array<RepositoryLabel>>;
     /** Changed paths only — never the patch text. */
@@ -231,6 +234,8 @@ export type GithubClient = {
         number: number,
         reviewers: ReadonlyArray<string>,
     ): Promise<void>;
+    /** Ask an organization team for review by its GitHub slug. */
+    requestTeamReview(token: string, repository: string, number: number, team: RepositoryTeam): Promise<void>;
     /** Drop outstanding review requests for these logins. */
     removeReviewers(token: string, repository: string, number: number, reviewers: ReadonlyArray<string>): Promise<void>;
     /** Remove then re-add review requests so GitHub pings the reviewers again. */

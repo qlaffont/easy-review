@@ -726,6 +726,27 @@ export function createGithubHttpClient(
             return users;
         },
 
+        async listRepositoryTeams(token, repository) {
+            const [owner = "", name = ""] = repository.split("/");
+            const teams: Array<{ name: string; slug: string }> = [];
+            let path: string | null = `/repos/${owner}/${name}/teams?per_page=100`;
+
+            for (let page = 0; page < 10 && path; page++) {
+                const response = await rest(token, path);
+                // Personal repositories do not expose this organization-only resource.
+                if (response.status === 404) {
+                    return [];
+                }
+                if (!response.ok) {
+                    throw await errorFromResponse(response);
+                }
+                teams.push(...((await response.json()) as Array<{ name: string; slug: string }>));
+                path = nextRestPath(response.headers.get("link"));
+            }
+
+            return teams.map(({ name: teamName, slug }) => ({ name: teamName, slug }));
+        },
+
         async listRepositoryLabels(token, repository) {
             const [owner = "", name = ""] = repository.split("/");
             const labels: Array<RepositoryLabel> = [];
@@ -1307,6 +1328,11 @@ export function createGithubHttpClient(
             const current = await getRequestedReviewers(token, owner, name, number);
             const payload = resolveReviewRequestPayload(reviewers, current, { treatUnknownAsUserLogins: true }).all;
             await postReviewRequestPayload(token, owner, name, number, payload);
+        },
+
+        async requestTeamReview(token, repository, number, team) {
+            const [owner = "", name = ""] = repository.split("/");
+            await postReviewRequestPayload(token, owner, name, number, { reviewers: [], team_reviewers: [team.slug] });
         },
 
         async removeReviewers(token, repository, number, reviewers) {

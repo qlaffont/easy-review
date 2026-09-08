@@ -22,6 +22,7 @@ import type {
     ReactionGroup,
     Repository,
     RepositoryLabel,
+    RepositoryTeam,
     RepositoryUser,
     ReviewEvent,
     ReviewThread,
@@ -52,6 +53,7 @@ export type FakeGithub = GithubClient & {
     addRepository(token: string, nameWithOwner: string, repository?: Partial<Repository>): Repository;
     /** Seed assignable users for a repository. */
     setRepositoryAssignees(token: string, repository: string, users: Array<RepositoryUser>): void;
+    setRepositoryTeams(token: string, repository: string, teams: Array<RepositoryTeam>): void;
     /** Seed labels for a repository. */
     setRepositoryLabels(token: string, repository: string, labels: Array<RepositoryLabel>): void;
     /** Default branch used when rendering stack trunk labels. */
@@ -267,6 +269,7 @@ export function createFakeGithub(): FakeGithub {
     const threadsByPullRequest = new Map<string, Array<ReviewThread>>();
     const timelineByPullRequest = new Map<string, Array<PullRequestTimelineItem>>();
     const assigneesByRepository = new Map<string, Array<RepositoryUser>>();
+    const teamsByRepository = new Map<string, Array<RepositoryTeam>>();
     const labelsByRepository = new Map<string, Array<RepositoryLabel>>();
     const defaultBranchByRepository = new Map<string, string>();
     const pullRequestQueries: Array<ReadonlyArray<string>> = [];
@@ -519,6 +522,9 @@ export function createFakeGithub(): FakeGithub {
         },
         setRepositoryAssignees(token, repository, users) {
             assigneesByRepository.set(`${token}:${repository}`, [...users]);
+        },
+        setRepositoryTeams(token, repository, teams) {
+            teamsByRepository.set(`${token}:${repository}`, [...teams]);
         },
         setRepositoryLabels(token, repository, labels) {
             labelsByRepository.set(`${token}:${repository}`, [...labels]);
@@ -830,6 +836,12 @@ export function createFakeGithub(): FakeGithub {
             return respond("listRepositoryAssignees", () => {
                 authenticate(token);
                 return [...(assigneesByRepository.get(`${token}:${repository}`) ?? [])];
+            });
+        },
+        listRepositoryTeams(token, repository) {
+            return respond("listRepositoryTeams", () => {
+                authenticate(token);
+                return [...(teamsByRepository.get(`${token}:${repository}`) ?? [])];
             });
         },
         listRepositoryLabels(token, repository) {
@@ -1175,6 +1187,16 @@ export function createFakeGithub(): FakeGithub {
                     next.add(login);
                 }
                 patchPullRequest(token, repository, number, { reviewRequests: [...next] });
+            });
+        },
+        requestTeamReview(token, repository, number, team) {
+            return respond("requestTeamReview", () => {
+                authenticate(token);
+                const pullRequest = requirePullRequest(token, repository, number);
+                requireOpen(pullRequest);
+                patchPullRequest(token, repository, number, {
+                    reviewRequests: [...new Set([...pullRequest.reviewRequests, team.name])],
+                });
             });
         },
         removeReviewers(token, repository, number, reviewers) {
