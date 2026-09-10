@@ -129,6 +129,18 @@ describe("default section filters", () => {
         expect(matchSectionFilter(subject, defaultFilterForPreset("approved"), VIEWER)).toBe(true);
     });
 
+    it("moves your approved PR out of Approved when you re-request validation", () => {
+        const subject = pullRequest({
+            author: VIEWER,
+            reviewDecision: "approved",
+            reviewRequests: ["romainpm"],
+            reviewers: [{ login: "romainpm", state: "approved", reviewId: 1 }],
+        });
+
+        expect(matchSectionFilter(subject, defaultFilterForPreset("approved"), VIEWER)).toBe(false);
+        expect(matchSectionFilter(subject, defaultFilterForPreset("waiting-for-reviewers-me"), VIEWER)).toBe(true);
+    });
+
     it("puts your own pending pull request in Waiting for reviewers (me)", () => {
         const subject = pullRequest({ author: VIEWER, reviewDecision: "review-required" });
         expect(matchSectionFilter(subject, defaultFilterForPreset("waiting-for-reviewers-me"), VIEWER)).toBe(true);
@@ -332,6 +344,35 @@ describe("default section filters", () => {
                     condition.field === "reviewRequests" &&
                     condition.op === "does_not_include" &&
                     condition.value === "@me",
+            ),
+        ).toBe(true);
+    });
+
+    it("upgrades an Approved default to exclude re-requested reviewers", () => {
+        const layout = normalizeSectionLayout([
+            {
+                id: "approved",
+                filter: {
+                    cases: [
+                        {
+                            id: "case_old",
+                            name: "My PR approved",
+                            conditions: [
+                                { id: "c1", field: "author", op: "is", value: "@me" },
+                                { id: "c2", field: "state", op: "is", value: "open" },
+                                { id: "c3", field: "isDraft", op: "is", value: false },
+                                { id: "c4", field: "reviewDecision", op: "is", value: "approved" },
+                            ],
+                        },
+                    ],
+                },
+            },
+        ]);
+        const approved = layout.find((entry) => entry.id === "approved");
+        expect(
+            approved?.filter.cases[0]?.conditions.some(
+                (condition) =>
+                    condition.field === "involvement" && condition.op === "is" && condition.value === "my-approved",
             ),
         ).toBe(true);
     });

@@ -116,8 +116,11 @@ export function involvementFor(pullRequest: PullRequestSummary, viewerLogin: str
         if (pullRequest.isDraft) {
             return "my-draft";
         }
+        if (pullRequest.reviewRequests.length > 0) {
+            return "my-waiting-for-reviewers";
+        }
         if (pullRequest.reviewDecision === "changes-requested") {
-            return pullRequest.reviewRequests.length > 0 ? "my-waiting-for-reviewers" : "my-changes-requested";
+            return "my-changes-requested";
         }
         if (pullRequest.reviewDecision === "approved") {
             return "my-approved";
@@ -375,6 +378,7 @@ export function defaultFilterForPreset(id: string): SectionFilter {
                 condition("state", "is", "open"),
                 condition("isDraft", "is", false),
                 condition("reviewDecision", "is", "approved"),
+                condition("involvement", "is", "my-approved"),
             ]);
         case "drafts":
             return singleCaseFilter("My drafts", [

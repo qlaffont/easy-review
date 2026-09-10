@@ -19,7 +19,7 @@ Single-context glossary for product behavior. ADRs live under `docs/adr/` when w
 | **Expanded section** | Section the user opened on the board; drives keyboard selection and background-notification scope. |
 | **Needs your review** | Open, non-draft PR where the viewer is in `reviewRequests`, including after a re-request while a prior approve/changes-requested review still exists. |
 | **Returned to you** | Author’s PR with `reviewDecision: changes-requested` and no outstanding re-review requests (`involvement: my-changes-requested`). |
-| **Waiting for reviewers (me)** | Author’s PR still blocked on review but at least one reviewer is back in `reviewRequests` after a re-request (`involvement: my-waiting-for-reviewers`). |
+| **Waiting for reviewers (me)** | Author’s PR with at least one outstanding reviewer in `reviewRequests`, including after a re-request (`involvement: my-waiting-for-reviewers`). |
 | **Display review state** | UI state for a reviewer row: if their login is in `reviewRequests`, show **pending** even when an older submitted review exists. |
 | **Open in Easy Review** | Inbox preference (`openInEasyReview`): when off (default), row click opens GitHub in a new tab; when on, opens `/pr/...` in-app. |
 

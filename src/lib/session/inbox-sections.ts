@@ -428,6 +428,18 @@ function migratePresetFilter(id: InboxSectionId, filter: SectionFilter): Section
         return defaultFilterForPreset("waiting-for-reviewers-me");
     }
 
+    if (id === "approved") {
+        if (filter.cases.length !== 1) {
+            return filter;
+        }
+        const fingerprints = new Set(filter.cases[0]!.conditions.map(conditionFingerprint));
+        const legacy = new Set(["author|is|@me", "state|is|open", "isDraft|is|false", "reviewDecision|is|approved"]);
+        if (fingerprints.size !== legacy.size || [...legacy].some((entry) => !fingerprints.has(entry))) {
+            return filter;
+        }
+        return defaultFilterForPreset("approved");
+    }
+
     if (id === "waiting-for-author") {
         if (filter.cases.length !== 1) {
             return filter;
