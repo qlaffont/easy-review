@@ -352,6 +352,7 @@ function ReviewersSection({
                             }
                             reviewer={reviewer}
                             displayState={displayReviewState(reviewer.login, visibleReviewers, visibleReviewRequests)}
+                            reRequested={requested.has(reviewer.login)}
                             canEdit={canEdit}
                             busy={busy}
                             onReRequest={() => void reRequest(reviewer.login)}
@@ -391,6 +392,7 @@ function ReviewerRow({
     user,
     reviewer,
     displayState,
+    reRequested,
     canEdit,
     busy,
     onReRequest,
@@ -399,6 +401,7 @@ function ReviewerRow({
     user: RepositoryUser;
     reviewer: ReviewerStatus;
     displayState: ReviewState;
+    reRequested: boolean;
     canEdit: boolean;
     busy: boolean;
     onReRequest: () => void;
@@ -430,12 +433,15 @@ function ReviewerRow({
     return (
         <li className="group flex items-center gap-2 rounded-md py-0.5">
             <UserChip user={user} />
-            <HelpTooltip label={meta.label}>
+            <HelpTooltip label={reRequested ? "Review re-requested" : meta.label}>
                 <span
-                    className={cn("ml-auto inline-flex shrink-0 items-center", meta.className)}
-                    aria-label={meta.label}
+                    className={cn(
+                        "ml-auto inline-flex shrink-0 items-center",
+                        reRequested ? "text-muted-foreground" : meta.className,
+                    )}
+                    aria-label={reRequested ? "Review re-requested" : meta.label}
                 >
-                    {meta.icon}
+                    {reRequested ? <RefreshCw className="size-3.5" aria-hidden="true" /> : meta.icon}
                 </span>
             </HelpTooltip>
             {canEdit ? (
