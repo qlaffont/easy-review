@@ -17,6 +17,25 @@ function shortOid(oid: string): string {
     return oid.slice(0, 7);
 }
 
+/** The diff introduced by one commit is its first parent…the commit itself. */
+export function commitRangeForCommit(
+    commitOid: string,
+    commits: ReadonlyArray<PullRequestCommit>,
+    baseSha: string,
+): CommitRangeValue {
+    const index = commits.findIndex((commit) => commit.oid === commitOid);
+    if (index === -1) {
+        return { mode: "all" };
+    }
+
+    const baseOid = index === 0 ? baseSha : commits[index - 1]!.oid;
+    if (!baseOid) {
+        return { mode: "all" };
+    }
+
+    return { mode: "range", baseOid, headOid: commitOid };
+}
+
 /**
  * Resolve From/To radio values into a compare range.
  * `from` is exclusive (git A in A...B); `to` is inclusive.

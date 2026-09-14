@@ -4,6 +4,7 @@ import type { PullRequestCommit } from "#/lib/session/types.ts";
 
 import {
     COMMIT_RANGE_BASE_VALUE,
+    commitRangeForCommit,
     commitRangeTriggerLabel,
     commitRangeTriggerTooltip,
     rangeFromSelectValues,
@@ -39,6 +40,14 @@ describe("commit range picker", () => {
 
     it("isolates a middle commit as parent…commit", () => {
         expect(rangeFromSelectValues("aaa1111", "bbb2222", commits, baseSha)).toEqual({
+            mode: "range",
+            baseOid: "aaa1111",
+            headOid: "bbb2222",
+        });
+    });
+
+    it("maps a clicked commit to its parent…commit range", () => {
+        expect(commitRangeForCommit("bbb2222", commits, baseSha)).toEqual({
             mode: "range",
             baseOid: "aaa1111",
             headOid: "bbb2222",

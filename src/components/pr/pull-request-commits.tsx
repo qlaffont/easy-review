@@ -1,11 +1,22 @@
 import { GitCommitHorizontal } from "lucide-react";
 
 import { CheckStateIcon } from "#/components/pr/commit-checks-menu.tsx";
+import { commitRangeForCommit, type CommitRangeValue } from "#/components/pr/commit-range-picker.tsx";
 import { RelativeTime } from "#/components/ui/relative-time.tsx";
 import { Skeleton } from "#/components/ui/skeleton.tsx";
 import { usePullRequestCommitsQuery } from "#/lib/query/pull-request.ts";
 
-export function PullRequestCommits({ repository, number }: { repository: string; number: number }) {
+export function PullRequestCommits({
+    repository,
+    number,
+    baseSha,
+    onSelectCommit,
+}: {
+    repository: string;
+    number: number;
+    baseSha: string;
+    onSelectCommit: (range: CommitRangeValue) => void;
+}) {
     const commits = usePullRequestCommitsQuery(repository, number);
 
     return (
@@ -51,35 +62,38 @@ export function PullRequestCommits({ repository, number }: { repository: string;
                 <ol className="flex flex-col divide-y">
                     {commits.items.map((commit) => (
                         <li key={commit.oid} className="flex min-w-0 items-start gap-3 px-3 py-2.5">
-                            {commit.authorAvatarUrl ||
-                            (/^[\w-]+$/.test(commit.authorLogin) && commit.authorLogin !== "ghost") ? (
-                                <img
-                                    src={
-                                        commit.authorAvatarUrl ?? `https://github.com/${commit.authorLogin}.png?size=48`
-                                    }
-                                    alt=""
-                                    className="mt-0.5 size-6 shrink-0 rounded-full"
-                                />
-                            ) : (
-                                <span className="mt-0.5 inline-flex size-6 shrink-0 items-center justify-center rounded-full bg-muted text-[10px] font-semibold uppercase">
-                                    {commit.authorLogin.slice(0, 1)}
+                            <button
+                                type="button"
+                                className="flex min-w-0 flex-1 cursor-pointer items-start gap-3 rounded-sm text-left outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                                aria-label={`Show changes from commit ${commit.abbreviatedOid}: ${commit.messageHeadline}`}
+                                onClick={() => onSelectCommit(commitRangeForCommit(commit.oid, commits.items, baseSha))}
+                            >
+                                {commit.authorAvatarUrl ||
+                                (/^[\w-]+$/.test(commit.authorLogin) && commit.authorLogin !== "ghost") ? (
+                                    <img
+                                        src={
+                                            commit.authorAvatarUrl ??
+                                            `https://github.com/${commit.authorLogin}.png?size=48`
+                                        }
+                                        alt=""
+                                        className="mt-0.5 size-6 shrink-0 rounded-full"
+                                    />
+                                ) : (
+                                    <span className="mt-0.5 inline-flex size-6 shrink-0 items-center justify-center rounded-full bg-muted text-[10px] font-semibold uppercase">
+                                        {commit.authorLogin.slice(0, 1)}
+                                    </span>
+                                )}
+                                <span className="min-w-0 flex-1">
+                                    <span className="block truncate text-sm font-medium hover:underline">
+                                        {commit.messageHeadline}
+                                    </span>
+                                    <span className="mt-0.5 flex flex-wrap items-center gap-x-1.5 text-xs text-muted-foreground">
+                                        <span className="font-medium text-foreground">{commit.authorLogin}</span>
+                                        <span>committed</span>
+                                        <RelativeTime iso={commit.committedAt} />
+                                    </span>
                                 </span>
-                            )}
-                            <div className="min-w-0 flex-1">
-                                <a
-                                    href={commit.url}
-                                    target="_blank"
-                                    rel="noreferrer"
-                                    className="block truncate text-sm font-medium hover:underline"
-                                >
-                                    {commit.messageHeadline}
-                                </a>
-                                <p className="mt-0.5 flex flex-wrap items-center gap-x-1.5 text-xs text-muted-foreground">
-                                    <span className="font-medium text-foreground">{commit.authorLogin}</span>
-                                    <span>committed</span>
-                                    <RelativeTime iso={commit.committedAt} />
-                                </p>
-                            </div>
+                            </button>
                             <div className="flex shrink-0 items-center gap-2 pt-0.5">
                                 <CheckStateIcon state={commit.checkState} className="size-3.5" />
                                 <a

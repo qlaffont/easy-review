@@ -22,6 +22,7 @@ import {
 } from "lucide-react";
 import { useRef, useState, useEffect, lazy, Suspense, type ReactNode } from "react";
 
+import type { CommitRangeValue } from "#/components/pr/commit-range-picker.tsx";
 import type { PullRequestPage } from "#/lib/session/session.ts";
 import type { PullRequestDetail, PullRequestSummary } from "#/lib/session/types.ts";
 
@@ -129,6 +130,10 @@ export function PullRequestOverview({
     const [activeTab, setActiveTab] = useState<OverviewTab>(() =>
         typeof window === "undefined" ? "conversation" : tabFromHash(window.location.hash),
     );
+    const [filesActive, setFilesActive] = useState(
+        () => typeof window !== "undefined" && window.location.hash === "#review",
+    );
+    const [commitRange, setCommitRange] = useState<CommitRangeValue>({ mode: "all" });
     useSetActionTarget(headline ? targetFromSummary(headline) : null);
     useSetPullRequestDetail(page.detail);
 
@@ -166,15 +171,18 @@ export function PullRequestOverview({
         const hash = window.location.hash;
         if (hash === "#conversation" || hash === "#commits") {
             setActiveTab(tabFromHash(hash));
+            setFilesActive(false);
             return;
         }
         if (hash === "#review" || initialPath) {
+            setFilesActive(true);
             requestAnimationFrame(() => scrollToSection("review"));
         }
     }, [initialPath, headline?.key]);
 
     function selectTab(tab: OverviewTab) {
         setActiveTab(tab);
+        setFilesActive(false);
         if (window.location.hash !== `#${tab}`) {
             history.replaceState(null, "", `#${tab}`);
         }
@@ -182,6 +190,18 @@ export function PullRequestOverview({
             // Commits query loads when PullRequestCommits mounts.
         }
     }
+
+    function showFilesChanged(range?: CommitRangeValue) {
+        if (range) {
+            setCommitRange(range);
+        }
+        setFilesActive(true);
+        scrollToSection("review");
+    }
+
+    useEffect(() => {
+        setCommitRange({ mode: "all" });
+    }, [repository, number]);
 
     useEffect(() => {
         const node = headerSentinelRef.current;
@@ -212,7 +232,14 @@ export function PullRequestOverview({
                     <PullRequestHeader page={page} headline={headline} onRefresh={page.refresh} />
                 </div>
 
-                <PullRequestTabNav headline={headline} detail={page.detail} active={activeTab} onSelect={selectTab} />
+                <PullRequestTabNav
+                    headline={headline}
+                    detail={page.detail}
+                    active={activeTab}
+                    filesActive={filesActive}
+                    onSelect={selectTab}
+                    onSelectFiles={() => showFilesChanged()}
+                />
 
                 {page.error ? <p className="text-sm text-destructive">{page.error.message}</p> : null}
 
@@ -252,12 +279,23 @@ export function PullRequestOverview({
 
                 {activeTab === "commits" ? (
                     <Suspense fallback={<FileListLoadingSkeleton />}>
-                        <PullRequestCommits repository={repository} number={number} />
+                        <PullRequestCommits
+                            repository={repository}
+                            number={number}
+                            baseSha={page.detail?.baseSha ?? ""}
+                            onSelectCommit={showFilesChanged}
+                        />
                     </Suspense>
                 ) : null}
 
                 <Suspense fallback={<FileListLoadingSkeleton />}>
-                    <ReviewChanges repository={repository} number={number} initialPath={initialPath} />
+                    <ReviewChanges
+                        repository={repository}
+                        number={number}
+                        initialPath={initialPath}
+                        commitRange={commitRange}
+                        onCommitRangeChange={setCommitRange}
+                    />
                 </Suspense>
             </div>
             <SuggestionBatchBar repository={repository} number={number} />
@@ -297,27 +335,19 @@ function PullRequestTabNav({
     headline,
     detail,
     active,
+    filesActive,
     onSelect,
+    onSelectFiles,
 }: {
     headline: Headline;
     detail: PullRequestDetail | null;
     active: OverviewTab;
+    filesActive: boolean;
     onSelect: (tab: OverviewTab) => void;
+    onSelectFiles: () => void;
 }) {
     const checksCount = detail?.checkCount ?? null;
     const commitsCount = detail?.commitCount ?? null;
-    const [filesActive, setFilesActive] = useState(
-        () => typeof window !== "undefined" && window.location.hash === "#review",
-    );
-
-    useEffect(() => {
-        function syncFromHash() {
-            setFilesActive(window.location.hash === "#review");
-        }
-        window.addEventListener("hashchange", syncFromHash);
-        return () => window.removeEventListener("hashchange", syncFromHash);
-    }, []);
-
     return (
         <nav
             aria-label="Pull request sections"
@@ -329,20 +359,14 @@ function PullRequestTabNav({
                     icon={<MessageSquare className="size-3.5" aria-hidden="true" />}
                     label="Conversation"
                     count={headline.commentCount}
-                    onClick={() => {
-                        setFilesActive(false);
-                        onSelect("conversation");
-                    }}
+                    onClick={() => onSelect("conversation")}
                 />
                 <OverviewTabButton
                     active={active === "commits" && !filesActive}
                     icon={<GitCommitHorizontal className="size-3.5" aria-hidden="true" />}
                     label="Commits"
                     count={commitsCount}
-                    onClick={() => {
-                        setFilesActive(false);
-                        onSelect("commits");
-                    }}
+                    onClick={() => onSelect("commits")}
                 />
                 <OverviewTabButton
                     active={false}
@@ -358,10 +382,7 @@ function PullRequestTabNav({
                     icon={<FileDiff className="size-3.5" aria-hidden="true" />}
                     label="Files changed"
                     count={headline.changedFiles}
-                    onClick={() => {
-                        setFilesActive(true);
-                        scrollToSection("review");
-                    }}
+                    onClick={onSelectFiles}
                 />
             </div>
             <div className="flex shrink-0 items-center gap-2 pb-2 text-xs tabular-nums">

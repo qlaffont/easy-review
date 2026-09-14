@@ -72,10 +72,14 @@ export function ReviewChanges({
     repository,
     number,
     initialPath,
+    commitRange,
+    onCommitRangeChange,
 }: {
     repository: string;
     number: number;
     initialPath?: string;
+    commitRange: CommitRangeValue;
+    onCommitRangeChange: (range: CommitRangeValue) => void;
 }) {
     const session = useSession();
     const page = usePullRequestPage(repository, number);
@@ -94,7 +98,6 @@ export function ReviewChanges({
     const [viewedMarks, setViewedMarks] = useState<ViewedFileMarks>(() => ({}));
     const [resizingFileList, setResizingFileList] = useState(false);
     const fileListWidth = preferences.fileListWidth;
-    const [commitRange, setCommitRange] = useState<CommitRangeValue>({ mode: "all" });
     const [confirmedLargePaths, setConfirmedLargePaths] = useState<Set<string>>(() => new Set());
     const [rangeFiles, setRangeFiles] = useState<Array<PullRequestFile> | null>(null);
     const [rangeFilesStatus, setRangeFilesStatus] = useState<"idle" | "loading" | "ready" | "error">("idle");
@@ -421,7 +424,7 @@ export function ReviewChanges({
                             baseSha={baseSha}
                             range={commitRange}
                             disabled={commits.status !== "ready"}
-                            onChange={setCommitRange}
+                            onChange={onCommitRangeChange}
                         />
                         {selectionDiffStats ? (
                             <span
@@ -507,7 +510,7 @@ export function ReviewChanges({
                                 disabled={isolatingRange ? rangeFilesStatus === "loading" : files.refreshing}
                                 onClick={() => {
                                     if (commitRange.mode === "range") {
-                                        setCommitRange({ ...commitRange });
+                                        onCommitRangeChange({ ...commitRange });
                                         return;
                                     }
                                     void notifyAction(() => refreshFiles(), {
