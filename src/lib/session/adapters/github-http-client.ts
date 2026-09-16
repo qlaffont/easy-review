@@ -45,7 +45,7 @@ import {
 import { rewriteUserAttachmentsFromHtml } from "#/lib/rewrite-user-attachments.ts";
 import { applySuggestionsToFile, type SuggestionChange } from "#/lib/session/apply-suggestion.ts";
 import { buildFileDiff } from "#/lib/session/build-file-diff.ts";
-import { mapCheckRuns, type CheckContextInput } from "#/lib/session/check-runs.ts";
+import { latestCheckState, mapCheckRuns, type CheckContextInput } from "#/lib/session/check-runs.ts";
 import { HUGE_FILE_BYTES, stubForPath } from "#/lib/session/diff-policy.ts";
 import { EasyReviewError } from "#/lib/session/errors.ts";
 import {
@@ -4076,7 +4076,10 @@ function toTimelineItem(node: TimelineNode): PullRequestTimelineItem | null {
                 oid: commit.oid,
                 abbreviatedOid: commit.abbreviatedOid,
                 url: commit.url,
-                checkState: toCheckState(commit.statusCheckRollup?.state),
+                checkState: latestCheckState(
+                    commit.statusCheckRollup?.contexts?.nodes ?? [],
+                    toCheckState(commit.statusCheckRollup?.state),
+                ),
                 checkRuns: mapCheckRuns(commit.statusCheckRollup?.contexts?.nodes ?? []),
                 signature: toCommitSignature(commit.signature),
             };
@@ -4507,6 +4510,10 @@ function toPullRequestDetail(node: PullRequestDetailNode, settings: RepositoryMe
         baseSha: node.baseRefOid,
         labels: node.labels?.nodes ?? [],
         assignees: node.assignees.nodes.map((assignee) => assignee.login),
+        checks: latestCheckState(
+            headCommit?.statusCheckRollup?.contexts.nodes ?? [],
+            toCheckState(headCommit?.statusCheckRollup?.state),
+        ),
         checkRuns: mapCheckRuns(headCommit?.statusCheckRollup?.contexts.nodes ?? []),
         checkCount: toCheckCount(headCommit),
         requiredApprovingReviewCount: toRequiredApprovingReviewCount(node),

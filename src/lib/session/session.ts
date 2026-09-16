@@ -2766,12 +2766,24 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
         const key = pullRequestKey(repository, number);
         const conversation = state.state.conversationComments[key];
         const threads = state.state.reviewThreads[key];
+        const conversationQueryKey = queryKeys.pullRequest.conversation(key);
+        const threadsQueryKey = queryKeys.pullRequest.threads(key);
+        const conversationWasLoaded =
+            (conversation && conversation.status !== "idle") || queryClient.getQueryData(conversationQueryKey) != null;
+        const threadsWereLoaded =
+            (threads && threads.status !== "idle") || queryClient.getQueryData(threadsQueryKey) != null;
 
         await Promise.all([
-            conversation && conversation.status !== "idle"
-                ? loadConversationComments(repository, number)
+            conversationWasLoaded
+                ? queryClient
+                      .invalidateQueries({ queryKey: conversationQueryKey, refetchType: "none" })
+                      .then(() => loadConversationComments(repository, number))
                 : Promise.resolve(),
-            threads && threads.status !== "idle" ? loadReviewThreads(repository, number) : Promise.resolve(),
+            threadsWereLoaded
+                ? queryClient
+                      .invalidateQueries({ queryKey: threadsQueryKey, refetchType: "none" })
+                      .then(() => loadReviewThreads(repository, number))
+                : Promise.resolve(),
         ]);
     }
 

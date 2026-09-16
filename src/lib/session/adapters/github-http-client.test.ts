@@ -36,7 +36,86 @@ function pullRequestNode(repository: string, number: number) {
     };
 }
 
+function checkRun(name: string, startedAt: string, conclusion: "CANCELLED" | "SUCCESS") {
+    return {
+        __typename: "CheckRun",
+        name,
+        status: "COMPLETED",
+        conclusion,
+        detailsUrl: `https://github.com/acme/api/actions/jobs/${name}-${startedAt}`,
+        startedAt,
+        completedAt: startedAt,
+        checkSuite: {
+            workflowRun: {
+                event: "pull_request",
+                workflow: { name: "Pull Request CI" },
+            },
+        },
+    };
+}
+
 describe("getPullRequest", () => {
+    it("ignores superseded cancelled check runs when the latest attempts passed", async () => {
+        const github = createGithubHttpClient(
+            respondWith({
+                data: {
+                    repository: {
+                        mergeCommitAllowed: true,
+                        squashMergeAllowed: true,
+                        rebaseMergeAllowed: true,
+                        viewerDefaultMergeMethod: "SQUASH",
+                        pullRequest: {
+                            ...pullRequestNode("acme/api", 429),
+                            body: "",
+                            reactionGroups: [],
+                            baseRefOid: "base",
+                            headRefOid: "head",
+                            mergeStateStatus: "BEHIND",
+                            viewerCanMergeAsAdmin: false,
+                            viewerCanUpdateBranch: false,
+                            mergeable: "MERGEABLE",
+                            baseRef: {
+                                branchProtectionRule: {
+                                    requiresApprovingReviews: true,
+                                    requiredApprovingReviewCount: 1,
+                                },
+                            },
+                            commits: {
+                                totalCount: 1,
+                                nodes: [
+                                    {
+                                        commit: {
+                                            oid: "head",
+                                            statusCheckRollup: {
+                                                // GitHub keeps the superseded cancellation in this aggregate.
+                                                state: "FAILURE",
+                                                contexts: {
+                                                    totalCount: 4,
+                                                    nodes: [
+                                                        checkRun("lint", "2026-09-16T08:01:23Z", "CANCELLED"),
+                                                        checkRun("lint", "2026-09-16T08:02:49Z", "SUCCESS"),
+                                                        checkRun("test", "2026-09-16T08:01:23Z", "CANCELLED"),
+                                                        checkRun("test", "2026-09-16T08:02:49Z", "SUCCESS"),
+                                                    ],
+                                                },
+                                            },
+                                        },
+                                    },
+                                ],
+                            },
+                        },
+                    },
+                },
+            }),
+        );
+
+        const detail = await github.getPullRequest("token", "acme/api", 429);
+
+        expect(detail.checks).toBe("success");
+        expect(detail.checkRuns).toHaveLength(2);
+        expect(detail.checkRuns.every((run) => run.state === "success")).toBe(true);
+    });
+
     it("keeps the pull request when CheckRun contexts are forbidden", async () => {
         const github = createGithubHttpClient(
             respondWith({
@@ -561,6 +640,57 @@ describe("getPullRequest", () => {
 
         expect(detail.requiredApprovingReviewCount).toBe(1);
         expect(detail.reviewDecision).toBe("review-required");
+    });
+});
+
+describe("listPullRequestTimeline", () => {
+    it("shows the latest check attempt state on commit timeline items", async () => {
+        const github = createGithubHttpClient(
+            respondWith({
+                data: {
+                    repository: {
+                        pullRequest: {
+                            timelineItems: {
+                                pageInfo: { hasNextPage: false, endCursor: null },
+                                nodes: [
+                                    {
+                                        __typename: "PullRequestCommit",
+                                        id: "commit-event",
+                                        commit: {
+                                            oid: "f32bbd4359c6ceeeac3b5dad27d9370ad3a94e1d",
+                                            abbreviatedOid: "f32bbd4",
+                                            messageHeadline: "fix(patient): handle identity validation failures",
+                                            committedDate: "2026-09-16T08:00:08Z",
+                                            url: "https://github.com/acme/api/commit/f32bbd4",
+                                            author: null,
+                                            signature: null,
+                                            statusCheckRollup: {
+                                                state: "FAILURE",
+                                                contexts: {
+                                                    nodes: [
+                                                        checkRun("test", "2026-09-16T08:01:23Z", "CANCELLED"),
+                                                        checkRun("test", "2026-09-16T08:02:49Z", "SUCCESS"),
+                                                    ],
+                                                },
+                                            },
+                                        },
+                                    },
+                                ],
+                            },
+                        },
+                    },
+                },
+            }),
+        );
+
+        const [item] = await github.listPullRequestTimeline("token", "acme/api", 429);
+
+        expect(item).toMatchObject({ kind: "commit", checkState: "success" });
+        if (item?.kind !== "commit") {
+            throw new Error("Expected a commit timeline item");
+        }
+        expect(item.checkRuns).toHaveLength(1);
+        expect(item.checkRuns[0]?.state).toBe("success");
     });
 });
 

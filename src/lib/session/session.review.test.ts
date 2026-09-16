@@ -376,6 +376,24 @@ describe("staged review drafts", () => {
 });
 
 describe("thread replies", () => {
+    it("refreshes threads loaded through the query cache", async () => {
+        const session = await connectedWithPr();
+        const key = pullRequestKey("acme/api", 1);
+        await session.queryClient.fetchQuery({
+            queryKey: queryKeys.pullRequest.threads(key),
+            queryFn: async () => ({ items: await github.listReviewThreads(TOKEN, "acme/api", 1) }),
+        });
+
+        expect(session.getReviewThreads("acme/api", 1).items[0]?.isResolved).toBe(false);
+        expect(github.calls.filter((call) => call === "listReviewThreads")).toHaveLength(1);
+
+        await github.setReviewThreadResolved(TOKEN, "thread-1", true);
+        await session.refreshPullRequest("acme/api", 1);
+
+        expect(github.calls.filter((call) => call === "listReviewThreads")).toHaveLength(2);
+        expect(session.getReviewThreads("acme/api", 1).items[0]?.isResolved).toBe(true);
+    });
+
     it("loads existing threads and appends a reply", async () => {
         const session = await connectedWithPr();
         await session.loadReviewThreads("acme/api", 1);

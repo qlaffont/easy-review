@@ -189,6 +189,32 @@ export function toCheckRun(context: CheckContextInput): CheckRun {
     };
 }
 
+/**
+ * Match GitHub's checks popover: superseded attempts do not keep a commit red.
+ * Fall back to the aggregate when GitHub redacts any context, since the visible
+ * subset is then insufficient to derive a trustworthy state.
+ */
+export function latestCheckState(
+    nodes: ReadonlyArray<CheckContextInput | null | undefined>,
+    aggregateState: CheckState,
+): CheckState {
+    if (nodes.length === 0 || nodes.some((node) => node == null)) {
+        return aggregateState;
+    }
+
+    const states = selectLatestCheckContexts(nodes).map((context) => toCheckRun(context).state);
+    if (states.includes("failure")) {
+        return "failure";
+    }
+    if (states.includes("pending")) {
+        return "pending";
+    }
+    if (states.includes("success")) {
+        return "success";
+    }
+    return aggregateState;
+}
+
 /** Map rollup contexts the way the PR checks popover should list them. */
 export function mapCheckRuns(nodes: ReadonlyArray<CheckContextInput | null | undefined>): Array<CheckRun> {
     return selectLatestCheckContexts(nodes).map(toCheckRun);

@@ -54,7 +54,7 @@ export function revalidateInboxInBackground(
     void queryClient.invalidateQueries({ queryKey: inboxSectionQueryPrefix(login), refetchType: "active" });
 }
 
-/** Manual PR refresh — detail + files (+ drop cached diffs). Awaits network completion. */
+/** Manual PR refresh — refetch every visible PR resource and drop inactive cached diffs. */
 export async function invalidatePullRequestForManualRefresh(
     queryClient: QueryClient,
     repository: string,
@@ -62,10 +62,7 @@ export async function invalidatePullRequestForManualRefresh(
 ): Promise<void> {
     const key = pullRequestKey(repository, number);
     queryClient.removeQueries({ queryKey: ["pullRequest", key, "diff"] });
-    await Promise.all([
-        queryClient.invalidateQueries({ queryKey: queryKeys.pullRequest.detail(key), refetchType: "active" }),
-        queryClient.invalidateQueries({ queryKey: queryKeys.pullRequest.files(key), refetchType: "active" }),
-    ]);
+    await queryClient.invalidateQueries({ queryKey: ["pullRequest", key], refetchType: "active" });
 }
 
 /** CI check poll — detail only (cheap vs files/threads/conversation). */
