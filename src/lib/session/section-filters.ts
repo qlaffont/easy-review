@@ -23,6 +23,7 @@ export const SECTION_FILTER_FIELDS = [
     "state",
     "isDraft",
     "reviewDecision",
+    "hasApproval",
     "reviewRequests",
     "viewerReviewState",
     "checks",
@@ -203,6 +204,15 @@ function matchCondition(
             const expected = raw as ReviewDecision;
             if (op === "is") return pullRequest.reviewDecision === expected;
             if (op === "is_not") return pullRequest.reviewDecision !== expected;
+            return false;
+        }
+        case "hasApproval": {
+            const actual =
+                pullRequest.reviewDecision === "approved" ||
+                pullRequest.reviewers.some((reviewer) => reviewer.state === "approved");
+            const expected = value === true || value === "true";
+            if (op === "is") return actual === expected;
+            if (op === "is_not") return actual !== expected;
             return false;
         }
         case "reviewRequests": {
@@ -427,6 +437,7 @@ export type SectionRecipeId =
     | "waiting-for-reviewers-me"
     | "waiting-for-reviewers"
     | "approved"
+    | "has-approval"
     | "drafts"
     | "merging-and-recently-merged"
     | "waiting-for-author"
@@ -488,6 +499,18 @@ export const SECTION_RECIPES: ReadonlyArray<SectionRecipe> = [
         suggestedLabel: "Approved",
         color: "emerald",
         icon: "check",
+    },
+    {
+        id: "has-approval",
+        label: "At least one approval",
+        description: "Any open PR with an approval, even if more reviews are needed.",
+        filter: singleCaseFilter("Open PR with an approval", [
+            condition("state", "is", "open"),
+            condition("hasApproval", "is", true),
+        ]),
+        suggestedLabel: "At least one approval",
+        color: "emerald",
+        icon: "thumbs-up",
     },
     {
         id: "drafts",
@@ -559,6 +582,7 @@ const FIELD_LABELS: Record<SectionFilterField, string> = {
     state: "PR status",
     isDraft: "Draft",
     reviewDecision: "Review decision",
+    hasApproval: "Has approval",
     reviewRequests: "Requested reviewers",
     viewerReviewState: "My review",
     checks: "Checks",
@@ -588,7 +612,7 @@ const OP_LABELS: Record<SectionFilterOp, string> = {
 };
 
 function formatConditionValue(condition: SectionFilterCondition): string {
-    if (condition.field === "isDraft") {
+    if (condition.field === "isDraft" || condition.field === "hasApproval") {
         return condition.value === true || condition.value === "true" ? "yes" : "no";
     }
     if (condition.value === VIEWER_PERSON) {
@@ -728,6 +752,8 @@ export function defaultValueForField(field: SectionFilterField): string | number
             return "open";
         case "isDraft":
             return false;
+        case "hasApproval":
+            return true;
         case "reviewDecision":
             return "approved";
         case "viewerReviewState":
@@ -783,6 +809,9 @@ function conditionToSearchToken(condition: SectionFilterCondition, viewerLogin: 
             if (op === "is" && value === "open") return "is:open";
             if (op === "is" && value === "merged") return "is:merged";
             if (op === "is" && value === "closed") return "is:closed";
+            return null;
+        case "hasApproval":
+            if (op === "is" && (value === true || value === "true")) return "review:approved";
             return null;
         case "isDraft":
             if (op === "is" && value === true) return "draft:true";
@@ -957,7 +986,11 @@ export function matchesSectionSearchCountQuery(
         }
 
         if (token === "review:approved") {
-            if (pullRequest.reviewDecision !== "approved") return false;
+            if (
+                pullRequest.reviewDecision !== "approved" &&
+                !pullRequest.reviewers.some((reviewer) => reviewer.state === "approved")
+            )
+                return false;
             continue;
         }
         if (token === "review:changes_requested") {

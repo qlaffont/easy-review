@@ -10,7 +10,12 @@ import {
     parseInboxSettings,
     visibleSectionDefinitions,
 } from "#/lib/session/inbox-sections.ts";
-import { defaultFilterForPreset, matchSectionFilter } from "#/lib/session/section-filters.ts";
+import {
+    defaultFilterForPreset,
+    matchSectionFilter,
+    recipeById,
+    sectionFilterToSearchQuery,
+} from "#/lib/session/section-filters.ts";
 
 const VIEWER = "quentin";
 
@@ -47,6 +52,26 @@ function pullRequest(overrides: Partial<PullRequestSummary> = {}): PullRequestSu
 }
 
 describe("default section filters", () => {
+    it("offers a section for any open PR with at least one active approval", () => {
+        const filter = recipeById("has-approval")!.filter;
+        const approved = pullRequest({
+            reviewDecision: "review-required",
+            reviewers: [{ login: "reviewer", state: "approved", reviewId: 1 }],
+        });
+
+        expect(sectionFilterToSearchQuery(filter, VIEWER)).toBe("is:pr is:open review:approved");
+        expect(matchSectionFilter(approved, filter, VIEWER)).toBe(true);
+        expect(matchSectionFilter({ ...approved, state: "merged" }, filter, VIEWER)).toBe(false);
+        expect(matchSectionFilter({ ...approved, state: "closed" }, filter, VIEWER)).toBe(false);
+        expect(
+            matchSectionFilter(
+                { ...approved, reviewers: [{ login: "reviewer", state: "dismissed", reviewId: 1 }] },
+                filter,
+                VIEWER,
+            ),
+        ).toBe(false);
+    });
+
     it("puts a review requested from you in Needs your review", () => {
         const subject = pullRequest({ reviewRequests: [VIEWER] });
         expect(matchSectionFilter(subject, defaultFilterForPreset("needs-your-review"), VIEWER)).toBe(true);

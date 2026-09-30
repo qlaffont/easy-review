@@ -38,6 +38,7 @@ const FIELD_OPTIONS: Array<{ value: SectionFilterField; label: string }> = [
     { value: "state", label: "PR status" },
     { value: "isDraft", label: "Draft" },
     { value: "reviewDecision", label: "Review decision" },
+    { value: "hasApproval", label: "Has approval" },
     { value: "reviewRequests", label: "Requested reviewers" },
     { value: "viewerReviewState", label: "My review" },
     { value: "checks", label: "Checks" },
@@ -454,7 +455,7 @@ function ConditionValueInput({
     condition: SectionFilterCondition;
     onChange: (patch: Partial<SectionFilterCondition>) => void;
 }) {
-    if (condition.field === "isDraft") {
+    if (condition.field === "isDraft" || condition.field === "hasApproval") {
         const label = condition.value === true || condition.value === "true" ? "yes" : "no";
         return (
             <Select
