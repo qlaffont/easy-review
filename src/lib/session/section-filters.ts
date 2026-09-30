@@ -383,12 +383,11 @@ export function defaultFilterForPreset(id: string): SectionFilter {
                 condition("reviewRequests", "does_not_include", VIEWER_PERSON),
             ]);
         case "approved":
-            return singleCaseFilter("My PR approved", [
+            return singleCaseFilter("My PR with an approval", [
                 condition("author", "is", VIEWER_PERSON),
                 condition("state", "is", "open"),
                 condition("isDraft", "is", false),
-                condition("reviewDecision", "is", "approved"),
-                condition("involvement", "is", "my-approved"),
+                condition("hasApproval", "is", true),
             ]);
         case "drafts":
             return singleCaseFilter("My drafts", [
@@ -494,7 +493,7 @@ export const SECTION_RECIPES: ReadonlyArray<SectionRecipe> = [
     {
         id: "approved",
         label: "Approved",
-        description: "Your open PR that is fully approved.",
+        description: "Your open PR with at least one approval.",
         filter: defaultFilterForPreset("approved"),
         suggestedLabel: "Approved",
         color: "emerald",
