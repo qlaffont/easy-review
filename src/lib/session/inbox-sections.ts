@@ -422,7 +422,18 @@ function migratePresetFilter(id: InboxSectionId, filter: SectionFilter): Section
             "reviewDecision|is_not|changes-requested",
             "reviewDecision|is_not|approved",
         ]);
-        if (fingerprints.size !== legacy.size || [...legacy].some((entry) => !fingerprints.has(entry))) {
+        const current = new Set([
+            "author|is|@me",
+            "state|is|open",
+            "isDraft|is|false",
+            "involvement|is|my-waiting-for-reviewers",
+        ]);
+        if (
+            ![legacy, current].some(
+                (expected) =>
+                    fingerprints.size === expected.size && [...expected].every((entry) => fingerprints.has(entry)),
+            )
+        ) {
             return filter;
         }
         return defaultFilterForPreset("waiting-for-reviewers-me");

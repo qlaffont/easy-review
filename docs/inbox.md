@@ -10,8 +10,8 @@ Notable flows:
 
 - **Needs your review** — an open, non-draft PR currently requested of you, including when the author re-requested you after you already approved or requested changes.
 - **Returned to you** — your open PR has changes requested and nobody is currently asked to re-review.
-- **Waiting for reviewers (me)** — your PR has one or more outstanding review requests, including after you re-request validation from a reviewer who previously approved it or requested changes.
-- **Approved** — your open PR has at least one active approval, even while other reviewers are still requested. It can also appear in **Waiting for reviewers (me)**.
+- **Waiting for reviewers (me)** — your open PR has no active approval and is awaiting review, including after you re-request validation from a reviewer who requested changes.
+- **Approved** — your open PR has at least one active approval, even while other reviewers are still requested.
 - **Waiting for author** — you already reviewed someone else’s PR and there is no outstanding request of you.
 
 ## Opening a pull request

@@ -372,6 +372,7 @@ export function defaultFilterForPreset(id: string): SectionFilter {
                 condition("state", "is", "open"),
                 condition("isDraft", "is", false),
                 condition("involvement", "is", "my-waiting-for-reviewers"),
+                condition("hasApproval", "is", false),
             ]);
         case "waiting-for-reviewers":
             return singleCaseFilter("Others' open PR waiting on review", [

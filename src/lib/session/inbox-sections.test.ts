@@ -154,7 +154,7 @@ describe("default section filters", () => {
         expect(matchSectionFilter(subject, defaultFilterForPreset("approved"), VIEWER)).toBe(true);
     });
 
-    it("keeps your PR in Approved after one approval while more review is required", () => {
+    it("moves your PR from Waiting to Approved after one approval while more review is required", () => {
         const subject = pullRequest({
             author: VIEWER,
             reviewDecision: "review-required",
@@ -163,7 +163,7 @@ describe("default section filters", () => {
         });
 
         expect(matchSectionFilter(subject, defaultFilterForPreset("approved"), VIEWER)).toBe(true);
-        expect(matchSectionFilter(subject, defaultFilterForPreset("waiting-for-reviewers-me"), VIEWER)).toBe(true);
+        expect(matchSectionFilter(subject, defaultFilterForPreset("waiting-for-reviewers-me"), VIEWER)).toBe(false);
     });
 
     it("puts your own pending pull request in Waiting for reviewers (me)", () => {
@@ -371,6 +371,33 @@ describe("default section filters", () => {
                     condition.value === "@me",
             ),
         ).toBe(true);
+    });
+
+    it("upgrades a saved Waiting for reviewers (me) default to exclude approved PRs", () => {
+        const oldFilter = {
+            cases: [
+                {
+                    id: "case_old",
+                    name: "My open PR waiting on review",
+                    conditions: [
+                        { id: "c1", field: "author", op: "is", value: "@me" },
+                        { id: "c2", field: "state", op: "is", value: "open" },
+                        { id: "c3", field: "isDraft", op: "is", value: false },
+                        { id: "c4", field: "involvement", op: "is", value: "my-waiting-for-reviewers" },
+                    ],
+                },
+            ],
+        };
+        const layout = normalizeSectionLayout([{ id: "waiting-for-reviewers-me", filter: oldFilter }]);
+        const waiting = layout.find((entry) => entry.id === "waiting-for-reviewers-me");
+        const approved = pullRequest({
+            author: VIEWER,
+            reviewDecision: "review-required",
+            reviewRequests: ["romainpm"],
+            reviewers: [{ login: "other-reviewer", state: "approved", reviewId: 1 }],
+        });
+
+        expect(matchSectionFilter(approved, waiting!.filter, VIEWER)).toBe(false);
     });
 
     it("upgrades saved Approved defaults to count one approval", () => {
