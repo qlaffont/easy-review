@@ -318,7 +318,7 @@ function StackRowContent({
     mergeStatus: StackMergeRowStatus | null;
 }) {
     const reviewStatus = stackReviewStatus(pullRequest);
-    const showChecks = pullRequest.state === "open" && !pullRequest.isDraft;
+    const showChecks = pullRequest.state === "open";
     const hasConflicts = pullRequestHasMergeConflicts(pullRequest);
     const mergeLabel = mergeStatus ? stackMergeStatusLabel(mergeStatus) : null;
 

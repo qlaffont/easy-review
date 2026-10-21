@@ -26,8 +26,9 @@ type GithubRefreshSession = {
     refreshExpiresAt: number;
 };
 
-let refreshInFlight: Promise<string | null> | null = null;
-let refreshLockKey: string | null = null;
+const refreshInFlight = new Map<string, Promise<GithubOAuthTokens | null>>();
+const recentRefreshes = new Map<string, { tokens: GithubOAuthTokens; expiresAt: number }>();
+const RECENT_REFRESH_MS = 60 * 1000;
 
 function cookieBase() {
     return {
@@ -102,32 +103,36 @@ function refreshSessionExpired(session: GithubRefreshSession): boolean {
 
 async function refreshAccessTokenLocked(session: GithubRefreshSession): Promise<string | null> {
     const lockKey = refreshLockFor(session);
-
-    if (refreshInFlight && refreshLockKey === lockKey) {
-        return refreshInFlight;
+    for (const [key, value] of recentRefreshes) {
+        if (value.expiresAt <= nowMs()) recentRefreshes.delete(key);
+    }
+    const recent = recentRefreshes.get(lockKey);
+    if (recent) {
+        persistGithubOAuthTokens(recent.tokens);
+        return recent.tokens.accessToken;
     }
 
-    refreshLockKey = lockKey;
-    refreshInFlight = (async () => {
-        if (refreshSessionExpired(session)) {
-            clearGithubAuthSession();
-            return null;
-        }
+    if (refreshSessionExpired(session)) {
+        return null;
+    }
 
-        try {
-            const tokens = await refreshGithubAccessToken(session.refreshToken);
-            persistGithubOAuthTokens(tokens);
-            return tokens.accessToken;
-        } catch {
-            clearGithubAuthSession();
-            return null;
-        } finally {
-            refreshInFlight = null;
-            refreshLockKey = null;
-        }
-    })();
+    let pending = refreshInFlight.get(lockKey);
+    if (!pending) {
+        pending = refreshGithubAccessToken(session.refreshToken)
+            .then((tokens) => {
+                recentRefreshes.set(lockKey, { tokens, expiresAt: nowMs() + RECENT_REFRESH_MS });
+                return tokens;
+            })
+            .catch(() => null)
+            .finally(() => refreshInFlight.delete(lockKey));
+        refreshInFlight.set(lockKey, pending);
+    }
 
-    return refreshInFlight;
+    const tokens = await pending;
+    if (tokens) {
+        persistGithubOAuthTokens(tokens);
+    }
+    return tokens?.accessToken ?? null;
 }
 
 /** Store tokens after OAuth callback or refresh. */
@@ -239,12 +244,16 @@ export function clearOAuthReturnToCookie(): void {
 }
 
 export function clearGithubAuthSession(): void {
+    const session = readRefreshSession();
     deleteCookie(LEGACY_ACCESS_COOKIE, cookieBase());
     deleteCookie(REFRESH_SESSION_COOKIE, cookieBase());
     deleteCookie(STATE_COOKIE, cookieBase());
     deleteCookie(RETURN_TO_COOKIE, cookieBase());
-    refreshInFlight = null;
-    refreshLockKey = null;
+    if (session) {
+        const key = refreshLockFor(session);
+        refreshInFlight.delete(key);
+        recentRefreshes.delete(key);
+    }
 }
 
 export { assertGithubOAuthConfigured, redirectTo } from "#/lib/github/auth-redirect.server.ts";
