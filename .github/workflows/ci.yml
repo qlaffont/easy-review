@@ -54,3 +54,18 @@ jobs:
 
       - name: Bundle size
         run: pnpm check:size
+
+  dependabot-automerge:
+    # Runs only once `check` has passed, so a red CI never merges.
+    needs: check
+    if: github.event_name == 'pull_request' && github.event.pull_request.user.login == 'dependabot[bot]' && github.actor == 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Merge Dependabot PR
+        run: gh pr merge --squash "$PR_URL"
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
