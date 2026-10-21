@@ -1,4 +1,4 @@
-import { getResponseHeaders } from "@tanstack/react-start/server";
+import { getResponseHeaders, removeResponseHeader } from "@tanstack/react-start/server";
 
 import { getGithubServerEnv } from "#/lib/github/env.server.ts";
 
@@ -22,7 +22,7 @@ export function redirectTo(location: string): Response {
         headers.append("Set-Cookie", cookie);
     }
 
-    eventHeaders.delete("set-cookie");
+    removeResponseHeader("set-cookie");
 
     return new Response(null, { status: 302, headers });
 }
