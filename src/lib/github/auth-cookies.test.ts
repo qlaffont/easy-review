@@ -111,9 +111,10 @@ describe("auth-cookies refresh session", () => {
     });
 
     it("does not erase newer cookies when a stale refresh attempt fails", async () => {
+        // Distinct refresh token: the previous test leaves `ghr_old` in the module's recent-refresh cache.
         persistGithubOAuthTokens({
             accessToken: "ghu_old",
-            refreshToken: "ghr_old",
+            refreshToken: "ghr_stale",
             expiresIn: 60,
             refreshTokenExpiresIn: 3600,
         });

@@ -2,7 +2,7 @@ import type { MarkdownEditResult } from "#/lib/markdown-edit.ts";
 
 import { insertBlock } from "#/lib/markdown-edit.ts";
 
-/** GitHub web UI limits (images 10 MB, videos 100 MB). */
+/** GitHub web UI limits (images 10 MB, videos 100 MB). */
 export const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 export const MAX_VIDEO_BYTES = 100 * 1024 * 1024;
 
