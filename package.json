@@ -88,7 +88,7 @@
     "@tanstack/router-cli": "^1.167.45",
     "@types/diff": "^8.0.0",
     "@types/mdast": "^4.0.4",
-    "@types/node": "^24.10.2",
+    "@types/node": "^26.6.5",
     "@types/react": "^19.2.0",
     "@types/react-dom": "^19.2.0",
     "@types/unist": "^3.0.3",
