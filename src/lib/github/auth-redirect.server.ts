@@ -1,5 +1,3 @@
-import { getResponseHeaders, removeResponseHeader } from "@tanstack/react-start/server";
-
 import { getGithubServerEnv } from "#/lib/github/env.server.ts";
 
 /** Ensure env is loaded (fails fast if OAuth is misconfigured). */
@@ -8,21 +6,11 @@ export function assertGithubOAuthConfigured(): void {
 }
 
 /**
- * Issue a 302 and attach any pending Set-Cookie headers from `setCookie` above.
+ * Issue a 302. TanStack Start merges cookies from `setCookie` into the returned response.
  *
- * Node marks redirect `Response`s as `ok: false` with immutable headers; TanStack crashes if it
- * tries to merge event cookies into them. Copy cookies onto a fresh Headers map first.
+ * Build the `Response` by hand rather than `Response.redirect()`: the latter has immutable
+ * headers, which Start cannot merge cookies into.
  */
 export function redirectTo(location: string): Response {
-    const eventHeaders = getResponseHeaders();
-    const cookies = typeof eventHeaders.getSetCookie === "function" ? eventHeaders.getSetCookie() : [];
-
-    const headers = new Headers({ Location: location });
-    for (const cookie of cookies) {
-        headers.append("Set-Cookie", cookie);
-    }
-
-    removeResponseHeader("set-cookie");
-
-    return new Response(null, { status: 302, headers });
+    return new Response(null, { status: 302, headers: { Location: location } });
 }
