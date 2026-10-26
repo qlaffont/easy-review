@@ -2477,7 +2477,13 @@ type PullRequestNode = {
             state: string;
         }>;
     };
-    commits?: { nodes: Array<{ commit: { statusCheckRollup: { state: string } | null } }> };
+    commits?: {
+        nodes: Array<{
+            commit: {
+                statusCheckRollup: { state: string; contexts?: { nodes: Array<CheckContextNode> } } | null;
+            };
+        }>;
+    };
     mergeable: "MERGEABLE" | "CONFLICTING" | "UNKNOWN";
     mergeStateStatus?: string;
     labels: { nodes: Array<{ name: string; color: string }> } | null;
@@ -2522,6 +2528,14 @@ function toCheckState(rollup: string | undefined): CheckState {
         default:
             return "none";
     }
+}
+
+/** Prefer latest attempts when contexts were fetched — the bare rollup stays red after a cancelled re-run. */
+function toSummaryCheckState(
+    rollup: { state: string; contexts?: { nodes: Array<CheckContextNode> } } | null | undefined,
+): CheckState {
+    const aggregate = toCheckState(rollup?.state);
+    return rollup?.contexts ? latestCheckState(rollup.contexts.nodes, aggregate) : aggregate;
 }
 
 function toReviewDecision(decision: PullRequestNode["reviewDecision"]): ReviewDecision {
@@ -2591,7 +2605,7 @@ function toPullRequestSummary(node: PullRequestNode): PullRequestSummary {
                     : [],
             ),
         ),
-        checks: toCheckState(node.commits?.nodes[0]?.commit.statusCheckRollup?.state),
+        checks: toSummaryCheckState(node.commits?.nodes[0]?.commit.statusCheckRollup),
         additions: node.additions,
         deletions: node.deletions,
         changedFiles: node.changedFiles,
@@ -2710,7 +2724,7 @@ function buildStackLayersQuery(numbers: ReadonlyArray<number>): string {
             (layerNumber, index) => `
                 layer${index}: pullRequest(number: ${layerNumber}) {
                     ${PULL_REQUEST_SUMMARY_FIELDS}
-                    ${PULL_REQUEST_CHECK_COMMIT}
+                    ${PULL_REQUEST_LATEST_CHECKS_COMMIT}
                 }
             `,
         )
@@ -3076,13 +3090,55 @@ function buildInboxQuery(repositories: ReadonlyArray<string>, options?: ListPull
     `;
 }
 
-/** Rollup state for inbox rows and stack index — one commit is enough. */
+/** Rollup state for inbox rows — one commit is enough. */
 const PULL_REQUEST_CHECK_COMMIT = `
     commits(last: 1) {
         nodes {
             commit {
                 statusCheckRollup {
                     state
+                }
+            }
+        }
+    }
+`;
+
+/**
+ * Rollup plus its contexts, so stack rows can ignore superseded attempts like the Checks tab does.
+ * Kept off the Inbox batch, where per-context nodes would multiply the query cost.
+ */
+const PULL_REQUEST_LATEST_CHECKS_COMMIT = `
+    commits(last: 1) {
+        nodes {
+            commit {
+                statusCheckRollup {
+                    state
+                    contexts(first: 50) {
+                        nodes {
+                            __typename
+                            ... on CheckRun {
+                                name
+                                status
+                                conclusion
+                                detailsUrl
+                                startedAt
+                                completedAt
+                                checkSuite {
+                                    workflowRun {
+                                        event
+                                        workflow {
+                                            name
+                                        }
+                                    }
+                                }
+                            }
+                            ... on StatusContext {
+                                context
+                                state
+                                targetUrl
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -3176,7 +3232,7 @@ const PULL_REQUEST_STACK_DETAIL_FIELDS = `
                 position
                 pullRequest {
                     ${PULL_REQUEST_SUMMARY_FIELDS}
-                    ${PULL_REQUEST_CHECK_COMMIT}
+                    ${PULL_REQUEST_LATEST_CHECKS_COMMIT}
                 }
             }
         }

@@ -274,6 +274,39 @@ describe("getPullRequest", () => {
                                                 title: "Top",
                                                 headRefName: "feat-b",
                                                 baseRefName: "feat-a",
+                                                commits: {
+                                                    nodes: [
+                                                        {
+                                                            commit: {
+                                                                statusCheckRollup: {
+                                                                    state: "FAILURE",
+                                                                    contexts: {
+                                                                        nodes: [
+                                                                            {
+                                                                                __typename: "CheckRun",
+                                                                                name: "build",
+                                                                                status: "COMPLETED",
+                                                                                conclusion: "CANCELLED",
+                                                                                detailsUrl: null,
+                                                                                startedAt: "2026-10-26T14:53:07Z",
+                                                                                completedAt: "2026-10-26T14:54:00Z",
+                                                                            },
+                                                                            {
+                                                                                __typename: "CheckRun",
+                                                                                name: "build",
+                                                                                status: "COMPLETED",
+                                                                                conclusion: "SUCCESS",
+                                                                                detailsUrl: null,
+                                                                                startedAt: "2026-10-26T14:59:50Z",
+                                                                                completedAt: "2026-10-26T15:05:00Z",
+                                                                            },
+                                                                        ],
+                                                                    },
+                                                                },
+                                                            },
+                                                        },
+                                                    ],
+                                                },
                                             },
                                         },
                                     ],
@@ -291,6 +324,8 @@ describe("getPullRequest", () => {
         expect(detail.githubStack).toEqual({ number: 4, size: 2, position: 2, baseRefName: "dev" });
         expect(detail.githubStackPullRequests.map((entry) => entry.number)).toEqual([148, 195]);
         expect(detail.githubStackPullRequests[0]?.title).toBe("Bottom");
+        // A cancelled attempt superseded by a green re-run must not keep the stack row red.
+        expect(detail.githubStackPullRequests[1]?.checks).toBe("success");
     });
 
     it("maps a GitHub stack from entries when stackEntry is omitted", async () => {
