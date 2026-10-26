@@ -172,6 +172,37 @@ This stack of pull requests is managed by Graphite.`;
         expect(mergedTop.state).toBe("merged");
     });
 
+    it("requests every human stack reviewer on the open layers that lack them", async () => {
+        github.setRepositoryTeams(TOKEN, "acme/api", [{ name: "Platform", slug: "platform" }]);
+        github.patchPullRequest(TOKEN, "acme/api", 148, {
+            reviewRequests: ["alex", "Platform"],
+            reviewers: [{ login: "coderabbitai", state: "commented", reviewId: 1, isBot: true }],
+        });
+        const next = github.addPullRequest(TOKEN, {
+            repository: "acme/api",
+            number: 196,
+            headRefName: "feat-c",
+            baseRefName: "feat-b",
+            reviewers: [{ login: "mohamed", state: "approved", reviewId: 2 }],
+        });
+        const bottom = await github.getPullRequest(TOKEN, "acme/api", 148);
+        const middle = await github.getPullRequest(TOKEN, "acme/api", 195);
+        attachGithubStack([bottom, middle, next]);
+
+        const session = await connectedSession();
+        await session.loadRepositoryMetadata("acme/api");
+        await session.loadPullRequest("acme/api", 195);
+
+        await session.requestReviewersAcrossStack("acme/api", 195);
+
+        const updatedMiddle = await github.getPullRequest(TOKEN, "acme/api", 195);
+        const updatedTop = await github.getPullRequest(TOKEN, "acme/api", 196);
+        const untouchedBottom = await github.getPullRequest(TOKEN, "acme/api", 148);
+        expect(updatedMiddle.reviewRequests).toEqual([VIEWER, "alex", "mohamed", "Platform"]);
+        expect(updatedTop.reviewRequests).toEqual(["alex", VIEWER, "Platform"]);
+        expect(untouchedBottom.reviewRequests).toEqual(["alex", "Platform"]);
+    });
+
     it("refuses to merge a stack when a downstack pull request is blocked", async () => {
         const next = github.addPullRequest(TOKEN, {
             repository: "acme/api",

@@ -114,6 +114,7 @@ import {
     recipeById,
 } from "#/lib/session/section-filters.ts";
 import { evaluateStackMerge } from "#/lib/session/stack-merge.ts";
+import { planStackReviewers } from "#/lib/session/stack-reviewers.ts";
 import { areStacksEnabled, getStackPreferences } from "#/lib/stack-preferences.ts";
 
 /** Pre-OAuth localStorage key — removed on restore/disconnect so leftovers cannot leak. */
@@ -2923,6 +2924,35 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
         await refreshAfterMutation(repository, number, { reloadStack: true });
     }
 
+    /** Request every human reviewer of the stack on each open layer that lacks them. */
+    async function requestReviewersAcrossStack(repository: string, number: number): Promise<void> {
+        const stack = getPullRequestStack(repository, number).stack;
+        if (!stack) {
+            return;
+        }
+
+        const token = requireToken();
+        const teamsByName = new Map(getRepositoryMetadata(repository).teams.map((team) => [team.name, team]));
+        const { updates } = planStackReviewers(stack.pullRequests);
+
+        try {
+            for (const { pullRequest, missing } of updates) {
+                const users = missing.filter((login) => !teamsByName.has(login));
+                if (users.length > 0) {
+                    await github.requestReviewers(token, repository, pullRequest.number, users);
+                }
+                for (const login of missing) {
+                    const team = teamsByName.get(login);
+                    if (team) {
+                        await github.requestTeamReview(token, repository, pullRequest.number, team);
+                    }
+                }
+            }
+        } finally {
+            await refreshAfterMutation(repository, number, { reloadStack: true });
+        }
+    }
+
     async function reRequestReview(
         repository: string,
         number: number,
@@ -3738,6 +3768,7 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
         setPullRequestAssignees,
         setReviewRequests,
         requestTeamReview,
+        requestReviewersAcrossStack,
         reRequestReview,
         dismissReview,
         updatePullRequestBody,

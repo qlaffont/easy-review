@@ -12,6 +12,8 @@ export type ReviewerStatus = {
     state: ReviewState;
     /** GitHub review database id — required to dismiss the review. */
     reviewId: number;
+    /** GitHub App / bot account (e.g. CodeRabbit). Omitted for humans. */
+    isBot?: boolean;
 };
 
 /** Whether GitHub thinks the branches can still be combined. */

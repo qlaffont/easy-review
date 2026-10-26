@@ -3,6 +3,7 @@ import {
     CheckCircle2,
     CircleDashed,
     Ellipsis,
+    Layers,
     MessageSquare,
     Pencil,
     RefreshCw,
@@ -52,11 +53,14 @@ import { Textarea } from "#/components/ui/textarea.tsx";
 import { useAuthViewer } from "#/lib/query/auth.ts";
 import { useRepositoryMetadataQuery } from "#/lib/query/pull-request.ts";
 import { useSession } from "#/lib/session/provider.tsx";
+import { resolveGithubPullRequestStack } from "#/lib/session/pull-request-stacks.ts";
 import {
     displayReviewState,
     excludeAuthorFromReviewRequests,
     excludeAuthorFromReviewers,
 } from "#/lib/session/reviewer-status.ts";
+import { planStackReviewers } from "#/lib/session/stack-reviewers.ts";
+import { useStackPreferences } from "#/lib/stack-preferences.ts";
 import { notifyAction } from "#/lib/toast.ts";
 import { cn } from "#/lib/utils.ts";
 
@@ -313,29 +317,32 @@ function ReviewersSection({
             onToggle={(candidate) => void toggleCandidate(candidate)}
             groupSelected="Requested"
             headerAction={
-                viewer && viewer.login !== detail.author ? (
-                    <HelpTooltip
-                        label={
-                            requested.has(viewer.login)
-                                ? "You are already a requested reviewer"
-                                : "Add yourself as reviewer"
-                        }
-                    >
-                        <Button
-                            type="button"
-                            size="icon-sm"
-                            variant="ghost"
-                            disabled={
-                                busy || requested.has(viewer.login) || visibleReviewRequests.length >= MAX_REVIEWERS
+                <>
+                    <StackReviewersButton detail={detail} busy={busy} onBusyChange={setBusy} onError={setError} />
+                    {viewer && viewer.login !== detail.author ? (
+                        <HelpTooltip
+                            label={
+                                requested.has(viewer.login)
+                                    ? "You are already a requested reviewer"
+                                    : "Add yourself as reviewer"
                             }
-                            className="size-6 text-muted-foreground"
-                            aria-label="Add yourself as reviewer"
-                            onClick={() => void addSelf()}
                         >
-                            <UserPlus aria-hidden="true" />
-                        </Button>
-                    </HelpTooltip>
-                ) : undefined
+                            <Button
+                                type="button"
+                                size="icon-sm"
+                                variant="ghost"
+                                disabled={
+                                    busy || requested.has(viewer.login) || visibleReviewRequests.length >= MAX_REVIEWERS
+                                }
+                                className="size-6 text-muted-foreground"
+                                aria-label="Add yourself as reviewer"
+                                onClick={() => void addSelf()}
+                            >
+                                <UserPlus aria-hidden="true" />
+                            </Button>
+                        </HelpTooltip>
+                    ) : null}
+                </>
             }
         >
             {visibleReviewers.length > 0 ? (
@@ -385,6 +392,114 @@ function ReviewersSection({
                 )
             ) : null}
         </MetadataSection>
+    );
+}
+
+/** Request every human reviewer of the stack on each open layer that lacks them. */
+function StackReviewersButton({
+    detail,
+    busy,
+    onBusyChange,
+    onError,
+}: {
+    detail: PullRequestDetail;
+    busy: boolean;
+    onBusyChange: (busy: boolean) => void;
+    onError: (message: string | null) => void;
+}) {
+    const session = useSession();
+    const [stackPreferences] = useStackPreferences();
+    const [confirmOpen, setConfirmOpen] = useState(false);
+    const plan = useMemo(() => {
+        if (!stackPreferences.enabled) {
+            return null;
+        }
+        const stack = resolveGithubPullRequestStack({
+            repository: detail.repository,
+            number: detail.number,
+            githubStack: detail.githubStack,
+            pullRequests: detail.githubStackPullRequests,
+            hideClosed: stackPreferences.hideClosed,
+        });
+        return stack ? planStackReviewers(stack.pullRequests) : null;
+    }, [stackPreferences.enabled, stackPreferences.hideClosed, detail]);
+
+    if (!plan || plan.reviewers.length === 0) {
+        return null;
+    }
+
+    const upToDate = plan.updates.length === 0;
+    const label = upToDate ? "Every stack pull request has these reviewers" : "Request reviewers across the stack";
+
+    async function apply() {
+        setConfirmOpen(false);
+        onBusyChange(true);
+        onError(null);
+        try {
+            await notifyAction(() => session.requestReviewersAcrossStack(detail.repository, detail.number), {
+                loading: "Requesting reviewers across the stack…",
+                success: "Stack reviewers updated",
+                error: "Could not update stack reviewers.",
+            });
+        } catch (cause) {
+            onError(cause instanceof Error ? cause.message : "Could not update stack reviewers.");
+        } finally {
+            onBusyChange(false);
+        }
+    }
+
+    return (
+        <>
+            <HelpTooltip label={label}>
+                <Button
+                    type="button"
+                    size="icon-sm"
+                    variant="ghost"
+                    disabled={busy || upToDate}
+                    className="size-6 text-muted-foreground"
+                    aria-label={label}
+                    onClick={() => setConfirmOpen(true)}
+                >
+                    <Layers aria-hidden="true" />
+                </Button>
+            </HelpTooltip>
+            <AlertDialog open={confirmOpen} onOpenChange={setConfirmOpen}>
+                <AlertDialogContent>
+                    <AlertDialogHeader>
+                        <AlertDialogTitle>Request reviewers across the stack?</AlertDialogTitle>
+                        <AlertDialogDescription>
+                            Every human reviewer in the stack will be requested on the open pull requests that
+                            don&apos;t have them yet. Bots and each pull request&apos;s author are skipped.
+                        </AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <ul className="flex flex-col gap-2 text-sm">
+                        {plan.updates.map(({ pullRequest, missing }) => (
+                            <li key={pullRequest.key} className="flex min-w-0 flex-col gap-0.5">
+                                <span className="flex min-w-0 items-center gap-2">
+                                    <span className="shrink-0 text-muted-foreground tabular-nums">
+                                        #{pullRequest.number}
+                                    </span>
+                                    <span className="truncate font-medium">{pullRequest.title}</span>
+                                </span>
+                                <span className="text-xs text-muted-foreground">+ {missing.join(", ")}</span>
+                            </li>
+                        ))}
+                    </ul>
+                    <AlertDialogFooter>
+                        <AlertDialogCancel>Cancel</AlertDialogCancel>
+                        <AlertDialogAction
+                            disabled={busy}
+                            onClick={(event) => {
+                                event.preventDefault();
+                                void apply();
+                            }}
+                        >
+                            Request reviewers
+                        </AlertDialogAction>
+                    </AlertDialogFooter>
+                </AlertDialogContent>
+            </AlertDialog>
+        </>
     );
 }
 

@@ -59,6 +59,20 @@ describe("aggregateReviewerStatuses", () => {
         expect(reviewers).toEqual([{ login: "bot", state: "commented", reviewId: 5 }]);
     });
 
+    it("flags bot reviewers", () => {
+        const reviewers = aggregateReviewerStatuses([
+            {
+                login: "coderabbitai",
+                databaseId: 6,
+                submittedAt: "2026-07-03T12:00:00.000Z",
+                state: "COMMENTED",
+                isBot: true,
+            },
+        ]);
+
+        expect(reviewers).toEqual([{ login: "coderabbitai", state: "commented", reviewId: 6, isBot: true }]);
+    });
+
     it("shows dismissed when the newest review was dismissed", () => {
         const reviewers = aggregateReviewerStatuses([
             {

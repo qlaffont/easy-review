@@ -6,6 +6,7 @@ export type RawPullRequestReview = {
     login: string;
     /** GraphQL `PullRequestReviewState` value. */
     state: string;
+    isBot?: boolean;
 };
 
 function toReviewState(state: string): ReviewState {
@@ -21,6 +22,10 @@ function toReviewState(state: string): ReviewState {
         default:
             return "pending";
     }
+}
+
+function botFlag(review: RawPullRequestReview): { isBot?: true } {
+    return review.isBot ? { isBot: true } : {};
 }
 
 /**
@@ -47,7 +52,7 @@ export function aggregateReviewerStatuses(reviews: ReadonlyArray<RawPullRequestR
         for (const review of sorted) {
             const state = toReviewState(review.state);
             if (state === "dismissed" || state === "changes-requested" || state === "approved") {
-                aggregated.push({ login, state, reviewId: review.databaseId });
+                aggregated.push({ login, state, reviewId: review.databaseId, ...botFlag(review) });
                 matched = true;
                 break;
             }
@@ -59,7 +64,7 @@ export function aggregateReviewerStatuses(reviews: ReadonlyArray<RawPullRequestR
 
         const latest = sorted[0];
         if (latest && toReviewState(latest.state) === "commented") {
-            aggregated.push({ login, state: "commented", reviewId: latest.databaseId });
+            aggregated.push({ login, state: "commented", reviewId: latest.databaseId, ...botFlag(latest) });
         }
     }
 

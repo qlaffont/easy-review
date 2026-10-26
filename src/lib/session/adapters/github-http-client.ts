@@ -2473,7 +2473,7 @@ type PullRequestNode = {
         nodes: Array<{
             databaseId: number | null;
             submittedAt: string | null;
-            author: { login: string } | null;
+            author: { login: string; __typename?: string } | null;
             state: string;
         }>;
     };
@@ -2585,6 +2585,7 @@ function toPullRequestSummary(node: PullRequestNode): PullRequestSummary {
                               databaseId: review.databaseId,
                               submittedAt: review.submittedAt,
                               state: review.state,
+                              isBot: review.author.__typename === "Bot",
                           },
                       ]
                     : [],
@@ -3133,6 +3134,7 @@ const PULL_REQUEST_SUMMARY_FIELDS = `
             submittedAt
             state
             author {
+                __typename
                 login
             }
         }
