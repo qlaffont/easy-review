@@ -9,7 +9,7 @@ Default presets include **Needs your review**, **Returned to you**, **Waiting fo
 Notable flows:
 
 - **Needs your review** — an open, non-draft PR currently requested of you, including when the author re-requested you after you already approved or requested changes.
-- **Returned to you** — your open PR has changes requested and nobody is currently asked to re-review.
+- **Returned to you** — your open PR has changes requested and at least one reviewer who requested them has not been re-requested (other pending reviewers don’t count).
 - **Waiting for reviewers (me)** — your open PR has no active approval and is awaiting review, including after you re-request validation from a reviewer who requested changes.
 - **Approved** — your open PR has at least one active approval, even while other reviewers are still requested.
 - **Waiting for author** — you already reviewed someone else’s PR and there is no outstanding request of you.

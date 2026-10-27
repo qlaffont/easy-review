@@ -149,6 +149,17 @@ describe("default section filters", () => {
         expect(matchSectionFilter(subject, defaultFilterForPreset("waiting-for-reviewers-me"), VIEWER)).toBe(true);
     });
 
+    it("keeps your PR in Returned to you while the reviewer who requested changes is not re-requested", () => {
+        const subject = pullRequest({
+            author: VIEWER,
+            reviewDecision: "changes-requested",
+            reviewRequests: ["other-reviewer"],
+            reviewers: [{ login: "romainpm", state: "changes-requested", reviewId: 1 }],
+        });
+        expect(matchSectionFilter(subject, defaultFilterForPreset("returned-to-you"), VIEWER)).toBe(true);
+        expect(matchSectionFilter(subject, defaultFilterForPreset("waiting-for-reviewers-me"), VIEWER)).toBe(false);
+    });
+
     it("puts your own approved pull request in Approved", () => {
         const subject = pullRequest({ author: VIEWER, reviewDecision: "approved" });
         expect(matchSectionFilter(subject, defaultFilterForPreset("approved"), VIEWER)).toBe(true);

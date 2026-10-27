@@ -117,6 +117,15 @@ export function involvementFor(pullRequest: PullRequestSummary, viewerLogin: str
         if (pullRequest.isDraft) {
             return "my-draft";
         }
+        // Returned until every reviewer who requested changes has been re-requested;
+        // other pending requests do not hand the ball back to reviewers.
+        const hasUnaddressedChangesRequest = pullRequest.reviewers.some(
+            (reviewer) =>
+                reviewer.state === "changes-requested" && !pullRequest.reviewRequests.includes(reviewer.login),
+        );
+        if (pullRequest.reviewDecision === "changes-requested" && hasUnaddressedChangesRequest) {
+            return "my-changes-requested";
+        }
         if (pullRequest.reviewRequests.length > 0) {
             return "my-waiting-for-reviewers";
         }
