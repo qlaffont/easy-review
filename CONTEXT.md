@@ -38,3 +38,9 @@ Single-context glossary for product behavior. ADRs live under `docs/adr/` when w
 | **Queued auto-merge** | An Easy Review intent to merge a pull request with a chosen method once GitHub reports it ready. Stored in the browser; Easy Review performs the merge. Independent of GitHub’s repository **Allow auto-merge** setting. |
 | **Ready to auto-merge** | Open, not draft, no conflicts, reviews and required checks satisfied (`mergeStateStatus` is `clean` or `has_hooks`). |
 | **Update branch** | GitHub “Update branch”: merge the base into the PR head when the PR is `behind`. Auto-merge does this when `viewerCanUpdateBranch` is true, then waits until the PR is ready. |
+
+## Files changed
+
+| Term | Meaning |
+| --- | --- |
+| **Split view** | Diff preference for the split layout (`splitView`): **Both** versions side by side, or only the **Old** / **New** version at full width. A one-sided view hides lines that exist only on the other side, plus their comments and find-in-file hits; comments on context lines stay visible because those lines exist in both versions. |

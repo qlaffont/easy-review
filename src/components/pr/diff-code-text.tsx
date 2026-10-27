@@ -35,6 +35,7 @@ export function DiffCodeText({
             {segments.map((segment, index) => (
                 <span
                     key={index}
+                    {...(segment.searchActive ? { "data-search-hit-active": "" } : {})}
                     className={cn(
                         segment.highlight &&
                             (side === "del"

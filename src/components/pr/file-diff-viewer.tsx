@@ -20,12 +20,13 @@ import {
     useMemo,
     useRef,
     useState,
+    type CSSProperties,
     type ReactNode,
     type RefObject,
 } from "react";
 import { createPortal } from "react-dom";
 
-import type { DiffLayout } from "#/lib/diff-preferences.ts";
+import type { DiffLayout, SplitView } from "#/lib/diff-preferences.ts";
 import type {
     DiffLine,
     DiffSide,
@@ -52,6 +53,15 @@ import { Input } from "#/components/ui/input.tsx";
 import { DiffLoadingSkeleton } from "#/components/ui/loading.tsx";
 import { tokensForDiffLine, useFileSyntaxHighlight, type FileSyntaxMaps } from "#/hooks/use-file-syntax-highlight.ts";
 import { collectDiffSearchMatches, searchHighlightsForCell, type DiffSearchMatch } from "#/lib/diff-file-search.ts";
+import { clampSplitRatio, SPLIT_RATIO_DEFAULT, SPLIT_RATIO_MAX, SPLIT_RATIO_MIN } from "#/lib/diff-preferences.ts";
+import {
+    buildVirtualRows,
+    virtualRowAnchorLineIndex,
+    virtualRowIndexForLineIndex,
+    virtualRowIndexForMatch,
+    type LineTarget,
+    type SplitRow,
+} from "#/lib/diff-rows.ts";
 import {
     isLineVisibleInScroller,
     selectionCommentAnchor,
@@ -83,20 +93,6 @@ const STUB_COPY: Record<FileStubReason, { title: string; body: string; canForce:
     },
 };
 
-export type LineTarget = { path: string; line: number; side: DiffSide; text: string };
-
-type SplitRow =
-    | { key: string; kind: "hunk"; line: DiffLine; lineIndex: number }
-    | { key: string; kind: "gap"; line: DiffLine; lineIndex: number }
-    | {
-          key: string;
-          kind: "pair";
-          left: DiffLine | null;
-          right: DiffLine | null;
-          leftLineIndex: number | null;
-          rightLineIndex: number | null;
-      };
-
 export function FileDiffViewer({
     path,
     file,
@@ -114,12 +110,16 @@ export function FileDiffViewer({
     number,
     mentionUsers,
     layout,
+    splitView,
+    splitRatio,
     hideWhitespace,
     compactLineHeight,
     wrapLines,
     viewed,
     canApplySuggestions,
     onViewedChange,
+    onSplitViewChange,
+    onSplitRatioChange,
     onLoadAnyway,
     onAddComment,
     onAddSingleComment,
@@ -144,11 +144,15 @@ export function FileDiffViewer({
     canApplySuggestions?: boolean;
     mentionUsers?: Array<{ login: string; name?: string | null; avatarUrl?: string | null }>;
     layout: DiffLayout;
+    splitView: SplitView;
+    splitRatio: number;
     hideWhitespace: boolean;
     compactLineHeight: boolean;
     wrapLines: boolean;
     viewed: boolean;
     onViewedChange: (viewed: boolean) => void;
+    onSplitViewChange: (splitView: SplitView) => void;
+    onSplitRatioChange: (ratio: number) => void;
     onLoadAnyway: () => void;
     onAddComment: (target: LineTarget, body: string) => Promise<void>;
     onAddSingleComment: (target: LineTarget, body: string) => Promise<void>;
@@ -194,8 +198,8 @@ export function FileDiffViewer({
     }, [resolvedDiff, path, hideWhitespace, effectiveShowFullFile, expansions]);
 
     const searchMatches = useMemo(
-        () => (rendered?.lines ? collectDiffSearchMatches(rendered.lines, searchQuery, layout) : []),
-        [rendered?.lines, searchQuery, layout],
+        () => (rendered?.lines ? collectDiffSearchMatches(rendered.lines, searchQuery, layout, splitView) : []),
+        [rendered?.lines, searchQuery, layout, splitView],
     );
 
     useEffect(() => {
@@ -297,6 +301,8 @@ export function FileDiffViewer({
                 file={file}
                 viewed={viewed}
                 pendingCount={pendingComments.length}
+                splitView={layout === "split" ? splitView : null}
+                onSplitViewChange={onSplitViewChange}
                 onViewedChange={(next) => {
                     onViewedChange(next);
                     if (next) {
@@ -351,6 +357,8 @@ export function FileDiffViewer({
                         lines={rendered.lines}
                         path={path}
                         layout={layout}
+                        splitView={splitView}
+                        splitRatio={splitRatio}
                         lineHeight={lineHeight}
                         wrapLines={wrapLines}
                         syntax={syntax}
@@ -390,6 +398,7 @@ export function FileDiffViewer({
                         onRemovePending={onRemovePending}
                         onUpdatePending={onUpdatePending}
                         onReplyToThread={onReplyToThread}
+                        onSplitRatioChange={onSplitRatioChange}
                         searchMatches={searchMatches}
                         activeMatchId={activeMatchId}
                     />
@@ -399,11 +408,45 @@ export function FileDiffViewer({
     );
 }
 
+const SPLIT_VIEW_OPTIONS: ReadonlyArray<{ value: SplitView; label: string; hint: string }> = [
+    { value: "old", label: "Old", hint: "Show only the old version" },
+    { value: "both", label: "Both", hint: "Show old and new side by side" },
+    { value: "new", label: "New", hint: "Show only the new version" },
+];
+
+function SplitViewToggle({ value, onChange }: { value: SplitView; onChange: (value: SplitView) => void }) {
+    return (
+        <div
+            role="group"
+            aria-label="Versions to show"
+            className="inline-flex h-7 shrink-0 items-center rounded-md border bg-background p-0.5 text-xs"
+        >
+            {SPLIT_VIEW_OPTIONS.map((option) => (
+                <HelpTooltip key={option.value} label={option.hint}>
+                    <button
+                        type="button"
+                        aria-pressed={value === option.value}
+                        className={cn(
+                            "h-full cursor-pointer rounded-[5px] px-2 text-muted-foreground transition-colors hover:text-foreground",
+                            value === option.value && "bg-muted font-medium text-foreground",
+                        )}
+                        onClick={() => onChange(option.value)}
+                    >
+                        {option.label}
+                    </button>
+                </HelpTooltip>
+            ))}
+        </div>
+    );
+}
+
 function FileDiffHeader({
     path,
     file,
     viewed,
     pendingCount,
+    splitView,
+    onSplitViewChange,
     showFullFile,
     onViewedChange,
     onShowFullFile,
@@ -414,6 +457,9 @@ function FileDiffHeader({
     file: PullRequestFile | null;
     viewed: boolean;
     pendingCount: number;
+    /** Null outside the split layout, where there is only one column. */
+    splitView: SplitView | null;
+    onSplitViewChange: (splitView: SplitView) => void;
     showFullFile: boolean;
     onViewedChange: (viewed: boolean) => void;
     onShowFullFile: () => void;
@@ -453,6 +499,7 @@ function FileDiffHeader({
                     <DiffStatBars additions={file.additions} deletions={file.deletions} />
                 </span>
             ) : null}
+            {splitView ? <SplitViewToggle value={splitView} onChange={onSplitViewChange} /> : null}
             <label className="flex cursor-pointer items-center gap-1.5 rounded-md border bg-background px-2 py-1 text-xs">
                 <Checkbox checked={viewed} onCheckedChange={(checked) => onViewedChange(checked === true)} />
                 Viewed
@@ -891,13 +938,14 @@ function DiffLineNumber({
 function DiffCodeCell({
     path,
     target,
-    markSearchActive,
+    splitSide,
     wrapLines = false,
     children,
 }: {
     path: string;
     target: LineTarget | null;
-    markSearchActive?: boolean;
+    /** Split column; text turns unselectable while a drag selection runs in the other one. */
+    splitSide?: DiffSide;
     wrapLines?: boolean;
     children: ReactNode;
 }) {
@@ -911,10 +959,11 @@ function DiffCodeCell({
                       "data-diff-side": target.side,
                   }
                 : {})}
-            {...(markSearchActive ? { "data-diff-search-active": "true" } : {})}
             className={cn(
                 "block select-text px-2 text-foreground",
                 wrapLines ? "whitespace-pre-wrap wrap-anywhere" : "whitespace-pre",
+                splitSide === "LEFT" && "group-data-[select-side=RIGHT]/diff:select-none",
+                splitSide === "RIGHT" && "group-data-[select-side=LEFT]/diff:select-none",
             )}
         >
             {children}
@@ -954,221 +1003,6 @@ function DiffSelectionCommentPopup({
         </div>,
         document.body,
     );
-}
-
-function toSplitRows(lines: Array<DiffLine>): Array<SplitRow> {
-    const rows: Array<SplitRow> = [];
-    let index = 0;
-
-    while (index < lines.length) {
-        const line = lines[index]!;
-
-        if (line.kind === "hunk" || line.kind === "gap") {
-            rows.push({ key: `${line.kind}-${index}`, kind: line.kind, line, lineIndex: index });
-            index++;
-            continue;
-        }
-
-        if (line.kind === "context") {
-            rows.push({
-                key: `ctx-${index}`,
-                kind: "pair",
-                left: line,
-                right: line,
-                leftLineIndex: index,
-                rightLineIndex: index,
-            });
-            index++;
-            continue;
-        }
-
-        const dels: Array<DiffLine> = [];
-        const adds: Array<DiffLine> = [];
-        const start = index;
-
-        while (index < lines.length && lines[index]!.kind === "del") {
-            dels.push(lines[index]!);
-            index++;
-        }
-        const addStart = index;
-        while (index < lines.length && lines[index]!.kind === "add") {
-            adds.push(lines[index]!);
-            index++;
-        }
-
-        const count = Math.max(dels.length, adds.length);
-        for (let offset = 0; offset < count; offset++) {
-            rows.push({
-                key: `pair-${start}-${offset}`,
-                kind: "pair",
-                left: dels[offset] ?? null,
-                right: adds[offset] ?? null,
-                leftLineIndex: dels[offset] ? start + offset : null,
-                rightLineIndex: adds[offset] ? addStart + offset : null,
-            });
-        }
-    }
-
-    return rows;
-}
-
-type LineAnnotations = {
-    side: DiffSide;
-    line: number;
-    text: string;
-    pending: Array<PendingLineComment>;
-    threads: Array<ReviewThread>;
-};
-
-type VirtualRow =
-    | { key: string; kind: "unified"; line: DiffLine; lineIndex: number }
-    | { key: string; kind: "split"; row: SplitRow }
-    | { key: string; kind: "notes"; notes: LineAnnotations }
-    | { key: string; kind: "compose"; target: LineTarget };
-
-function targetsIncludeCompose(targets: Array<{ side: DiffSide; line: number }>, compose: LineTarget | null): boolean {
-    if (!compose) {
-        return false;
-    }
-    return targets.some((target) => target.side === compose.side && target.line === compose.line);
-}
-
-function annotationsForTarget(
-    path: string,
-    side: DiffSide,
-    line: number,
-    text: string,
-    pendingComments: Array<PendingLineComment>,
-    threads: Array<ReviewThread>,
-): LineAnnotations | null {
-    const pending = pendingComments.filter(
-        (comment) => comment.path === path && comment.side === side && comment.line === line,
-    );
-    const matchedThreads = threads.filter(
-        (thread) => thread.path === path && thread.side === side && thread.line === line,
-    );
-    if (pending.length === 0 && matchedThreads.length === 0) {
-        return null;
-    }
-    return { side, line, text, pending, threads: matchedThreads };
-}
-
-function annotationsForDiffLine(
-    path: string,
-    line: DiffLine,
-    pendingComments: Array<PendingLineComment>,
-    threads: Array<ReviewThread>,
-): Array<LineAnnotations> {
-    const targets: Array<{ side: DiffSide; line: number }> = [];
-    if (line.kind === "add" && line.newNumber !== null) {
-        targets.push({ side: "RIGHT", line: line.newNumber });
-    } else if (line.kind === "del" && line.oldNumber !== null) {
-        targets.push({ side: "LEFT", line: line.oldNumber });
-    } else if (line.kind === "context") {
-        if (line.oldNumber !== null) {
-            targets.push({ side: "LEFT", line: line.oldNumber });
-        }
-        if (line.newNumber !== null) {
-            targets.push({ side: "RIGHT", line: line.newNumber });
-        }
-    }
-
-    const seen = new Set<string>();
-    const result: Array<LineAnnotations> = [];
-    for (const target of targets) {
-        const key = `${target.side}:${target.line}`;
-        if (seen.has(key)) {
-            continue;
-        }
-        seen.add(key);
-        const notes = annotationsForTarget(path, target.side, target.line, line.text ?? "", pendingComments, threads);
-        if (notes) {
-            result.push(notes);
-        }
-    }
-    return result;
-}
-
-function buildVirtualRows(
-    lines: Array<DiffLine>,
-    path: string,
-    layout: DiffLayout,
-    pendingComments: Array<PendingLineComment>,
-    threads: Array<ReviewThread>,
-    showInlineComments: boolean,
-    compose: LineTarget | null,
-): Array<VirtualRow> {
-    const rows: Array<VirtualRow> = [];
-
-    if (layout === "split") {
-        const splitRows = toSplitRows(lines);
-        for (const [index, row] of splitRows.entries()) {
-            rows.push({ key: `split-${row.key}`, kind: "split", row });
-            if (row.kind !== "pair") {
-                continue;
-            }
-            const targets: Array<{ side: DiffSide; line: number }> = [];
-            if (row.left?.oldNumber != null) {
-                targets.push({ side: "LEFT", line: row.left.oldNumber });
-            }
-            if (row.right?.newNumber != null) {
-                targets.push({ side: "RIGHT", line: row.right.newNumber });
-            }
-            const seen = new Set<string>();
-            for (const target of targets) {
-                const key = `${target.side}:${target.line}`;
-                if (seen.has(key)) {
-                    continue;
-                }
-                seen.add(key);
-                if (showInlineComments) {
-                    const text = target.side === "LEFT" ? (row.left?.text ?? "") : (row.right?.text ?? "");
-                    const notes = annotationsForTarget(path, target.side, target.line, text, pendingComments, threads);
-                    if (notes) {
-                        rows.push({ key: `notes-${index}-${key}`, kind: "notes", notes });
-                    }
-                }
-            }
-            if (compose && targetsIncludeCompose(targets, compose)) {
-                rows.push({ key: `compose-${compose.side}-${compose.line}`, kind: "compose", target: compose });
-            }
-        }
-        return rows;
-    }
-
-    for (const [index, line] of lines.entries()) {
-        rows.push({ key: `line-${index}-${line.kind}`, kind: "unified", line, lineIndex: index });
-        if (line.kind === "hunk" || line.kind === "gap") {
-            continue;
-        }
-        if (showInlineComments) {
-            for (const notes of annotationsForDiffLine(path, line, pendingComments, threads)) {
-                rows.push({
-                    key: `notes-${index}-${notes.side}-${notes.line}`,
-                    kind: "notes",
-                    notes,
-                });
-            }
-        }
-        const targets: Array<{ side: DiffSide; line: number }> = [];
-        if (line.kind === "add" && line.newNumber !== null) {
-            targets.push({ side: "RIGHT", line: line.newNumber });
-        } else if (line.kind === "del" && line.oldNumber !== null) {
-            targets.push({ side: "LEFT", line: line.oldNumber });
-        } else if (line.kind === "context") {
-            if (line.oldNumber !== null) {
-                targets.push({ side: "LEFT", line: line.oldNumber });
-            }
-            if (line.newNumber !== null) {
-                targets.push({ side: "RIGHT", line: line.newNumber });
-            }
-        }
-        if (compose && targetsIncludeCompose(targets, compose)) {
-            rows.push({ key: `compose-${compose.side}-${compose.line}`, kind: "compose", target: compose });
-        }
-    }
-
-    return rows;
 }
 
 /** Tabs render wider than one column; syntax spans add a little extra width. */
@@ -1267,31 +1101,33 @@ function scrollTrackWidthPx(measuredPx: number): string {
     return measuredPx > 0 ? `${measuredPx}px` : "100%";
 }
 
-function virtualRowIndexForMatch(virtualRows: ReadonlyArray<VirtualRow>, match: DiffSearchMatch): number {
-    for (const [index, row] of virtualRows.entries()) {
-        if (row.kind === "unified" && row.lineIndex === match.lineIndex && match.side === "unified") {
-            return index;
-        }
-        if (row.kind !== "split" || row.row.kind !== "pair") {
-            continue;
-        }
-        if (match.side === "both" && row.row.leftLineIndex === match.lineIndex) {
-            return index;
-        }
-        if (match.side === "LEFT" && row.row.leftLineIndex === match.lineIndex) {
-            return index;
-        }
-        if (match.side === "RIGHT" && row.row.rightLineIndex === match.lineIndex) {
-            return index;
-        }
+type HorizontalPane = DiffSide | "unified";
+
+/** Converts a wheel delta to pixels; Firefox reports line or page deltas for mouse wheels. */
+function wheelDeltaPx(delta: number, mode: number, lineHeight: number, pageSize: number): number {
+    if (mode === 1) {
+        return delta * lineHeight;
     }
-    return -1;
+    if (mode === 2) {
+        return delta * pageSize;
+    }
+    return delta;
+}
+
+/**
+ * Grid columns for split rows. `--diff-split-ratio` is unitless so the same variable can position
+ * the divider handle, which lives outside the scroller and must discount its scrollbar.
+ */
+function splitColumns(splitView: SplitView): string {
+    return splitView === "both" ? "calc(var(--diff-split-ratio) * 100%) minmax(0,1fr)" : "minmax(0,1fr)";
 }
 
 function VirtualDiffLines({
     lines,
     path,
     layout,
+    splitView,
+    splitRatio,
     lineHeight,
     wrapLines,
     syntax,
@@ -1320,12 +1156,15 @@ function VirtualDiffLines({
     onRemovePending,
     onUpdatePending,
     onReplyToThread,
+    onSplitRatioChange,
     searchMatches,
     activeMatchId,
 }: {
     lines: Array<DiffLine>;
     path: string;
     layout: DiffLayout;
+    splitView: SplitView;
+    splitRatio: number;
     lineHeight: number;
     wrapLines: boolean;
     syntax: FileSyntaxMaps;
@@ -1354,11 +1193,12 @@ function VirtualDiffLines({
     onRemovePending: (commentId: string) => Promise<void>;
     onUpdatePending: (commentId: string, body: string) => Promise<void>;
     onReplyToThread: (threadId: string, body: string) => Promise<void>;
+    onSplitRatioChange: (ratio: number) => void;
     searchMatches: ReadonlyArray<DiffSearchMatch>;
     activeMatchId: number;
 }) {
+    const rootRef = useRef<HTMLDivElement>(null);
     const parentRef = useRef<HTMLDivElement>(null);
-    const splitRootRef = useRef<HTMLDivElement>(null);
     const leftScrollRef = useRef<HTMLDivElement>(null);
     const rightScrollRef = useRef<HTMLDivElement>(null);
     const unifiedScrollRef = useRef<HTMLDivElement>(null);
@@ -1372,13 +1212,29 @@ function VirtualDiffLines({
     const [selectionPopup, setSelectionPopup] = useState<SelectionPopupState | null>(null);
     const selectionPopupRef = useRef<SelectionPopupState | null>(null);
     selectionPopupRef.current = selectionPopup;
-    /** Left pane share in split layout (0.2–0.8). */
-    const [splitLeftRatio, setSplitLeftRatio] = useState(0.5);
+    /** Classic (non-overlay) vertical scrollbar width, so chrome outside the scroller lines up with rows. */
+    const [scrollbarWidth, setScrollbarWidth] = useState(0);
+
+    const showLeft = layout === "split" && splitView !== "new";
+    const showRight = layout === "split" && splitView !== "old";
+    const bothColumns = showLeft && showRight;
 
     const virtualRows = useMemo(
-        () => buildVirtualRows(lines, path, layout, pendingComments, threads, showInlineComments, selected),
-        [lines, path, layout, pendingComments, threads, showInlineComments, selected],
+        () =>
+            buildVirtualRows({
+                lines,
+                path,
+                layout,
+                splitView,
+                pendingComments,
+                threads,
+                showInlineComments,
+                compose: selected,
+            }),
+        [lines, path, layout, splitView, pendingComments, threads, showInlineComments, selected],
     );
+    const virtualRowsRef = useRef(virtualRows);
+    virtualRowsRef.current = virtualRows;
 
     // At least the pane width so short files still fill the editor; grow with long lines for scroll.
     const longestLeft = useMemo(() => longestLineText(lines, "LEFT"), [lines]);
@@ -1393,7 +1249,7 @@ function VirtualDiffLines({
             return;
         }
 
-        const root = splitRootRef.current;
+        const root = rootRef.current;
         if (!root) {
             return;
         }
@@ -1411,11 +1267,29 @@ function VirtualDiffLines({
                 measurePaneContentWidth(longestUnified, UNIFIED_LINE_NUMBERS_PX, font, "+"),
             ),
         });
-    }, [longestLeft, longestRight, longestUnified, lineHeight, layout, splitLeftRatio, wrapLines]);
+    }, [longestLeft, longestRight, longestUnified, lineHeight, layout, wrapLines]);
+
+    useLayoutEffect(() => {
+        const scroller = parentRef.current;
+        if (!scroller) {
+            return;
+        }
+        const update = () => setScrollbarWidth(scroller.offsetWidth - scroller.clientWidth);
+        update();
+        // The content box shrinks when a classic scrollbar appears, which triggers the observer.
+        const observer = new ResizeObserver(update);
+        observer.observe(scroller);
+        return () => observer.disconnect();
+    }, []);
+
+    // Keys follow line identity, not array position, so measured heights (and comment thread
+    // state) stay attached to the right row when context expands or a composer opens above.
+    const getItemKey = useCallback((index: number) => virtualRows[index]?.key ?? index, [virtualRows]);
 
     const virtualizer = useVirtualizer({
         count: virtualRows.length,
         getScrollElement: () => parentRef.current,
+        getItemKey,
         estimateSize: (index) => {
             const row = virtualRows[index];
             if (!row) {
@@ -1436,10 +1310,95 @@ function VirtualDiffLines({
         overscan: 24,
     });
 
+    // Keep the reader on the same line when the presentation changes (layout, visible versions,
+    // wrapping, line height) instead of resetting to the top or landing at a stale pixel offset.
+    const viewKey = `${layout}:${splitView}:${wrapLines}:${lineHeight}`;
+    const viewKeyRef = useRef(viewKey);
+    const anchorLineIndexRef = useRef<number | null>(null);
+    const restoringAnchorRef = useRef(false);
+
+    useLayoutEffect(() => {
+        if (viewKeyRef.current === viewKey) {
+            return;
+        }
+        viewKeyRef.current = viewKey;
+        // Heights measured for the previous presentation no longer apply.
+        virtualizer.measure();
+        const anchor = anchorLineIndexRef.current;
+        const index = anchor === null ? -1 : virtualRowIndexForLineIndex(virtualRows, anchor);
+        if (index >= 0) {
+            restoringAnchorRef.current = true;
+            virtualizer.scrollToIndex(index, { align: "start" });
+        }
+        // Runs once per presentation change; rows and virtualizer are read at that moment.
+        // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional
+    }, [viewKey]);
+
+    useEffect(() => {
+        if (restoringAnchorRef.current) {
+            restoringAnchorRef.current = false;
+            return;
+        }
+        const offset = virtualizer.scrollOffset ?? 0;
+        for (const item of virtualizer.getVirtualItems()) {
+            const row = virtualRows[item.index];
+            const anchor = row ? virtualRowAnchorLineIndex(row) : null;
+            if (item.end > offset && anchor !== null) {
+                anchorLineIndexRef.current = anchor;
+                return;
+            }
+        }
+    });
+
     const pendingByLine = new Set(
         pendingComments.filter((comment) => comment.path === path).map((comment) => `${comment.side}:${comment.line}`),
     );
 
+    const horizontalScroller = useCallback(
+        (pane: HorizontalPane): { strip: HTMLDivElement; setScroll: (value: number) => void } | null => {
+            const strip =
+                pane === "LEFT"
+                    ? leftScrollRef.current
+                    : pane === "RIGHT"
+                      ? rightScrollRef.current
+                      : unifiedScrollRef.current;
+            if (!strip) {
+                return null;
+            }
+            const setScroll = pane === "LEFT" ? setLeftScroll : pane === "RIGHT" ? setRightScroll : setUnifiedScroll;
+            return { strip, setScroll };
+        },
+        [],
+    );
+
+    /** Brings the active find-in-file hit into view inside its pane's horizontal scroll. */
+    const revealActiveSearchHit = useCallback(() => {
+        const hit = rootRef.current?.querySelector<HTMLElement>("[data-search-hit-active]");
+        const pane = hit?.closest<HTMLElement>("[data-diff-pane]");
+        const paneId = pane?.dataset.diffPane;
+        if (!hit || !pane || (paneId !== "LEFT" && paneId !== "RIGHT" && paneId !== "unified")) {
+            return Boolean(hit);
+        }
+        const scroller = horizontalScroller(paneId);
+        if (!scroller) {
+            return true;
+        }
+        const paneRect = pane.getBoundingClientRect();
+        const hitRect = hit.getBoundingClientRect();
+        if (hitRect.left >= paneRect.left && hitRect.right <= paneRect.right) {
+            return true;
+        }
+        const max = Math.max(0, scroller.strip.scrollWidth - scroller.strip.clientWidth);
+        const next = Math.round(
+            Math.min(max, Math.max(0, scroller.strip.scrollLeft + hitRect.left - paneRect.left - paneRect.width / 3)),
+        );
+        scroller.strip.scrollLeft = next;
+        scroller.setScroll(next);
+        return true;
+    }, [horizontalScroller]);
+
+    // Follow the active match only when it changes, not whenever rows change (opening a composer
+    // while the find bar is open must not yank the view back to the match).
     useEffect(() => {
         if (activeMatchId < 0 || searchMatches.length === 0) {
             return;
@@ -1448,15 +1407,22 @@ function VirtualDiffLines({
         if (!match) {
             return;
         }
-        const rowIndex = virtualRowIndexForMatch(virtualRows, match);
+        const rowIndex = virtualRowIndexForMatch(virtualRowsRef.current, match);
         if (rowIndex < 0) {
             return;
         }
         virtualizer.scrollToIndex(rowIndex, { align: "center" });
-        requestAnimationFrame(() => {
-            document.querySelector('[data-diff-search-active="true"]')?.scrollIntoView({ block: "nearest" });
-        });
-    }, [activeMatchId, searchMatches, virtualRows, virtualizer]);
+        let frame = 0;
+        let attempts = 0;
+        const reveal = () => {
+            // The row may render a frame or two after the vertical jump.
+            if (!revealActiveSearchHit() && attempts++ < 3) {
+                frame = requestAnimationFrame(reveal);
+            }
+        };
+        frame = requestAnimationFrame(reveal);
+        return () => cancelAnimationFrame(frame);
+    }, [activeMatchId, searchMatches, virtualizer, revealActiveSearchHit]);
 
     useEffect(() => {
         if (selected) {
@@ -1534,6 +1500,29 @@ function VirtualDiffLines({
         };
     }, [path, disabled, repositionSelectionPopup]);
 
+    // Lock a drag selection to the column it starts in, so selecting old code in split view does
+    // not sweep the new column (and its text) into the selection.
+    useEffect(() => {
+        const root = rootRef.current;
+        const scroller = parentRef.current;
+        if (!root || !scroller) {
+            return;
+        }
+        const onMouseDown = (event: MouseEvent) => {
+            const pane =
+                event.target instanceof Element
+                    ? event.target.closest<HTMLElement>("[data-diff-pane]")?.dataset.diffPane
+                    : undefined;
+            if (pane === "LEFT" || pane === "RIGHT") {
+                root.dataset.selectSide = pane;
+            } else {
+                delete root.dataset.selectSide;
+            }
+        };
+        scroller.addEventListener("mousedown", onMouseDown);
+        return () => scroller.removeEventListener("mousedown", onMouseDown);
+    }, []);
+
     useEffect(() => {
         repositionSelectionPopup();
     }, [leftScroll, rightScroll, unifiedScroll, repositionSelectionPopup]);
@@ -1564,132 +1553,104 @@ function VirtualDiffLines({
     }, [selectionPopup]);
 
     useEffect(() => {
-        setLeftScroll(0);
-        setRightScroll(0);
-        setUnifiedScroll(0);
-        if (leftScrollRef.current) {
-            leftScrollRef.current.scrollLeft = 0;
-        }
-        if (rightScrollRef.current) {
-            rightScrollRef.current.scrollLeft = 0;
-        }
-        if (unifiedScrollRef.current) {
-            unifiedScrollRef.current.scrollLeft = 0;
-        }
         parentRef.current?.scrollTo({ top: 0, left: 0 });
         virtualizer.scrollToOffset(0, { align: "start" });
         // Reset scroll position only when switching files — not when comments/virtual rows change.
         // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional
     }, [path]);
 
+    // Horizontal offsets belong to the columns on screen; start over when the columns change.
     useEffect(() => {
         setLeftScroll(0);
         setRightScroll(0);
         setUnifiedScroll(0);
-        if (leftScrollRef.current) {
-            leftScrollRef.current.scrollLeft = 0;
+        for (const strip of [leftScrollRef.current, rightScrollRef.current, unifiedScrollRef.current]) {
+            if (strip) {
+                strip.scrollLeft = 0;
+            }
         }
-        if (rightScrollRef.current) {
-            rightScrollRef.current.scrollLeft = 0;
-        }
-        if (unifiedScrollRef.current) {
-            unifiedScrollRef.current.scrollLeft = 0;
-        }
-    }, [layout, lines, wrapLines]);
+    }, [path, layout, splitView, wrapLines]);
 
-    // Horizontal trackpad/shift-wheel over the code area: the row viewport is overflow-x-hidden
-    // (virtualized), so scroll must be forwarded to the bottom pane scrollbars.
+    // Wheel handling for the whole editor (rows, split handle, bottom scrollbars). Rows clip their
+    // overflow (they are virtualized), so horizontal gestures are forwarded to the pane scrollbars.
     useEffect(() => {
-        if (wrapLines) {
+        const root = rootRef.current;
+        const scroller = parentRef.current;
+        if (!root || !scroller) {
             return;
         }
 
-        const scroller = parentRef.current;
-        if (!scroller) {
-            return;
-        }
+        const paneForEvent = (event: WheelEvent, target: Element | null): HorizontalPane => {
+            if (layout !== "split") {
+                return "unified";
+            }
+            if (splitView !== "both") {
+                return splitView === "old" ? "LEFT" : "RIGHT";
+            }
+            const pane = target?.closest<HTMLElement>("[data-diff-pane]")?.dataset.diffPane;
+            if (pane === "LEFT" || pane === "RIGHT") {
+                return pane;
+            }
+            // Hunk and gap rows span both columns: pick the side of the divider under the pointer.
+            const divider = leftScrollRef.current?.getBoundingClientRect().right ?? Number.POSITIVE_INFINITY;
+            return event.clientX < divider ? "LEFT" : "RIGHT";
+        };
 
         const onWheel = (event: WheelEvent) => {
-            const shiftAsHorizontal = event.shiftKey && event.deltaY !== 0 && event.deltaX === 0;
+            const target = event.target instanceof Element ? event.target : null;
             const absX = Math.abs(event.deltaX);
             const absY = Math.abs(event.deltaY);
+            const shiftAsHorizontal = event.shiftKey && absY > 0 && absX === 0;
 
-            if (!shiftAsHorizontal) {
-                if (absX === 0) {
-                    return;
+            // Lock to the dominant axis: trackpad drift on a vertical swipe must not stall it.
+            if (!shiftAsHorizontal && absX <= absY) {
+                if (target?.closest("[data-diff-split-handle]")) {
+                    // The split handle sits outside the scroller; keep scrolling the diff over it.
+                    event.preventDefault();
+                    scroller.scrollTop += wheelDeltaPx(
+                        event.deltaY,
+                        event.deltaMode,
+                        lineHeight,
+                        scroller.clientHeight,
+                    );
                 }
-                // Trackpads often mix deltaX and deltaY; ignore mostly-vertical gestures.
-                if (absX < absY && absX < 6) {
-                    return;
-                }
-            }
-
-            const editableTarget =
-                event.target instanceof Element
-                    ? event.target.closest("textarea, [contenteditable='true'], [contenteditable=true]")
-                    : null;
-            if (editableTarget && !shiftAsHorizontal && absY > absX) {
                 return;
             }
 
-            const dx = shiftAsHorizontal ? event.deltaY : event.deltaX;
-            if (dx === 0) {
+            // Comment threads keep their own horizontal scrolling (wide code blocks, tables).
+            if (wrapLines || target?.closest("[data-diff-annotation-row]")) {
                 return;
             }
 
-            let target: HTMLDivElement | null = null;
-            let contentWidthPx = 0;
-            if (layout === "split") {
-                const root = splitRootRef.current;
-                if (!root) {
-                    return;
-                }
-                const rect = root.getBoundingClientRect();
-                const dividerX = rect.left + rect.width * splitLeftRatio;
-                const onLeft = event.clientX < dividerX;
-                target = onLeft ? leftScrollRef.current : rightScrollRef.current;
-                contentWidthPx = onLeft ? measuredWidths.left : measuredWidths.right;
-            } else {
-                target = unifiedScrollRef.current;
-                contentWidthPx = measuredWidths.unified;
-            }
-            if (!target) {
+            const horizontal = horizontalScroller(paneForEvent(event, target));
+            if (!horizontal) {
                 return;
             }
-
-            const trackMax = target.scrollWidth - target.clientWidth;
-            const contentMax = Math.max(0, contentWidthPx - target.clientWidth);
-            const max = Math.max(trackMax, contentMax);
+            const { strip, setScroll } = horizontal;
+            const max = strip.scrollWidth - strip.clientWidth;
             if (max <= 0) {
                 return;
             }
 
-            const next = Math.min(max, Math.max(0, target.scrollLeft + dx));
-            if (next === target.scrollLeft) {
-                return;
-            }
-
+            // Swallow the event even at an edge so a horizontal swipe never turns into
+            // browser back/forward navigation while reading code.
             event.preventDefault();
-            target.scrollLeft = next;
-            if (layout === "split") {
-                const root = splitRootRef.current;
-                if (root) {
-                    const rect = root.getBoundingClientRect();
-                    const dividerX = rect.left + rect.width * splitLeftRatio;
-                    if (event.clientX < dividerX) {
-                        setLeftScroll(next);
-                    } else {
-                        setRightScroll(next);
-                    }
-                }
-            } else {
-                setUnifiedScroll(next);
+            const delta = wheelDeltaPx(
+                shiftAsHorizontal ? event.deltaY : event.deltaX,
+                event.deltaMode,
+                lineHeight,
+                strip.clientWidth,
+            );
+            const next = Math.min(max, Math.max(0, strip.scrollLeft + delta));
+            if (next !== strip.scrollLeft) {
+                strip.scrollLeft = next;
+                setScroll(next);
             }
         };
 
-        scroller.addEventListener("wheel", onWheel, { passive: false, capture: true });
-        return () => scroller.removeEventListener("wheel", onWheel, { capture: true });
-    }, [layout, splitLeftRatio, measuredWidths, wrapLines]);
+        root.addEventListener("wheel", onWheel, { passive: false });
+        return () => root.removeEventListener("wheel", onWheel);
+    }, [layout, splitView, wrapLines, lineHeight, horizontalScroller]);
 
     useEffect(() => {
         if (!selected) {
@@ -1697,7 +1658,8 @@ function VirtualDiffLines({
         }
         const index = virtualRows.findIndex((row) => row.kind === "compose");
         if (index >= 0) {
-            virtualizer.scrollToIndex(index, { align: "center" });
+            // Only scroll when the composer would open off-screen.
+            virtualizer.scrollToIndex(index, { align: "auto" });
         }
         // Scroll once when the compose target changes; ignore virtualizer identity churn.
         // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional
@@ -1705,146 +1667,159 @@ function VirtualDiffLines({
 
     return (
         <div
-            key={`${path}-${layout}-${lineHeight}-${wrapLines}-${lines.length}`}
-            ref={splitRootRef}
-            className="relative flex min-h-0 flex-1 flex-col font-mono text-xs"
-            style={{
-                lineHeight: `${lineHeight}px`,
-                ...(layout === "split" ? { ["--diff-split-left" as string]: `${splitLeftRatio * 100}%` } : null),
-            }}
+            ref={rootRef}
+            className="group/diff relative flex min-h-0 flex-1 flex-col font-mono text-xs"
+            style={
+                {
+                    lineHeight: `${lineHeight}px`,
+                    "--diff-scrollbar": `${scrollbarWidth}px`,
+                    ...(bothColumns ? { "--diff-split-ratio": String(splitRatio) } : null),
+                } as CSSProperties
+            }
         >
-            <div ref={parentRef} className="relative min-h-0 flex-1 overflow-x-hidden overflow-y-auto">
-                {layout === "split" ? (
-                    <SplitResizeHandle
-                        ratio={splitLeftRatio}
-                        onChange={setSplitLeftRatio}
-                        containerRef={splitRootRef}
-                    />
-                ) : null}
-                <div className="relative w-full" style={{ height: virtualizer.getTotalSize() }}>
-                    {virtualizer.getVirtualItems().map((item) => {
-                        const row = virtualRows[item.index]!;
-                        return (
-                            <div
-                                key={item.key}
-                                data-index={item.index}
-                                ref={virtualizer.measureElement}
-                                className={cn(
-                                    "absolute top-0 left-0 w-full",
-                                    !wrapLines && "overflow-hidden",
-                                    layout === "split" && (row.kind === "notes" || row.kind === "compose") && "z-[11]",
-                                )}
-                                style={{ transform: `translateY(${item.start}px)` }}
-                            >
-                                {row.kind === "notes" ? (
-                                    <InlineDiffComments
-                                        side={row.notes.side}
-                                        line={row.notes.line}
-                                        lineText={row.notes.text}
-                                        pending={row.notes.pending}
-                                        threads={row.notes.threads}
-                                        viewerLogin={viewerLogin}
-                                        viewerAvatarUrl={viewerAvatarUrl}
-                                        previewBaseUrl={previewBaseUrl}
-                                        repository={repository}
-                                        number={number}
-                                        canApplySuggestions={canApplySuggestions}
-                                        mentionUsers={mentionUsers}
-                                        disabled={disabled}
-                                        onRemovePending={onRemovePending}
-                                        onUpdatePending={onUpdatePending}
-                                        onReply={onReplyToThread}
-                                    />
-                                ) : row.kind === "compose" ? (
-                                    <LineCommentComposer
-                                        compose={row.target}
-                                        noteValue={noteValue}
-                                        canSuggest={canSuggest}
-                                        canSave={canSave}
-                                        saving={saving}
-                                        hasPendingReview={hasPendingReview}
-                                        disabled={disabled}
-                                        previewBaseUrl={previewBaseUrl}
-                                        repository={repository}
-                                        number={number}
-                                        mentionUsers={mentionUsers}
-                                        viewerLogin={viewerLogin}
-                                        viewerAvatarUrl={viewerAvatarUrl}
-                                        onNoteChange={onNoteChange}
-                                        onCancel={onCancelCompose}
-                                        onSave={onSaveCompose}
-                                    />
-                                ) : row.kind === "split" ? (
-                                    <SplitRowView
-                                        row={row.row}
-                                        path={path}
-                                        lineHeight={lineHeight}
-                                        wrapLines={wrapLines}
-                                        syntax={syntax}
-                                        pendingByLine={pendingByLine}
-                                        disabled={disabled}
-                                        selected={selected}
-                                        leftScroll={leftScroll}
-                                        rightScroll={rightScroll}
-                                        searchMatches={searchMatches}
-                                        activeMatchId={activeMatchId}
-                                        onSelect={onSelect}
-                                        onExpandGap={onExpandGap}
-                                    />
-                                ) : (
-                                    <UnifiedRow
-                                        line={row.line}
-                                        lineIndex={row.lineIndex}
-                                        path={path}
-                                        lineHeight={lineHeight}
-                                        wrapLines={wrapLines}
-                                        syntax={syntax}
-                                        pendingByLine={pendingByLine}
-                                        disabled={disabled}
-                                        selected={selected}
-                                        scroll={unifiedScroll}
-                                        searchMatches={searchMatches}
-                                        activeMatchId={activeMatchId}
-                                        onSelect={onSelect}
-                                        onExpandGap={onExpandGap}
-                                    />
-                                )}
-                            </div>
-                        );
-                    })}
+            <div className="relative flex min-h-0 flex-1 flex-col">
+                <div ref={parentRef} className="relative min-h-0 flex-1 overflow-x-hidden overflow-y-auto">
+                    <div className="relative w-full" style={{ height: virtualizer.getTotalSize() }}>
+                        {virtualizer.getVirtualItems().map((item) => {
+                            const row = virtualRows[item.index]!;
+                            const annotation = row.kind === "notes" || row.kind === "compose";
+                            return (
+                                <div
+                                    key={item.key}
+                                    data-index={item.index}
+                                    {...(annotation ? { "data-diff-annotation-row": "" } : {})}
+                                    ref={virtualizer.measureElement}
+                                    className={cn(
+                                        "absolute top-0 left-0 w-full",
+                                        !wrapLines && "overflow-hidden",
+                                        bothColumns && annotation && "z-[11]",
+                                    )}
+                                    style={{ transform: `translateY(${item.start}px)` }}
+                                >
+                                    {row.kind === "notes" ? (
+                                        <InlineDiffComments
+                                            side={row.notes.side}
+                                            line={row.notes.line}
+                                            lineText={row.notes.text}
+                                            pending={row.notes.pending}
+                                            threads={row.notes.threads}
+                                            viewerLogin={viewerLogin}
+                                            viewerAvatarUrl={viewerAvatarUrl}
+                                            previewBaseUrl={previewBaseUrl}
+                                            repository={repository}
+                                            number={number}
+                                            canApplySuggestions={canApplySuggestions}
+                                            mentionUsers={mentionUsers}
+                                            disabled={disabled}
+                                            onRemovePending={onRemovePending}
+                                            onUpdatePending={onUpdatePending}
+                                            onReply={onReplyToThread}
+                                        />
+                                    ) : row.kind === "compose" ? (
+                                        <LineCommentComposer
+                                            compose={row.target}
+                                            noteValue={noteValue}
+                                            canSuggest={canSuggest}
+                                            canSave={canSave}
+                                            saving={saving}
+                                            hasPendingReview={hasPendingReview}
+                                            disabled={disabled}
+                                            previewBaseUrl={previewBaseUrl}
+                                            repository={repository}
+                                            number={number}
+                                            mentionUsers={mentionUsers}
+                                            viewerLogin={viewerLogin}
+                                            viewerAvatarUrl={viewerAvatarUrl}
+                                            onNoteChange={onNoteChange}
+                                            onCancel={onCancelCompose}
+                                            onSave={onSaveCompose}
+                                        />
+                                    ) : row.kind === "split" ? (
+                                        <SplitRowView
+                                            row={row.row}
+                                            path={path}
+                                            splitView={splitView}
+                                            lineHeight={lineHeight}
+                                            wrapLines={wrapLines}
+                                            syntax={syntax}
+                                            pendingByLine={pendingByLine}
+                                            disabled={disabled}
+                                            selected={selected}
+                                            leftScroll={leftScroll}
+                                            rightScroll={rightScroll}
+                                            searchMatches={searchMatches}
+                                            activeMatchId={activeMatchId}
+                                            onSelect={onSelect}
+                                            onExpandGap={onExpandGap}
+                                        />
+                                    ) : (
+                                        <UnifiedRow
+                                            line={row.line}
+                                            lineIndex={row.lineIndex}
+                                            path={path}
+                                            lineHeight={lineHeight}
+                                            wrapLines={wrapLines}
+                                            syntax={syntax}
+                                            pendingByLine={pendingByLine}
+                                            disabled={disabled}
+                                            selected={selected}
+                                            scroll={unifiedScroll}
+                                            searchMatches={searchMatches}
+                                            activeMatchId={activeMatchId}
+                                            onSelect={onSelect}
+                                            onExpandGap={onExpandGap}
+                                        />
+                                    )}
+                                </div>
+                            );
+                        })}
+                    </div>
                 </div>
+                {bothColumns ? (
+                    <SplitResizeHandle ratio={splitRatio} rootRef={rootRef} onChange={onSplitRatioChange} />
+                ) : null}
             </div>
 
             {!wrapLines ? (
-                layout === "split" ? (
-                    <div
-                        className="grid shrink-0 border-t bg-muted/20 font-mono text-xs"
-                        style={{ gridTemplateColumns: "var(--diff-split-left) minmax(0,1fr)" }}
-                    >
+                <div
+                    className="grid shrink-0 border-t bg-muted/20"
+                    style={{
+                        gridTemplateColumns: layout === "split" ? splitColumns(splitView) : "minmax(0,1fr)",
+                        // Keep the pane scrollbars under their columns, not under the vertical scrollbar.
+                        paddingRight: "var(--diff-scrollbar)",
+                    }}
+                >
+                    {layout === "split" ? (
+                        <>
+                            {showLeft ? (
+                                <div
+                                    ref={leftScrollRef}
+                                    className={cn("h-3 overflow-x-scroll", bothColumns && "border-r border-border")}
+                                    onScroll={(event) => setLeftScroll(event.currentTarget.scrollLeft)}
+                                >
+                                    <div aria-hidden="true" style={{ width: leftTrackWidth, height: 1 }} />
+                                </div>
+                            ) : null}
+                            {showRight ? (
+                                <div
+                                    ref={rightScrollRef}
+                                    className="h-3 overflow-x-scroll"
+                                    onScroll={(event) => setRightScroll(event.currentTarget.scrollLeft)}
+                                >
+                                    <div aria-hidden="true" style={{ width: rightTrackWidth, height: 1 }} />
+                                </div>
+                            ) : null}
+                        </>
+                    ) : (
                         <div
-                            ref={leftScrollRef}
-                            className="h-3 overflow-x-scroll border-r border-border"
-                            onScroll={(event) => setLeftScroll(event.currentTarget.scrollLeft)}
-                        >
-                            <div aria-hidden="true" style={{ width: leftTrackWidth, height: 1 }} />
-                        </div>
-                        <div
-                            ref={rightScrollRef}
+                            ref={unifiedScrollRef}
                             className="h-3 overflow-x-scroll"
-                            onScroll={(event) => setRightScroll(event.currentTarget.scrollLeft)}
+                            onScroll={(event) => setUnifiedScroll(event.currentTarget.scrollLeft)}
                         >
-                            <div aria-hidden="true" style={{ width: rightTrackWidth, height: 1 }} />
+                            <div aria-hidden="true" style={{ width: unifiedTrackWidth, height: 1 }} />
                         </div>
-                    </div>
-                ) : (
-                    <div
-                        ref={unifiedScrollRef}
-                        className="h-3 shrink-0 overflow-x-scroll border-t bg-muted/20 font-mono text-xs"
-                        onScroll={(event) => setUnifiedScroll(event.currentTarget.scrollLeft)}
-                    >
-                        <div aria-hidden="true" style={{ width: unifiedTrackWidth, height: 1 }} />
-                    </div>
-                )
+                    )}
+                </div>
             ) : null}
 
             {selectionPopup ? (
@@ -1880,39 +1855,43 @@ function VirtualDiffLines({
     );
 }
 
-const SPLIT_RATIO_MIN = 0.2;
-const SPLIT_RATIO_MAX = 0.8;
-
-function clampSplitRatio(ratio: number): number {
-    return Math.min(SPLIT_RATIO_MAX, Math.max(SPLIT_RATIO_MIN, ratio));
-}
-
+/**
+ * Column divider for the split layout. It lives outside the scroll container so it stays
+ * grabbable at any scroll depth. Dragging only updates a CSS variable (no React render per
+ * pointer move); the ratio is committed — and persisted — on release.
+ */
 function SplitResizeHandle({
     ratio,
+    rootRef,
     onChange,
-    containerRef,
 }: {
     ratio: number;
+    rootRef: RefObject<HTMLDivElement | null>;
     onChange: (ratio: number) => void;
-    containerRef: RefObject<HTMLDivElement | null>;
 }) {
-    const draggingRef = useRef(false);
+    const dragRef = useRef<{ startX: number; startRatio: number; ratio: number } | null>(null);
 
-    function ratioFromClientX(clientX: number): number {
-        const root = containerRef.current;
-        if (!root) {
-            return ratio;
+    function preview(next: number) {
+        rootRef.current?.style.setProperty("--diff-split-ratio", String(next));
+    }
+
+    function finishDrag(commit: boolean) {
+        const drag = dragRef.current;
+        if (!drag) {
+            return;
         }
-        const rect = root.getBoundingClientRect();
-        if (rect.width <= 0) {
-            return ratio;
+        dragRef.current = null;
+        if (commit && drag.ratio !== ratio) {
+            onChange(drag.ratio);
+        } else {
+            preview(ratio);
         }
-        return clampSplitRatio((clientX - rect.left) / rect.width);
     }
 
     return (
         <div
             role="separator"
+            data-diff-split-handle=""
             aria-orientation="vertical"
             aria-label="Resize diff panes"
             aria-valuenow={Math.round(ratio * 100)}
@@ -1920,28 +1899,37 @@ function SplitResizeHandle({
             aria-valuemax={Math.round(SPLIT_RATIO_MAX * 100)}
             tabIndex={0}
             className="group absolute inset-y-0 z-10 w-3 -translate-x-1/2 cursor-col-resize touch-none"
-            style={{ left: "var(--diff-split-left)" }}
+            style={{ left: "calc(var(--diff-split-ratio) * (100% - var(--diff-scrollbar)))" }}
             onPointerDown={(event) => {
-                event.preventDefault();
-                draggingRef.current = true;
-                event.currentTarget.setPointerCapture(event.pointerId);
-                onChange(ratioFromClientX(event.clientX));
-            }}
-            onPointerMove={(event) => {
-                if (!draggingRef.current) {
+                if (event.button !== 0) {
                     return;
                 }
-                onChange(ratioFromClientX(event.clientX));
+                event.preventDefault();
+                // Track the delta from where the drag started so grabbing the edge of the
+                // handle does not snap the divider under the pointer.
+                dragRef.current = { startX: event.clientX, startRatio: ratio, ratio };
+                event.currentTarget.setPointerCapture(event.pointerId);
+            }}
+            onPointerMove={(event) => {
+                const drag = dragRef.current;
+                const root = rootRef.current;
+                const scrollbar = root ? Number.parseFloat(root.style.getPropertyValue("--diff-scrollbar")) || 0 : 0;
+                const width = (root?.getBoundingClientRect().width ?? 0) - scrollbar;
+                if (!drag || width <= 0) {
+                    return;
+                }
+                drag.ratio = clampSplitRatio(drag.startRatio + (event.clientX - drag.startX) / width);
+                preview(drag.ratio);
             }}
             onPointerUp={(event) => {
-                draggingRef.current = false;
+                finishDrag(true);
                 if (event.currentTarget.hasPointerCapture(event.pointerId)) {
                     event.currentTarget.releasePointerCapture(event.pointerId);
                 }
             }}
-            onPointerCancel={() => {
-                draggingRef.current = false;
-            }}
+            onPointerCancel={() => finishDrag(false)}
+            onLostPointerCapture={() => finishDrag(true)}
+            onDoubleClick={() => onChange(SPLIT_RATIO_DEFAULT)}
             onKeyDown={(event) => {
                 if (event.key === "ArrowLeft") {
                     event.preventDefault();
@@ -1953,7 +1941,7 @@ function SplitResizeHandle({
                 }
                 if (event.key === "Home") {
                     event.preventDefault();
-                    onChange(0.5);
+                    onChange(SPLIT_RATIO_DEFAULT);
                 }
             }}
         >
@@ -2080,11 +2068,11 @@ function UnifiedRow({
     const tokens = tokensForDiffLine(syntax, line.kind, line.oldNumber, line.newNumber);
     const wordSide = line.kind === "del" ? "del" : line.kind === "add" ? "add" : undefined;
     const searchHighlights = searchHighlightsForCell(searchMatches, activeMatchId, lineIndex, "unified");
-    const markSearchActive = searchHighlights.some((highlight) => highlight.active);
 
     return (
         <DiffLineViewport
             line={line}
+            pane="unified"
             scroll={scroll}
             lineHeight={lineHeight}
             wrapLines={wrapLines}
@@ -2114,7 +2102,7 @@ function UnifiedRow({
                     selected={isRightSelected}
                     onSelect={onSelect}
                 />
-                <DiffCodeCell path={path} target={target} markSearchActive={markSearchActive} wrapLines={wrapLines}>
+                <DiffCodeCell path={path} target={target} wrapLines={wrapLines}>
                     {prefix(line)}
                     <DiffCodeText
                         text={line.text}
@@ -2131,6 +2119,7 @@ function UnifiedRow({
 function SplitRowView({
     row,
     path,
+    splitView,
     lineHeight,
     wrapLines,
     syntax,
@@ -2146,6 +2135,7 @@ function SplitRowView({
 }: {
     row: SplitRow;
     path: string;
+    splitView: SplitView;
     lineHeight: number;
     wrapLines: boolean;
     syntax: FileSyntaxMaps;
@@ -2163,18 +2153,31 @@ function SplitRowView({
         return <GapBar line={row.line} onExpandGap={onExpandGap} />;
     }
 
+    const columns = splitColumns(splitView);
+    const showLeft = splitView !== "new";
+    const showRight = splitView !== "old";
+
     if (row.kind === "hunk") {
         return (
             <div
                 className="grid h-full bg-sky-500/10 font-sans text-[11px] text-sky-800 dark:text-sky-200"
-                style={{ gridTemplateColumns: "var(--diff-split-left) minmax(0,1fr)" }}
+                style={{ gridTemplateColumns: columns }}
             >
-                <div className="flex items-center overflow-hidden border-r border-sky-500/20 px-2">
-                    <span className="truncate">{row.line.text}</span>
-                </div>
-                <div className="flex items-center overflow-hidden px-2">
-                    <span className="truncate">{row.line.text}</span>
-                </div>
+                {showLeft ? (
+                    <div
+                        className={cn(
+                            "flex items-center overflow-hidden px-2",
+                            showRight && "border-r border-sky-500/20",
+                        )}
+                    >
+                        <span className="truncate">{row.line.text}</span>
+                    </div>
+                ) : null}
+                {showRight ? (
+                    <div className="flex items-center overflow-hidden px-2">
+                        <span className="truncate">{row.line.text}</span>
+                    </div>
+                ) : null}
             </div>
         );
     }
@@ -2188,60 +2191,60 @@ function SplitRowView({
     const wordDiff = left?.kind === "del" && right?.kind === "add" ? diffWords(leftText, rightText) : null;
 
     return (
-        <div
-            className="grid"
-            style={{
-                minHeight: lineHeight,
-                gridTemplateColumns: "var(--diff-split-left) minmax(0,1fr)",
-            }}
-        >
-            <DiffLineViewport
-                line={left}
-                scroll={leftScroll}
-                lineHeight={lineHeight}
-                wrapLines={wrapLines}
-                borderRight
-                isSelected={leftChrome.isSelected}
-                hasPending={leftChrome.hasPending}
-            >
-                <SplitCell
+        <div className="grid" style={{ minHeight: lineHeight, gridTemplateColumns: columns }}>
+            {showLeft ? (
+                <DiffLineViewport
                     line={left}
-                    lineIndex={row.kind === "pair" ? row.leftLineIndex : null}
-                    path={path}
-                    side="LEFT"
+                    pane="LEFT"
+                    scroll={leftScroll}
+                    lineHeight={lineHeight}
                     wrapLines={wrapLines}
-                    syntax={syntax}
-                    wordDiff={wordDiff}
-                    disabled={disabled}
-                    selected={selected}
-                    searchMatches={searchMatches}
-                    activeMatchId={activeMatchId}
-                    onSelect={onSelect}
-                />
-            </DiffLineViewport>
-            <DiffLineViewport
-                line={right}
-                scroll={rightScroll}
-                lineHeight={lineHeight}
-                wrapLines={wrapLines}
-                isSelected={rightChrome.isSelected}
-                hasPending={rightChrome.hasPending}
-            >
-                <SplitCell
+                    borderRight={showRight}
+                    isSelected={leftChrome.isSelected}
+                    hasPending={leftChrome.hasPending}
+                >
+                    <SplitCell
+                        line={left}
+                        lineIndex={row.leftLineIndex}
+                        path={path}
+                        side="LEFT"
+                        wrapLines={wrapLines}
+                        syntax={syntax}
+                        wordDiff={wordDiff}
+                        disabled={disabled}
+                        selected={selected}
+                        searchMatches={searchMatches}
+                        activeMatchId={activeMatchId}
+                        onSelect={onSelect}
+                    />
+                </DiffLineViewport>
+            ) : null}
+            {showRight ? (
+                <DiffLineViewport
                     line={right}
-                    lineIndex={row.kind === "pair" ? row.rightLineIndex : null}
-                    path={path}
-                    side="RIGHT"
+                    pane="RIGHT"
+                    scroll={rightScroll}
+                    lineHeight={lineHeight}
                     wrapLines={wrapLines}
-                    syntax={syntax}
-                    wordDiff={wordDiff}
-                    disabled={disabled}
-                    selected={selected}
-                    searchMatches={searchMatches}
-                    activeMatchId={activeMatchId}
-                    onSelect={onSelect}
-                />
-            </DiffLineViewport>
+                    isSelected={rightChrome.isSelected}
+                    hasPending={rightChrome.hasPending}
+                >
+                    <SplitCell
+                        line={right}
+                        lineIndex={row.rightLineIndex}
+                        path={path}
+                        side="RIGHT"
+                        wrapLines={wrapLines}
+                        syntax={syntax}
+                        wordDiff={wordDiff}
+                        disabled={disabled}
+                        selected={selected}
+                        searchMatches={searchMatches}
+                        activeMatchId={activeMatchId}
+                        onSelect={onSelect}
+                    />
+                </DiffLineViewport>
+            ) : null}
         </div>
     );
 }
@@ -2309,7 +2312,6 @@ function SplitCell({
     const wordSide = side === "LEFT" ? "del" : "add";
     const searchHighlights =
         lineIndex === null ? [] : searchHighlightsForCell(searchMatches, activeMatchId, lineIndex, side);
-    const markSearchActive = searchHighlights.some((highlight) => highlight.active);
 
     return (
         <div
@@ -2325,7 +2327,7 @@ function SplitCell({
                 selected={Boolean(isSelected)}
                 onSelect={onSelect}
             />
-            <DiffCodeCell path={path} target={usableTarget} markSearchActive={markSearchActive} wrapLines={wrapLines}>
+            <DiffCodeCell path={path} target={usableTarget} splitSide={side} wrapLines={wrapLines}>
                 <DiffCodeText
                     text={line.text}
                     tokens={tokens}
@@ -2419,6 +2421,7 @@ function splitPaneChrome(
 
 function DiffLineViewport({
     line,
+    pane,
     scroll,
     lineHeight,
     wrapLines = false,
@@ -2428,6 +2431,8 @@ function DiffLineViewport({
     children,
 }: {
     line: DiffLine | null;
+    /** Which horizontal scroller drives this cell; also scopes drag selection in split view. */
+    pane: DiffSide | "unified";
     scroll: number;
     lineHeight: number;
     wrapLines?: boolean;
@@ -2438,6 +2443,7 @@ function DiffLineViewport({
 }) {
     return (
         <div
+            data-diff-pane={pane}
             className={cn(
                 "relative min-w-0",
                 wrapLines ? "overflow-visible" : "overflow-hidden",

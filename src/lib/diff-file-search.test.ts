@@ -24,6 +24,33 @@ describe("collectDiffSearchMatches", () => {
         expect(matches).toHaveLength(2);
         expect(matches[0]).toMatchObject({ lineIndex: 0, side: "unified", start: 6, end: 11 });
     });
+
+    describe("split view", () => {
+        const changed: Array<DiffLine> = [
+            { kind: "context", text: "value", oldNumber: 1, newNumber: 1 },
+            { kind: "del", text: "old value", oldNumber: 2, newNumber: null },
+            { kind: "add", text: "new value", oldNumber: null, newNumber: 2 },
+        ];
+
+        it("searches both sides by default", () => {
+            const sides = collectDiffSearchMatches(changed, "value", "split").map((match) => match.side);
+            expect(sides).toEqual(["both", "LEFT", "RIGHT"]);
+        });
+
+        it("skips added lines when only the old version is shown", () => {
+            const sides = collectDiffSearchMatches(changed, "value", "split", "old").map((match) => match.side);
+            expect(sides).toEqual(["both", "LEFT"]);
+        });
+
+        it("skips deleted lines when only the new version is shown", () => {
+            const sides = collectDiffSearchMatches(changed, "value", "split", "new").map((match) => match.side);
+            expect(sides).toEqual(["both", "RIGHT"]);
+        });
+
+        it("ignores the split view in unified layout", () => {
+            expect(collectDiffSearchMatches(changed, "value", "unified", "new")).toHaveLength(3);
+        });
+    });
 });
 
 describe("withSearchHighlights", () => {

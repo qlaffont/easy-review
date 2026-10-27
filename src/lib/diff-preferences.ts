@@ -4,10 +4,16 @@ import type { GithubFileViewedState } from "#/lib/session/types.ts";
 
 export type DiffLayout = "unified" | "split";
 
+/** Which sides the split layout shows: both columns, or one version at full width. */
+export type SplitView = "both" | "old" | "new";
+
 export type FileListLayout = "flat" | "tree";
 
 export type DiffPreferences = {
     layout: DiffLayout;
+    splitView: SplitView;
+    /** Left column share of the split layout (0.2–0.8). */
+    splitRatio: number;
     hideWhitespace: boolean;
     compactLineHeight: boolean;
     /** Soft-wrap long lines instead of horizontal scrolling. */
@@ -38,10 +44,23 @@ export function clampFileListWidth(width: number): number {
     return Math.min(FILE_LIST_WIDTH_MAX, Math.max(FILE_LIST_WIDTH_MIN, Math.round(width)));
 }
 
+export const SPLIT_RATIO_DEFAULT = 0.5;
+export const SPLIT_RATIO_MIN = 0.2;
+export const SPLIT_RATIO_MAX = 0.8;
+
+export function clampSplitRatio(ratio: number): number {
+    if (!Number.isFinite(ratio)) {
+        return SPLIT_RATIO_DEFAULT;
+    }
+    return Math.min(SPLIT_RATIO_MAX, Math.max(SPLIT_RATIO_MIN, ratio));
+}
+
 const STORAGE_KEY = "easy-review:diff-prefs:v1";
 
 const DEFAULT_PREFERENCES: DiffPreferences = {
     layout: "split",
+    splitView: "both",
+    splitRatio: SPLIT_RATIO_DEFAULT,
     hideWhitespace: false,
     compactLineHeight: false,
     wrapLines: false,
@@ -68,6 +87,10 @@ function readPreferences(): DiffPreferences {
         const parsed = JSON.parse(raw) as Partial<DiffPreferences>;
         return {
             layout: parsed.layout === "split" ? "split" : "unified",
+            splitView: parsed.splitView === "old" || parsed.splitView === "new" ? parsed.splitView : "both",
+            splitRatio: clampSplitRatio(
+                typeof parsed.splitRatio === "number" ? parsed.splitRatio : SPLIT_RATIO_DEFAULT,
+            ),
             hideWhitespace: Boolean(parsed.hideWhitespace),
             compactLineHeight: Boolean(parsed.compactLineHeight),
             wrapLines: Boolean(parsed.wrapLines),

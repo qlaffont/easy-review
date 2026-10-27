@@ -603,6 +603,10 @@ export function ReviewChanges({
                                         canApplySuggestions={page.detail?.state === "open" && !isolatingRange}
                                         mentionUsers={mentionUsers}
                                         layout={preferences.layout}
+                                        splitView={preferences.splitView}
+                                        splitRatio={preferences.splitRatio}
+                                        onSplitViewChange={(splitView) => setPreferences({ splitView })}
+                                        onSplitRatioChange={(splitRatio) => setPreferences({ splitRatio })}
                                         hideWhitespace={preferences.hideWhitespace}
                                         compactLineHeight={preferences.compactLineHeight}
                                         wrapLines={preferences.wrapLines}
@@ -776,6 +780,10 @@ function SelectionDiffStatBars({ additions, deletions }: { additions: number; de
     );
 }
 
+/**
+ * Dragging only rewrites the sidebar's `--file-list-width` (no React render or localStorage write
+ * per pointer move); the width is committed — and persisted — on release.
+ */
 function FileListResizeHandle({
     width,
     onChange,
@@ -785,8 +793,21 @@ function FileListResizeHandle({
     onChange: (width: number) => void;
     onDraggingChange: (dragging: boolean) => void;
 }) {
-    const draggingRef = useRef(false);
-    const startRef = useRef({ x: 0, width: 0 });
+    const dragRef = useRef<{ x: number; startWidth: number; width: number; sidebar: HTMLElement | null } | null>(null);
+
+    function finishDrag(commit: boolean) {
+        const drag = dragRef.current;
+        if (!drag) {
+            return;
+        }
+        dragRef.current = null;
+        onDraggingChange(false);
+        if (commit && drag.width !== width) {
+            onChange(drag.width);
+        } else {
+            drag.sidebar?.style.setProperty("--file-list-width", `${width}px`);
+        }
+    }
 
     return (
         <div
@@ -799,30 +820,35 @@ function FileListResizeHandle({
             tabIndex={0}
             className="group absolute inset-y-0 right-0 z-10 hidden w-3 translate-x-1/2 cursor-col-resize touch-none md:block"
             onPointerDown={(event) => {
+                if (event.button !== 0) {
+                    return;
+                }
                 event.preventDefault();
-                draggingRef.current = true;
-                startRef.current = { x: event.clientX, width };
+                dragRef.current = {
+                    x: event.clientX,
+                    startWidth: width,
+                    width,
+                    sidebar: event.currentTarget.parentElement,
+                };
                 onDraggingChange(true);
                 event.currentTarget.setPointerCapture(event.pointerId);
             }}
             onPointerMove={(event) => {
-                if (!draggingRef.current) {
+                const drag = dragRef.current;
+                if (!drag) {
                     return;
                 }
-                const delta = event.clientX - startRef.current.x;
-                onChange(clampFileListWidth(startRef.current.width + delta));
+                drag.width = clampFileListWidth(drag.startWidth + event.clientX - drag.x);
+                drag.sidebar?.style.setProperty("--file-list-width", `${drag.width}px`);
             }}
             onPointerUp={(event) => {
-                draggingRef.current = false;
-                onDraggingChange(false);
+                finishDrag(true);
                 if (event.currentTarget.hasPointerCapture(event.pointerId)) {
                     event.currentTarget.releasePointerCapture(event.pointerId);
                 }
             }}
-            onPointerCancel={() => {
-                draggingRef.current = false;
-                onDraggingChange(false);
-            }}
+            onPointerCancel={() => finishDrag(false)}
+            onLostPointerCapture={() => finishDrag(true)}
             onKeyDown={(event) => {
                 if (event.key === "ArrowLeft") {
                     event.preventDefault();
@@ -884,23 +910,36 @@ function FileList({
 
     const tree = useMemo(() => buildFileTree(visibleFiles), [visibleFiles]);
     const [expandedDirs, setExpandedDirs] = useState<Set<string>>(() => defaultExpandedDirPaths(tree));
+    const revealedRef = useRef<{ list: HTMLElement; key: string } | null>(null);
 
     useEffect(() => {
         setExpandedDirs(defaultExpandedDirPaths(tree));
     }, [tree]);
 
     useEffect(() => {
-        if (!selectedPath) {
+        const list = listRef.current;
+        if (!selectedPath || !list) {
+            return;
+        }
+
+        // Reveal once per selection (or layout switch), so a background refresh of the file list
+        // does not pull the list back while the reviewer is scrolling it.
+        const revealKey = `${layout}\n${selectedPath}`;
+        if (revealedRef.current?.list === list && revealedRef.current.key === revealKey) {
             return;
         }
 
         if (!scrollSelectionIntoView) {
-            listRef.current?.scrollTo({ top: 0 });
+            revealedRef.current = { list, key: revealKey };
+            list.scrollTo({ top: 0 });
             return;
         }
 
-        const selected = listRef.current?.querySelector<HTMLElement>(`[data-file-path="${CSS.escape(selectedPath)}"]`);
-        selected?.scrollIntoView({ block: "nearest" });
+        const selected = list.querySelector<HTMLElement>(`[data-file-path="${CSS.escape(selectedPath)}"]`);
+        if (selected) {
+            revealedRef.current = { list, key: revealKey };
+            scrollIntoContainer(list, selected);
+        }
     }, [selectedPath, scrollSelectionIntoView, visibleFiles, layout]);
 
     if (status === "loading" || status === "idle") {
@@ -1024,6 +1063,20 @@ function FileList({
             </nav>
         </div>
     );
+}
+
+/**
+ * Vertical-only `scrollIntoView({ block: "nearest" })` limited to `container`: the native call also
+ * scrolls every scrollable ancestor, which made the whole page jump when changing files.
+ */
+function scrollIntoContainer(container: HTMLElement, child: HTMLElement) {
+    const containerRect = container.getBoundingClientRect();
+    const childRect = child.getBoundingClientRect();
+    if (childRect.top < containerRect.top) {
+        container.scrollTop += childRect.top - containerRect.top;
+    } else if (childRect.bottom > containerRect.bottom) {
+        container.scrollTop += childRect.bottom - containerRect.bottom;
+    }
 }
 
 function fileMatchesFilter(path: string, filter: string): boolean {

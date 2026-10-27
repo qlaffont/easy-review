@@ -1,4 +1,4 @@
-import type { DiffLayout } from "#/lib/diff-preferences.ts";
+import type { DiffLayout, SplitView } from "#/lib/diff-preferences.ts";
 import type { DiffLine, DiffSide } from "#/lib/session/types.ts";
 import type { DiffCodeSegment } from "#/lib/syntax/merge-syntax-word-diff.ts";
 
@@ -40,10 +40,12 @@ export function findTextRanges(text: string, query: string): Array<{ start: numb
     return ranges;
 }
 
+/** In a one-sided split view, lines that only exist on the hidden side are not searchable. */
 export function collectDiffSearchMatches(
     lines: ReadonlyArray<DiffLine>,
     query: string,
     layout: DiffLayout,
+    splitView: SplitView = "both",
 ): Array<DiffSearchMatch> {
     const needle = query.trim();
     if (!needle) {
@@ -55,6 +57,12 @@ export function collectDiffSearchMatches(
 
     lines.forEach((line, lineIndex) => {
         if (line.kind === "hunk" || line.kind === "gap") {
+            return;
+        }
+        if (layout === "split" && splitView === "new" && line.kind === "del") {
+            return;
+        }
+        if (layout === "split" && splitView === "old" && line.kind === "add") {
             return;
         }
 
