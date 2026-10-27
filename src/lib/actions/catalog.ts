@@ -3,7 +3,14 @@ import type { PullRequestDetail, PullRequestState } from "#/lib/session/types.ts
 
 import { shouldReturnToInboxAfterReviewOrMerge, shouldDeleteHeadBranchOnMerge } from "#/lib/diff-preferences.ts";
 import { openInboxPullRequest } from "#/lib/inbox/inbox-navigation.ts";
-import { notifyAction, notifyActionWithInboxPrompt, notifyBackgroundActionWithInboxPrompt } from "#/lib/toast.ts";
+import { nextStackPullRequestAfterReview } from "#/lib/session/pull-request-stacks.ts";
+import { getStackPreferences } from "#/lib/stack-preferences.ts";
+import {
+    notifyAction,
+    notifyActionWithInboxPrompt,
+    notifyBackgroundActionAfterNavigating,
+    notifyBackgroundActionWithInboxPrompt,
+} from "#/lib/toast.ts";
 
 /**
  * The pull request the keyboard selection or the open page is focused on. Copy and lifecycle
@@ -86,17 +93,26 @@ function submitReviewInBackground(
 
     const repository = context.target.repository;
     const number = context.target.number;
-    void notifyBackgroundActionWithInboxPrompt(
-        async () => {
-            await context.session.setReviewEvent(repository, number, event);
-            await context.session.submitReview(repository, number);
-        },
-        messages,
-        {
-            returnToInbox: shouldReturnToInboxAfterReviewOrMerge(),
-            onGoToInbox: context.goToInboxFresh,
-        },
-    );
+    const submit = async () => {
+        await context.session.setReviewEvent(repository, number, event);
+        await context.session.submitReview(repository, number);
+    };
+    const detail = context.pullRequestDetail;
+    const nextInStack =
+        detail?.repository === repository && detail.number === number
+            ? nextStackPullRequestAfterReview(detail, getStackPreferences())
+            : null;
+    if (nextInStack) {
+        void notifyBackgroundActionAfterNavigating(submit, messages, () => {
+            context.openPullRequest(nextInStack.repository, nextInStack.number);
+        });
+        return;
+    }
+
+    void notifyBackgroundActionWithInboxPrompt(submit, messages, {
+        returnToInbox: shouldReturnToInboxAfterReviewOrMerge(),
+        onGoToInbox: context.goToInboxFresh,
+    });
 }
 
 /** Every command the palette (and later chords) can discover. */

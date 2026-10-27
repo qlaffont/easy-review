@@ -46,7 +46,7 @@ beforeEach(() => {
     github = createFakeGithub();
     store = createMemoryStore();
     github.addAccount(TOKEN, { login: VIEWER });
-    replaceStackPreferences({ enabled: true, hideClosed: false });
+    replaceStackPreferences({ enabled: true, hideClosed: false, openNextInStackAfterReview: false });
     const bottom = github.addPullRequest(TOKEN, {
         repository: "acme/api",
         number: 148,

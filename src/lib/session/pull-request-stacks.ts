@@ -1,4 +1,5 @@
-import type { GithubPullRequestStack, PullRequestSummary } from "#/lib/session/types.ts";
+import type { GithubPullRequestStack, PullRequestDetail, PullRequestSummary } from "#/lib/session/types.ts";
+import type { StackPreferences } from "#/lib/stack-preferences.ts";
 
 export type ResolvedPullRequestStack = {
     repository: string;
@@ -54,6 +55,33 @@ export function resolveGithubPullRequestStack(input: {
         position,
         total: visible.length,
     };
+}
+
+/** First open layer above the focal pull request — stacks are reviewed bottom → top. */
+export function nextOpenPullRequestInStack(stack: ResolvedPullRequestStack): PullRequestSummary | null {
+    return stack.pullRequests.slice(stack.position).find((pullRequest) => pullRequest.state === "open") ?? null;
+}
+
+/**
+ * Where to go after submitting a review on `detail`, when the user opted into walking the stack.
+ * Null when the option is off, the pull request is not stacked, or it is the top open layer.
+ */
+export function nextStackPullRequestAfterReview(
+    detail: Pick<PullRequestDetail, "repository" | "number" | "githubStack" | "githubStackPullRequests"> | null,
+    preferences: StackPreferences,
+): PullRequestSummary | null {
+    if (!detail || !preferences.enabled || !preferences.openNextInStackAfterReview) {
+        return null;
+    }
+
+    const stack = resolveGithubPullRequestStack({
+        repository: detail.repository,
+        number: detail.number,
+        githubStack: detail.githubStack,
+        pullRequests: detail.githubStackPullRequests,
+        hideClosed: preferences.hideClosed,
+    });
+    return stack ? nextOpenPullRequestInStack(stack) : null;
 }
 
 export function formatStackUrls(stack: ResolvedPullRequestStack): string {

@@ -84,14 +84,27 @@ export function notifyBackgroundActionWithInboxPrompt<T>(
     },
 ): Promise<T> {
     if (options.returnToInbox) {
-        options.onGoToInbox();
-        return notifyAction(action, messages);
+        return notifyBackgroundActionAfterNavigating(action, messages, options.onGoToInbox);
     }
 
     return notifyActionWithInboxPrompt(action, messages, {
         returnToInbox: false,
         onGoToInbox: options.onGoToInbox,
     });
+}
+
+/** Navigate right away and let the action finish in the background with loading → success / error toasts. */
+export function notifyBackgroundActionAfterNavigating<T>(
+    action: () => Promise<T>,
+    messages: {
+        loading: string;
+        success: string;
+        error?: string;
+    },
+    navigate: () => void,
+): Promise<T> {
+    navigate();
+    return notifyAction(action, messages);
 }
 
 export function notifySuccess(message: string): void {

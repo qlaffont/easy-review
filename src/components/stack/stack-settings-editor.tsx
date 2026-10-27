@@ -1,4 +1,4 @@
-import { GitPullRequestClosed, Layers } from "lucide-react";
+import { ArrowUpToLine, GitPullRequestClosed, Layers } from "lucide-react";
 
 import { SettingsDialogTitle, SettingsPreferenceRow } from "#/components/settings/settings-ui.tsx";
 import { Dialog, DialogContent, DialogDescription, DialogHeader } from "#/components/ui/dialog.tsx";
@@ -34,6 +34,16 @@ export function StackSettingsEditor({ open, onOpenChange }: { open: boolean; onO
                         description="Keep closed PRs out of the stack panel."
                         checked={stackPreferences.hideClosed}
                         onCheckedChange={(hideClosed) => setStackPreferences({ hideClosed })}
+                        disabled={!stackPreferences.enabled}
+                    />
+                    <SettingsPreferenceRow
+                        icon={ArrowUpToLine}
+                        title="Open next pull request in stack after review"
+                        description="After you submit a review on a stacked PR, go to the next open PR above it instead of the Inbox."
+                        checked={stackPreferences.openNextInStackAfterReview}
+                        onCheckedChange={(openNextInStackAfterReview) =>
+                            setStackPreferences({ openNextInStackAfterReview })
+                        }
                         disabled={!stackPreferences.enabled}
                     />
                 </div>

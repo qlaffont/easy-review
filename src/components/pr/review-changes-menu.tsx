@@ -13,7 +13,14 @@ import { useDiffPreferences } from "#/lib/diff-preferences.ts";
 import { usePullRequestPage, useReviewThreadsQuery } from "#/lib/query/pull-request.ts";
 import { useReviewDraft } from "#/lib/query/review-draft.ts";
 import { useSession } from "#/lib/session/provider.tsx";
-import { notifyAction, notifyBackgroundActionWithInboxPrompt, notifySuccess } from "#/lib/toast.ts";
+import { nextStackPullRequestAfterReview } from "#/lib/session/pull-request-stacks.ts";
+import { getStackPreferences } from "#/lib/stack-preferences.ts";
+import {
+    notifyAction,
+    notifyBackgroundActionAfterNavigating,
+    notifyBackgroundActionWithInboxPrompt,
+    notifySuccess,
+} from "#/lib/toast.ts";
 import { cn } from "#/lib/utils.ts";
 
 const EVENTS: Array<{ value: ReviewEvent; label: string; hint: string }> = [
@@ -73,24 +80,35 @@ export function ReviewChangesMenu({ repository, number }: { repository: string; 
         setError(null);
         setOpen(false);
 
-        const returnToInbox = preferences.returnToInboxAfterReviewOrMerge;
-        void notifyBackgroundActionWithInboxPrompt(
-            () => session.submitReview(repository, number),
-            {
-                loading: "Submitting review…",
-                success: "Review submitted",
-                error: "Could not submit the review.",
-            },
-            {
-                returnToInbox,
-                onGoToInbox: () => {
-                    session.invalidateInbox();
-                    void navigate({ to: "/" });
-                },
-            },
-        )
+        const messages = {
+            loading: "Submitting review…",
+            success: "Review submitted",
+            error: "Could not submit the review.",
+        };
+        const nextInStack = nextStackPullRequestAfterReview(detail, getStackPreferences());
+        const leavesPage = nextInStack !== null || preferences.returnToInboxAfterReviewOrMerge;
+        const submission = nextInStack
+            ? notifyBackgroundActionAfterNavigating(
+                  () => session.submitReview(repository, number),
+                  messages,
+                  () => {
+                      const [owner = "", repo = ""] = nextInStack.repository.split("/");
+                      void navigate({
+                          to: "/pr/$owner/$repo/$number",
+                          params: { owner, repo, number: String(nextInStack.number) },
+                      });
+                  },
+              )
+            : notifyBackgroundActionWithInboxPrompt(() => session.submitReview(repository, number), messages, {
+                  returnToInbox: preferences.returnToInboxAfterReviewOrMerge,
+                  onGoToInbox: () => {
+                      session.invalidateInbox();
+                      void navigate({ to: "/" });
+                  },
+              });
+        void submission
             .catch((cause) => {
-                if (returnToInbox) {
+                if (leavesPage) {
                     return;
                 }
                 setError(cause instanceof Error ? cause.message : "Could not submit the review.");

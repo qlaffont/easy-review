@@ -7,6 +7,7 @@ import {
     formatStackGhCheckoutCommands,
     formatStackUrls,
     formatTrunkLabel,
+    nextStackPullRequestAfterReview,
     resolveGithubPullRequestStack,
 } from "#/lib/session/pull-request-stacks.ts";
 
@@ -188,5 +189,45 @@ describe("stack copy helpers", () => {
         );
         expect(formatStackBranches(stack)).toBe("feat-a\nfeat-b");
         expect(formatStackGhCheckoutCommands(stack)).toBe("gh pr checkout 148\ngh pr checkout 195");
+    });
+});
+
+describe("nextStackPullRequestAfterReview", () => {
+    const layers = [
+        summary({ key: "acme/api#374", repository: "acme/api", number: 374 }),
+        summary({ key: "acme/api#546", repository: "acme/api", number: 546 }),
+        summary({ key: "acme/api#547", repository: "acme/api", number: 547, state: "merged" }),
+        summary({ key: "acme/api#548", repository: "acme/api", number: 548, state: "closed" }),
+        summary({ key: "acme/api#549", repository: "acme/api", number: 549 }),
+    ];
+    const enabled = { enabled: true, hideClosed: false, openNextInStackAfterReview: true };
+
+    function detailAt(number: number) {
+        return {
+            repository: "acme/api",
+            number,
+            githubStack: { number: 1, size: layers.length, position: 1, baseRefName: "dev" },
+            githubStackPullRequests: layers,
+        };
+    }
+
+    it("skips merged and closed layers to the next open one above", () => {
+        expect(nextStackPullRequestAfterReview(detailAt(546), enabled)?.number).toBe(549);
+        expect(nextStackPullRequestAfterReview(detailAt(374), enabled)?.number).toBe(546);
+    });
+
+    it("returns null at the top of the stack", () => {
+        expect(nextStackPullRequestAfterReview(detailAt(549), enabled)).toBeNull();
+    });
+
+    it("returns null when the option or stacks are off", () => {
+        expect(
+            nextStackPullRequestAfterReview(detailAt(546), { ...enabled, openNextInStackAfterReview: false }),
+        ).toBeNull();
+        expect(nextStackPullRequestAfterReview(detailAt(546), { ...enabled, enabled: false })).toBeNull();
+    });
+
+    it("returns null outside a stack", () => {
+        expect(nextStackPullRequestAfterReview({ ...detailAt(546), githubStack: null }, enabled)).toBeNull();
     });
 });
