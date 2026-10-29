@@ -22,6 +22,7 @@ import {
     isMergeBlockedByRequirements,
     isReviewBlocking,
     mergeFooterHint,
+    mergeMethodOptions,
     mergeMethodSupportsCustomCommitMessage,
     mergingBlockedDescription,
     reviewRequiredDescription,
@@ -55,37 +56,6 @@ import { useReviewThreadsQuery } from "#/lib/query/pull-request.ts";
 import { useSession, useSessionState } from "#/lib/session/provider.tsx";
 import { notifyAction, notifyActionWithInboxPrompt } from "#/lib/toast.ts";
 import { cn } from "#/lib/utils.ts";
-
-const MERGE_METHOD_ORDER: Array<MergeMethod> = ["merge", "squash", "rebase"];
-
-function mergeMethodOptions(
-    allowed: Array<MergeMethod>,
-    commitCount: number,
-): Array<{ value: MergeMethod; label: string; description: string }> {
-    const commitLabel =
-        commitCount === 1 ? "The 1 commit from this branch" : `The ${commitCount} commits from this branch`;
-
-    const catalog: Record<MergeMethod, { label: string; description: string }> = {
-        merge: {
-            label: "Create a merge commit",
-            description: "All commits from this branch will be added to the base branch via a merge commit.",
-        },
-        squash: {
-            label: "Squash and merge",
-            description: `${commitLabel} will be combined into one commit in the base branch.`,
-        },
-        rebase: {
-            label: "Rebase and merge",
-            description: "All commits from this branch will be rebased and added to the base branch.",
-        },
-    };
-
-    const allowedSet = new Set(allowed);
-    return MERGE_METHOD_ORDER.filter((method) => allowedSet.has(method)).map((method) => ({
-        value: method,
-        ...catalog[method],
-    }));
-}
 
 export function PullRequestControls({ detail }: { detail: PullRequestDetail }) {
     const session = useSession();

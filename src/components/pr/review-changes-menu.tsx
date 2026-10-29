@@ -1,11 +1,19 @@
 import { useNavigate } from "@tanstack/react-router";
-import { ChevronDown } from "lucide-react";
+import { Check, ChevronDown } from "lucide-react";
 import { useMemo, useRef, useState } from "react";
 
-import type { ReviewEvent } from "#/lib/session/types.ts";
+import type { MergeMethod, ReviewEvent } from "#/lib/session/types.ts";
 
 import { MarkdownComposer } from "#/components/pr/markdown-composer.tsx";
+import { approveAndMergeBlockedReason, mergeMethodOptions } from "#/components/pr/merge-requirements.ts";
 import { Button } from "#/components/ui/button.tsx";
+import {
+    DropdownMenu,
+    DropdownMenuContent,
+    DropdownMenuItem,
+    DropdownMenuSeparator,
+    DropdownMenuTrigger,
+} from "#/components/ui/dropdown-menu.tsx";
 import { HelpTooltip } from "#/components/ui/help-tooltip.tsx";
 import { Popover, PopoverContent, PopoverTrigger } from "#/components/ui/popover.tsx";
 import { mentionCandidatesFromPullRequest } from "#/lib/composer-commands.ts";
@@ -47,6 +55,12 @@ const SUBMIT_LABEL: Record<ReviewEvent, string> = {
     "request-changes": "Request changes",
 };
 
+const APPROVE_AND_MERGE_LABEL: Record<MergeMethod, string> = {
+    merge: "Approve and merge",
+    squash: "Approve and squash",
+    rebase: "Approve and rebase",
+};
+
 /** GitHub-style “Review changes” control — green trigger with finish-review dropdown. */
 export function ReviewChangesMenu({ repository, number }: { repository: string; number: number }) {
     const session = useSession();
@@ -59,6 +73,7 @@ export function ReviewChangesMenu({ repository, number }: { repository: string; 
     const [submitting, setSubmitting] = useState(false);
     const [resolvingAll, setResolvingAll] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    const [mergeMethod, setMergeMethod] = useState<MergeMethod | null>(null);
     const busyRef = useRef(false);
 
     const detail = page.detail;
@@ -66,11 +81,53 @@ export function ReviewChangesMenu({ repository, number }: { repository: string; 
     const unresolvedThreads = useMemo(() => threads.items.filter((thread) => !thread.isResolved), [threads.items]);
     const unresolvedCount = unresolvedThreads.length;
     const pendingCount = draft.comments.length;
+    const mergeOptions = detail ? mergeMethodOptions(detail.allowedMergeMethods, detail.commitCount) : [];
+    const activeMergeMethod =
+        mergeOptions.find((option) => option.value === mergeMethod)?.value ??
+        mergeOptions.find((option) => option.value === detail?.defaultMergeMethod)?.value ??
+        mergeOptions[0]?.value ??
+        null;
+    const mergeBlockedReason = detail ? approveAndMergeBlockedReason(detail) : null;
+    const showApproveAndMerge =
+        draft.event === "approve" && detail?.state === "open" && !detail.isDraft && activeMergeMethod !== null;
     const blobBase = detail
         ? `https://github.com/${detail.repository}/blob/${detail.headRefName}/`
         : `https://github.com/${repository}/`;
 
     function handleSubmit() {
+        submit(() => session.submitReview(repository, number), {
+            loading: "Submitting review…",
+            success: "Review submitted",
+            error: "Could not submit the review.",
+        });
+    }
+
+    function handleApproveAndMerge(method: MergeMethod) {
+        if (mergeBlockedReason) {
+            return;
+        }
+
+        submit(
+            async () => {
+                await session.submitReview(repository, number);
+                try {
+                    await session.mergePullRequest(repository, number, method, {
+                        deleteHeadBranch: preferences.deleteHeadBranchOnMerge,
+                    });
+                } catch (cause) {
+                    const reason = cause instanceof Error && cause.message ? cause.message : "unknown error";
+                    throw new Error(`Approved, but could not merge: ${reason}`, { cause });
+                }
+            },
+            {
+                loading: "Approving and merging…",
+                success: "Pull request approved and merged",
+                error: "Could not approve and merge the pull request.",
+            },
+        );
+    }
+
+    function submit(action: () => Promise<void>, messages: { loading: string; success: string; error: string }) {
         if (busyRef.current || draft.stale) {
             return;
         }
@@ -80,26 +137,17 @@ export function ReviewChangesMenu({ repository, number }: { repository: string; 
         setError(null);
         setOpen(false);
 
-        const messages = {
-            loading: "Submitting review…",
-            success: "Review submitted",
-            error: "Could not submit the review.",
-        };
         const nextInStack = nextStackPullRequestAfterReview(detail, getStackPreferences());
         const leavesPage = nextInStack !== null || preferences.returnToInboxAfterReviewOrMerge;
         const submission = nextInStack
-            ? notifyBackgroundActionAfterNavigating(
-                  () => session.submitReview(repository, number),
-                  messages,
-                  () => {
-                      const [owner = "", repo = ""] = nextInStack.repository.split("/");
-                      void navigate({
-                          to: "/pr/$owner/$repo/$number",
-                          params: { owner, repo, number: String(nextInStack.number) },
-                      });
-                  },
-              )
-            : notifyBackgroundActionWithInboxPrompt(() => session.submitReview(repository, number), messages, {
+            ? notifyBackgroundActionAfterNavigating(action, messages, () => {
+                  const [owner = "", repo = ""] = nextInStack.repository.split("/");
+                  void navigate({
+                      to: "/pr/$owner/$repo/$number",
+                      params: { owner, repo, number: String(nextInStack.number) },
+                  });
+              })
+            : notifyBackgroundActionWithInboxPrompt(action, messages, {
                   returnToInbox: preferences.returnToInboxAfterReviewOrMerge,
                   onGoToInbox: () => {
                       session.invalidateInbox();
@@ -111,7 +159,7 @@ export function ReviewChangesMenu({ repository, number }: { repository: string; 
                 if (leavesPage) {
                     return;
                 }
-                setError(cause instanceof Error ? cause.message : "Could not submit the review.");
+                setError(cause instanceof Error ? cause.message : messages.error);
                 setOpen(true);
             })
             .finally(() => {
@@ -296,6 +344,16 @@ export function ReviewChangesMenu({ repository, number }: { repository: string; 
                                 {resolvingAll ? "Resolving…" : "Resolve all threads"}
                             </Button>
                         ) : null}
+                        {showApproveAndMerge ? (
+                            <ApproveAndMergeButton
+                                method={activeMergeMethod}
+                                options={mergeOptions}
+                                blockedReason={mergeBlockedReason}
+                                disabled={draft.stale || submitting || resolvingAll}
+                                onSelectMethod={setMergeMethod}
+                                onSubmit={handleApproveAndMerge}
+                            />
+                        ) : null}
                         <Button
                             size="sm"
                             disabled={draft.stale || submitting || resolvingAll}
@@ -312,5 +370,88 @@ export function ReviewChangesMenu({ repository, number }: { repository: string; 
                 </div>
             </PopoverContent>
         </Popover>
+    );
+}
+
+/** Split button: approve, then merge with the chosen method — mirrors the merge box’s method picker. */
+function ApproveAndMergeButton({
+    method,
+    options,
+    blockedReason,
+    disabled,
+    onSelectMethod,
+    onSubmit,
+}: {
+    method: MergeMethod;
+    options: ReturnType<typeof mergeMethodOptions>;
+    blockedReason: string | null;
+    disabled: boolean;
+    onSelectMethod: (method: MergeMethod) => void;
+    onSubmit: (method: MergeMethod) => void;
+}) {
+    const blocked = blockedReason !== null;
+    const label = APPROVE_AND_MERGE_LABEL[method];
+    const mainButton = (
+        <Button
+            size="sm"
+            variant="outline"
+            disabled={disabled || blocked}
+            className={cn(options.length > 1 ? "rounded-r-none" : undefined)}
+            onClick={() => onSubmit(method)}
+        >
+            {label}
+        </Button>
+    );
+
+    return (
+        <div className="inline-flex">
+            {blocked ? (
+                <HelpTooltip label={blockedReason}>
+                    <span tabIndex={0} className="inline-flex rounded-l-md">
+                        {mainButton}
+                    </span>
+                </HelpTooltip>
+            ) : (
+                mainButton
+            )}
+            {options.length > 1 ? (
+                <DropdownMenu>
+                    <DropdownMenuTrigger asChild disabled={disabled}>
+                        <Button
+                            size="sm"
+                            variant="outline"
+                            disabled={disabled}
+                            className="rounded-l-none border-l-0 px-2"
+                            aria-label="Select merge method for approve and merge"
+                        >
+                            <ChevronDown className="size-3.5" aria-hidden="true" />
+                        </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end" className="w-80">
+                        {options.map((option, index) => (
+                            <div key={option.value}>
+                                {index > 0 ? <DropdownMenuSeparator /> : null}
+                                <DropdownMenuItem
+                                    className="items-start gap-2 py-2"
+                                    onSelect={() => onSelectMethod(option.value)}
+                                >
+                                    <Check
+                                        className={cn(
+                                            "mt-0.5 size-3.5 shrink-0",
+                                            method === option.value ? "opacity-100" : "opacity-0",
+                                        )}
+                                        aria-hidden="true"
+                                    />
+                                    <span className="flex min-w-0 flex-col gap-0.5">
+                                        <span className="font-medium">{option.label}</span>
+                                        <span className="text-xs text-muted-foreground">{option.description}</span>
+                                    </span>
+                                </DropdownMenuItem>
+                            </div>
+                        ))}
+                    </DropdownMenuContent>
+                </DropdownMenu>
+            ) : null}
+        </div>
     );
 }

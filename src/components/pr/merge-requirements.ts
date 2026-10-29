@@ -1,5 +1,37 @@
 import type { MergeCommitSettings, MergeMethod, PullRequestDetail, PullRequestSummary } from "#/lib/session/types.ts";
 
+const MERGE_METHOD_ORDER: Array<MergeMethod> = ["merge", "squash", "rebase"];
+
+/** Merge methods the repository allows, in GitHub’s order, with button labels and hints. */
+export function mergeMethodOptions(
+    allowed: Array<MergeMethod>,
+    commitCount: number,
+): Array<{ value: MergeMethod; label: string; description: string }> {
+    const commitLabel =
+        commitCount === 1 ? "The 1 commit from this branch" : `The ${commitCount} commits from this branch`;
+
+    const catalog: Record<MergeMethod, { label: string; description: string }> = {
+        merge: {
+            label: "Create a merge commit",
+            description: "All commits from this branch will be added to the base branch via a merge commit.",
+        },
+        squash: {
+            label: "Squash and merge",
+            description: `${commitLabel} will be combined into one commit in the base branch.`,
+        },
+        rebase: {
+            label: "Rebase and merge",
+            description: "All commits from this branch will be rebased and added to the base branch.",
+        },
+    };
+
+    const allowedSet = new Set(allowed);
+    return MERGE_METHOD_ORDER.filter((method) => allowedSet.has(method)).map((method) => ({
+        value: method,
+        ...catalog[method],
+    }));
+}
+
 export function reviewRequiredDescription(detail: PullRequestDetail): string {
     const count = detail.requiredApprovingReviewCount;
     if (count != null && count > 0) {
@@ -37,6 +69,36 @@ export function isMergeBlockedByRequirements(detail: PullRequestDetail): boolean
         detail.mergeStateStatus === "behind" ||
         detail.mergeStateStatus === "dirty"
     );
+}
+
+/**
+ * Why “Approve and merge” cannot run right now, or null when it can.
+ * The viewer’s approval may clear a review requirement, so review blockers are ignored;
+ * GitHub still rejects the merge when more approvals are needed.
+ */
+export function approveAndMergeBlockedReason(detail: PullRequestDetail): string | null {
+    if (detail.state !== "open") {
+        return "Only open pull requests can be merged.";
+    }
+    if (detail.isDraft) {
+        return "Draft pull requests cannot be merged.";
+    }
+    if (detail.allowedMergeMethods.length === 0) {
+        return "No merge methods are enabled for this repository.";
+    }
+    if (hasMergeConflicts(detail)) {
+        return `This branch has conflicts with ${detail.baseRefName}.`;
+    }
+    if (detail.mergeStateStatus === "behind") {
+        return `This branch is out of date with ${detail.baseRefName}. Update it before merging.`;
+    }
+    if (detail.mergeStateStatus === "unstable") {
+        return "Required checks have not passed.";
+    }
+    if (detail.mergeStateStatus === "blocked" && !isReviewBlocking(detail)) {
+        return "This pull request does not meet the merge requirements for the base branch.";
+    }
+    return null;
 }
 
 export function mergingBlockedDescription(detail: PullRequestDetail): string | null {

@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { PullRequestDetail } from "#/lib/session/types.ts";
 
 import {
+    approveAndMergeBlockedReason,
     defaultMergeCommitFields,
     hasMergeConflicts,
     isMergeBlockedByRequirements,
@@ -91,6 +92,30 @@ describe("merge requirements", () => {
         const blocked = detail({ reviewDecision: "approved", mergeStateStatus: "dirty", mergeable: "unknown" });
         expect(hasMergeConflicts(blocked)).toBe(true);
         expect(isMergeBlockedByRequirements(blocked)).toBe(true);
+    });
+});
+
+describe("approveAndMergeBlockedReason", () => {
+    it("allows merging when only a review is missing", () => {
+        expect(
+            approveAndMergeBlockedReason(detail({ reviewDecision: "review-required", mergeStateStatus: "blocked" })),
+        ).toBeNull();
+    });
+
+    it("allows merging a clean pull request", () => {
+        expect(approveAndMergeBlockedReason(detail({ mergeStateStatus: "clean" }))).toBeNull();
+    });
+
+    it("blocks drafts, conflicts, and repositories without merge methods", () => {
+        expect(approveAndMergeBlockedReason(detail({ isDraft: true }))).toContain("Draft");
+        expect(approveAndMergeBlockedReason(detail({ mergeStateStatus: "dirty" }))).toContain("conflicts");
+        expect(approveAndMergeBlockedReason(detail({ allowedMergeMethods: [] }))).toContain("No merge methods");
+    });
+
+    it("blocks when requirements other than reviews fail", () => {
+        expect(approveAndMergeBlockedReason(detail({ mergeStateStatus: "unstable" }))).toContain("checks");
+        expect(approveAndMergeBlockedReason(detail({ mergeStateStatus: "behind" }))).toContain("out of date");
+        expect(approveAndMergeBlockedReason(detail({ reviewDecision: "approved" }))).toContain("merge requirements");
     });
 });
 
