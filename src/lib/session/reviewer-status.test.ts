@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
     aggregateReviewerStatuses,
+    displayReviewDecision,
     displayReviewState,
     excludeAuthorFromReviewers,
     excludeAuthorFromReviewRequests,
@@ -118,5 +119,80 @@ describe("displayReviewState", () => {
         expect(
             displayReviewState("romainpm", [{ login: "romainpm", state: "changes-requested", reviewId: 1 }], []),
         ).toBe("changes-requested");
+    });
+});
+
+describe("displayReviewDecision", () => {
+    const base = { author: "qlaffont", reviewDecision: "approved" as const, reviewers: [], reviewRequests: [] };
+
+    it("keeps approved when nobody is waiting on a review", () => {
+        expect(
+            displayReviewDecision({
+                ...base,
+                reviewers: [{ login: "alex", state: "approved", reviewId: 1 }],
+            }),
+        ).toBe("approved");
+    });
+
+    it("shows re-review requested when an approver was re-requested", () => {
+        expect(
+            displayReviewDecision({
+                ...base,
+                reviewers: [{ login: "alex", state: "approved", reviewId: 1 }],
+                reviewRequests: ["alex"],
+            }),
+        ).toBe("re-review-requested");
+    });
+
+    it("shows review requested when approved but a new reviewer is still requested", () => {
+        expect(
+            displayReviewDecision({
+                ...base,
+                reviewers: [{ login: "alex", state: "approved", reviewId: 1 }],
+                reviewRequests: ["mohamed"],
+            }),
+        ).toBe("review-requested");
+    });
+
+    it("ignores the author in review requests", () => {
+        expect(
+            displayReviewDecision({
+                ...base,
+                reviewers: [{ login: "alex", state: "approved", reviewId: 1 }],
+                reviewRequests: ["qlaffont"],
+            }),
+        ).toBe("approved");
+    });
+
+    it("keeps changes requested while a changes requester was not re-requested", () => {
+        expect(
+            displayReviewDecision({
+                ...base,
+                reviewDecision: "changes-requested",
+                reviewers: [
+                    { login: "alex", state: "changes-requested", reviewId: 1 },
+                    { login: "mohamed", state: "changes-requested", reviewId: 2 },
+                ],
+                reviewRequests: ["alex"],
+            }),
+        ).toBe("changes-requested");
+    });
+
+    it("shows re-review requested once every changes requester was re-requested", () => {
+        expect(
+            displayReviewDecision({
+                ...base,
+                reviewDecision: "changes-requested",
+                reviewers: [{ login: "alex", state: "changes-requested", reviewId: 1 }],
+                reviewRequests: ["alex"],
+            }),
+        ).toBe("re-review-requested");
+    });
+
+    it("keeps GitHub's decision when no review was submitted yet", () => {
+        expect(displayReviewDecision({ ...base, reviewDecision: "review-required", reviewRequests: ["alex"] })).toBe(
+            "review-required",
+        );
+        expect(displayReviewDecision({ ...base, reviewDecision: null })).toBeNull();
     });
 });

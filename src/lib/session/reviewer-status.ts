@@ -1,4 +1,4 @@
-import type { ReviewState, ReviewerStatus } from "#/lib/session/types.ts";
+import type { PullRequestSummary, ReviewDecision, ReviewState, ReviewerStatus } from "#/lib/session/types.ts";
 
 export type RawPullRequestReview = {
     databaseId: number;
@@ -97,4 +97,40 @@ export function displayReviewState(
     }
 
     return reviewers.find((reviewer) => reviewer.login === login)?.state ?? "pending";
+}
+
+/** GitHub's review decision, refined by outstanding review requests. */
+export type DisplayReviewDecision = ReviewDecision | "review-requested" | "re-review-requested";
+
+/**
+ * GitHub keeps `reviewDecision: APPROVED` after the author re-requests a review, so the raw
+ * decision alone claims "Approved" while the author is actually waiting on reviewers. Once a
+ * decision exists, an outstanding request takes over — except while a changes requester has
+ * not been re-requested yet, which still hands the ball back to the author.
+ */
+export function displayReviewDecision(
+    pullRequest: Pick<PullRequestSummary, "author" | "reviewDecision" | "reviewers" | "reviewRequests">,
+): DisplayReviewDecision {
+    const decision = pullRequest.reviewDecision;
+    if (decision !== "approved" && decision !== "changes-requested") {
+        return decision;
+    }
+
+    const reviewers = excludeAuthorFromReviewers(pullRequest.author, pullRequest.reviewers);
+    const reviewRequests = excludeAuthorFromReviewRequests(pullRequest.author, pullRequest.reviewRequests);
+
+    if (
+        decision === "changes-requested" &&
+        reviewers.some((reviewer) => reviewer.state === "changes-requested" && !reviewRequests.includes(reviewer.login))
+    ) {
+        return decision;
+    }
+
+    if (reviewRequests.length === 0) {
+        return decision;
+    }
+
+    return reviewers.some((reviewer) => reviewRequests.includes(reviewer.login))
+        ? "re-review-requested"
+        : "review-requested";
 }

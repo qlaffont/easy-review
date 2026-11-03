@@ -14,8 +14,9 @@ import {
 } from "lucide-react";
 import { useMemo, useState } from "react";
 
+import type { DisplayReviewDecision } from "#/lib/session/reviewer-status.ts";
 import type { StackMergeRowStatus } from "#/lib/session/stack-merge.ts";
-import type { PullRequestDetail, PullRequestSummary, ReviewDecision } from "#/lib/session/types.ts";
+import type { PullRequestDetail, PullRequestSummary } from "#/lib/session/types.ts";
 
 import { ChecksDot } from "#/components/pr/checks-dot.tsx";
 import { pullRequestHasMergeConflicts } from "#/components/pr/merge-requirements.ts";
@@ -35,6 +36,7 @@ import {
     formatStackUrls,
     resolveGithubPullRequestStack,
 } from "#/lib/session/pull-request-stacks.ts";
+import { displayReviewDecision } from "#/lib/session/reviewer-status.ts";
 import { evaluateStackMerge, stackMergeStatusLabel } from "#/lib/session/stack-merge.ts";
 import { useStackPreferences } from "#/lib/stack-preferences.ts";
 import { notifyCopied } from "#/lib/toast.ts";
@@ -73,16 +75,20 @@ function stackStatusLabel(pullRequest: PullRequestSummary): string {
     return "Open";
 }
 
-const REVIEW_DECISION_LABEL: Record<NonNullable<ReviewDecision>, string> = {
+const REVIEW_DECISION_LABEL: Record<NonNullable<DisplayReviewDecision>, string> = {
     approved: "Approved",
     "changes-requested": "Changes requested",
     "review-required": "Review required",
+    "review-requested": "Review requested",
+    "re-review-requested": "Re-review requested",
 };
 
-const REVIEW_DECISION_CLASS: Record<NonNullable<ReviewDecision>, string> = {
+const REVIEW_DECISION_CLASS: Record<NonNullable<DisplayReviewDecision>, string> = {
     approved: "text-emerald-700 dark:text-emerald-400",
     "changes-requested": "text-rose-700 dark:text-rose-400",
     "review-required": "text-amber-700 dark:text-amber-400",
+    "review-requested": "text-amber-700 dark:text-amber-400",
+    "re-review-requested": "text-amber-700 dark:text-amber-400",
 };
 
 function stackReviewStatus(pullRequest: PullRequestSummary): { label: string; className: string } | null {
@@ -90,13 +96,14 @@ function stackReviewStatus(pullRequest: PullRequestSummary): { label: string; cl
         return null;
     }
 
-    if (!pullRequest.reviewDecision) {
+    const decision = displayReviewDecision(pullRequest);
+    if (!decision) {
         return { label: "No review", className: "text-muted-foreground" };
     }
 
     return {
-        label: REVIEW_DECISION_LABEL[pullRequest.reviewDecision],
-        className: REVIEW_DECISION_CLASS[pullRequest.reviewDecision],
+        label: REVIEW_DECISION_LABEL[decision],
+        className: REVIEW_DECISION_CLASS[decision],
     };
 }
 
