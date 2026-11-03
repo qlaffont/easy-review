@@ -106,7 +106,8 @@ export type DisplayReviewDecision = ReviewDecision | "review-requested" | "re-re
  * GitHub keeps `reviewDecision: APPROVED` after the author re-requests a review, so the raw
  * decision alone claims "Approved" while the author is actually waiting on reviewers. Once a
  * decision exists, an outstanding request takes over — except while a changes requester has
- * not been re-requested yet, which still hands the ball back to the author.
+ * not been re-requested yet, which still hands the ball back to the author, and once an
+ * approval is current (its reviewer is not awaiting a re-review), which keeps "Approved".
  */
 export function displayReviewDecision(
     pullRequest: Pick<PullRequestSummary, "author" | "reviewDecision" | "reviewers" | "reviewRequests">,
@@ -127,6 +128,13 @@ export function displayReviewDecision(
     }
 
     if (reviewRequests.length === 0) {
+        return decision;
+    }
+
+    if (
+        decision === "approved" &&
+        reviewers.some((reviewer) => reviewer.state === "approved" && !reviewRequests.includes(reviewer.login))
+    ) {
         return decision;
     }
 

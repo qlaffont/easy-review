@@ -144,11 +144,47 @@ describe("displayReviewDecision", () => {
         ).toBe("re-review-requested");
     });
 
-    it("shows review requested when approved but a new reviewer is still requested", () => {
+    it("shows re-review requested when every approver was re-requested", () => {
+        expect(
+            displayReviewDecision({
+                ...base,
+                reviewers: [
+                    { login: "alex", state: "approved", reviewId: 1 },
+                    { login: "mohamed", state: "approved", reviewId: 2 },
+                ],
+                reviewRequests: ["alex", "mohamed"],
+            }),
+        ).toBe("re-review-requested");
+    });
+
+    it("keeps approved once a re-requested reviewer approved again", () => {
+        expect(
+            displayReviewDecision({
+                ...base,
+                reviewers: [
+                    { login: "alex", state: "approved", reviewId: 3 },
+                    { login: "mohamed", state: "approved", reviewId: 2 },
+                ],
+                reviewRequests: ["mohamed"],
+            }),
+        ).toBe("approved");
+    });
+
+    it("keeps approved when a current approval exists and a new reviewer is still requested", () => {
         expect(
             displayReviewDecision({
                 ...base,
                 reviewers: [{ login: "alex", state: "approved", reviewId: 1 }],
+                reviewRequests: ["mohamed"],
+            }),
+        ).toBe("approved");
+    });
+
+    it("shows review requested when only a commenter reviewed and a new reviewer is requested", () => {
+        expect(
+            displayReviewDecision({
+                ...base,
+                reviewers: [{ login: "alex", state: "commented", reviewId: 1 }],
                 reviewRequests: ["mohamed"],
             }),
         ).toBe("review-requested");
