@@ -20,6 +20,8 @@ Notable flows:
 
 **In-app review:** **Inbox settings → Navigation → Open pull requests in Easy Review**. Also applies to **Enter** and the command palette action “Open selected pull request”.
 
+**Open all in new tabs:** the external-link button in a section header opens every pull request of that section in its own tab, following the same GitHub / Easy Review setting. Rows not loaded yet are fetched first, and sections with more than 20 pull requests ask for confirmation. Browsers allow only one tab per click by default: allow pop-ups for the site to open them all (a toast says when tabs were blocked).
+
 ## Refresh behavior
 
 | Trigger | Behavior |

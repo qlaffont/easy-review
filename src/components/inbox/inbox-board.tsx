@@ -3,6 +3,7 @@ import {
     Check,
     ChevronDown,
     ChevronRight,
+    ExternalLink,
     FolderGit2,
     GitMerge,
     Keyboard,
@@ -41,14 +42,14 @@ import {
 import { HelpTooltip } from "#/components/ui/help-tooltip.tsx";
 import { InboxLoadingSkeleton, LazyChunkFallback } from "#/components/ui/loading.tsx";
 import { RelativeTime } from "#/components/ui/relative-time.tsx";
-import { openInboxPullRequest } from "#/lib/inbox/inbox-navigation.ts";
+import { openInboxPullRequest, openInboxPullRequestsInTabs } from "#/lib/inbox/inbox-navigation.ts";
 import { useInboxStackBadges } from "#/lib/query/inbox-stack.ts";
 import { useInboxQuery } from "#/lib/query/inbox.ts";
 import { invalidateInboxAfterRepoSelection } from "#/lib/query/invalidate.ts";
 import { useSession, useSessionState } from "#/lib/session/provider.tsx";
 import { describeAutoMergeBatchResult, queuedAutoMergeKey } from "#/lib/session/queued-auto-merge.ts";
 import { useQuietRevalidate } from "#/lib/session/quiet-revalidate.ts";
-import { notifyAction } from "#/lib/toast.ts";
+import { notifyAction, notifyError } from "#/lib/toast.ts";
 import { cn } from "#/lib/utils.ts";
 
 const SectionFilterEditor = lazy(() =>
@@ -64,6 +65,8 @@ const SectionAppearanceEditor = lazy(() =>
 /** How many pull requests each expanded section shows before “Load more…”. */
 const INBOX_SECTION_PAGE_SIZE = 10;
 const APPROVED_SECTION_ID = "approved";
+/** Above this many pull requests, “Open all in new tabs” asks before flooding the tab bar. */
+const OPEN_ALL_CONFIRM_THRESHOLD = 20;
 const MERGE_BUTTON_CLASS = "bg-[#1f883d] text-white hover:bg-[#1a7f37] dark:bg-[#238636] dark:hover:bg-[#2ea043]";
 const INBOX_AUTO_MERGE_METHODS: Array<{
     value: MergeMethod;
@@ -159,6 +162,36 @@ export function InboxBoard() {
         const nextIndex = Math.min(flatRows.length - 1, Math.max(0, currentIndex + delta));
         setSelectedKey(flatRows[nextIndex]!.key);
     });
+
+    async function openSectionInTabs(section: InboxSection): Promise<void> {
+        const loadedPullRequests = () =>
+            session.getInboxSections().find((entry) => entry.id === section.id)?.pullRequests ?? [];
+
+        while (session.canLoadMoreInboxSection(section.id)) {
+            const loadedBefore = loadedPullRequests().length;
+            await session.loadMoreInboxSection(section.id);
+            // A failed page leaves the section unchanged — open what is loaded rather than retry forever.
+            if (loadedPullRequests().length === loadedBefore) {
+                break;
+            }
+        }
+
+        const pullRequests = loadedPullRequests();
+        const { blocked } = openInboxPullRequestsInTabs(pullRequests);
+
+        // Sticky: the first tab that opens takes focus, so a timed toast would expire before the user comes back.
+        if (blocked > 0) {
+            notifyError(
+                `Your browser blocked ${blocked} of ${pullRequests.length} tabs. Allow pop-ups for this site, then try again.`,
+                { sticky: true },
+            );
+        }
+        if (session.canLoadMoreInboxSection(section.id)) {
+            notifyError(`Could not load every pull request in ${section.label}. Only loaded ones were opened.`, {
+                sticky: true,
+            });
+        }
+    }
 
     const openSelected = useEffectEvent(() => {
         if (!selected) {
@@ -388,6 +421,7 @@ export function InboxBoard() {
                                           }
                                         : undefined
                                 }
+                                onOpenAll={() => openSectionInTabs(section)}
                                 onEditFilters={() => setFilterSectionId(section.id)}
                                 onChangeAppearance={() => setAppearanceSectionId(section.id)}
                                 onLoadMore={() => {
@@ -456,6 +490,7 @@ function InboxSectionPanel({
     onToggle,
     onRefresh,
     onAutoMergeAll,
+    onOpenAll,
     onEditFilters,
     onChangeAppearance,
     onLoadMore,
@@ -480,6 +515,7 @@ function InboxSectionPanel({
         queued: number;
         merged: ReadonlyArray<{ repository: string; number: number }>;
     }>;
+    onOpenAll: () => Promise<void>;
     onEditFilters: () => void;
     onChangeAppearance: () => void;
     onLoadMore: () => void;
@@ -550,6 +586,12 @@ function InboxSectionPanel({
                             onAutoMergeAll={onAutoMergeAll}
                         />
                     ) : null}
+                    <InboxOpenAllButton
+                        sectionLabel={section.label}
+                        count={count}
+                        disabled={count === 0 || Boolean(isFetching)}
+                        onOpenAll={onOpenAll}
+                    />
                     <HelpTooltip label={`Refresh ${section.label}`}>
                         <span className="inline-flex">
                             <Button
@@ -623,6 +665,67 @@ function InboxSectionPanel({
                 )
             ) : null}
         </section>
+    );
+}
+
+function InboxOpenAllButton({
+    sectionLabel,
+    count,
+    disabled,
+    onOpenAll,
+}: {
+    sectionLabel: string;
+    count: number;
+    disabled: boolean;
+    onOpenAll: () => Promise<void>;
+}) {
+    const [pending, setPending] = useState(false);
+    const [confirming, setConfirming] = useState(false);
+
+    function openAll() {
+        setPending(true);
+        void onOpenAll().finally(() => setPending(false));
+    }
+
+    return (
+        <>
+            <HelpTooltip label={pending ? "Loading pull requests…" : "Open all in new tabs"}>
+                <span className="inline-flex">
+                    <Button
+                        type="button"
+                        size="icon-sm"
+                        variant="ghost"
+                        className="my-1 size-7"
+                        disabled={disabled || pending}
+                        aria-busy={pending}
+                        aria-label={`Open all pull requests in ${sectionLabel} in new tabs`}
+                        onClick={() => {
+                            if (count > OPEN_ALL_CONFIRM_THRESHOLD) {
+                                setConfirming(true);
+                            } else {
+                                openAll();
+                            }
+                        }}
+                    >
+                        {pending ? <Loader2 className="size-4 animate-spin" /> : <ExternalLink className="size-4" />}
+                    </Button>
+                </span>
+            </HelpTooltip>
+            <AlertDialog open={confirming} onOpenChange={setConfirming}>
+                <AlertDialogContent className="max-w-lg">
+                    <AlertDialogHeader>
+                        <AlertDialogTitle>Open {count} tabs?</AlertDialogTitle>
+                        <AlertDialogDescription>
+                            Every pull request in {sectionLabel} will open in its own browser tab.
+                        </AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter>
+                        <AlertDialogCancel>Cancel</AlertDialogCancel>
+                        <AlertDialogAction onClick={openAll}>Open {count} tabs</AlertDialogAction>
+                    </AlertDialogFooter>
+                </AlertDialogContent>
+            </AlertDialog>
+        </>
     );
 }
 

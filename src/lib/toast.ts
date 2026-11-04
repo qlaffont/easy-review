@@ -111,7 +111,13 @@ export function notifySuccess(message: string): void {
     toast.success(message);
 }
 
-export function notifyError(message: string): void {
+/** `sticky` keeps the toast until dismissed, for messages the user may be away from the tab to see. */
+export function notifyError(message: string, options?: { sticky?: boolean }): void {
+    if (options?.sticky) {
+        toast.error(message, { duration: Number.POSITIVE_INFINITY });
+        return;
+    }
+
     toast.error(message);
 }
 
