@@ -30,6 +30,7 @@ Single-context glossary for product behavior. ADRs live under `docs/adr/` when w
 | **Quiet revalidate** | Background inbox refetch while the tab is **visible**, throttled (~3 minutes). |
 | **Background sync** | Inbox refetch every ~5 minutes while the tab is **hidden or not focused**, only when desktop notifications are enabled. |
 | **Desktop notification** | Browser `Notification` (opt-in in Inbox settings); fires when a PR appears in a section with **Notify** on while the tab is hidden or not focused. Not web push. |
+| **Inbox chime** | Easy Review's own synthesized sound, played with a desktop notification, on top of any OS or browser sound. Once per PR across open tabs; needs a prior click or key press in the tab. |
 
 ## Merge
 

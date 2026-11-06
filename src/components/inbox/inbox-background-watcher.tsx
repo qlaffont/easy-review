@@ -2,6 +2,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useEffectEvent, useMemo, useRef } from "react";
 
 import { useInboxPreferences } from "#/lib/inbox-preferences.ts";
+import { armInboxChime } from "#/lib/inbox/inbox-chime.ts";
 import { isTabAttended, showNewPullRequestNotifications } from "#/lib/inbox/inbox-notifications.ts";
 import {
     detectNewPullRequests,
@@ -95,6 +96,13 @@ export function InboxBackgroundWatcher() {
             document.removeEventListener("visibilitychange", onAttentionChange);
         };
     }, []);
+
+    useEffect(() => {
+        if (!preferences.backgroundNotifications) {
+            return;
+        }
+        return armInboxChime();
+    }, [preferences.backgroundNotifications]);
 
     useEffect(() => {
         if (!login || selectedCount === 0 || !preferences.backgroundNotifications) {

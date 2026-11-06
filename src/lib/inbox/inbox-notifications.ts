@@ -1,4 +1,5 @@
 import { inboxPreferencesEnabled } from "#/lib/inbox-preferences.ts";
+import { playInboxChime } from "#/lib/inbox/inbox-chime.ts";
 
 export type PullRequestNotification = {
     repository: string;
@@ -36,7 +37,7 @@ export function isTabAttended(): boolean {
     return document.visibilityState === "visible" && document.hasFocus();
 }
 
-/** Show desktop notifications for new pull requests. No-op when disabled, denied, or the tab is attended. */
+/** Show desktop notifications and play the chime for new pull requests. No-op when disabled, denied, or the tab is attended. */
 export function showNewPullRequestNotifications(pullRequests: ReadonlyArray<PullRequestNotification>): void {
     if (pullRequests.length === 0) {
         return;
@@ -50,6 +51,8 @@ export function showNewPullRequestNotifications(pullRequests: ReadonlyArray<Pull
     if (notificationPermission() !== "granted") {
         return;
     }
+
+    void playInboxChime(pullRequests.map((pullRequest) => pullRequest.key));
 
     if (pullRequests.length > 3) {
         showSummaryNotification(pullRequests.length);
