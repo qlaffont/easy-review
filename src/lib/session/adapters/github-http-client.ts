@@ -3124,6 +3124,7 @@ const PULL_REQUEST_LATEST_CHECKS_COMMIT = `
                                 startedAt
                                 completedAt
                                 checkSuite {
+                                    databaseId
                                     workflowRun {
                                         event
                                         workflow {
@@ -3475,6 +3476,7 @@ const PULL_REQUEST_QUERY = `
                                             startedAt
                                             completedAt
                                             checkSuite {
+                                                databaseId
                                                 workflowRun {
                                                     event
                                                     workflow {
@@ -3717,6 +3719,7 @@ const PULL_REQUEST_TIMELINE_QUERY = `
                                                 startedAt
                                                 completedAt
                                                 checkSuite {
+                                                    databaseId
                                                     workflowRun {
                                                         event
                                                         workflow {

@@ -38,6 +38,7 @@ Permissions are set on the app (not classic OAuth scopes). After changing permis
 | **Repository → Pull requests** | Read and write | Inbox, reviews, merge/close |
 | **Repository → Issues** | Read and write | Comments, labels, assignees, reactions |
 | **Repository → Checks** | Read-only | Check runs / Actions |
+| **Repository → Actions** | Read-only | Workflow names on check runs |
 | **Repository → Commit statuses** | Read-only | Legacy CI statuses |
 | **Repository → Metadata** | Read-only | Required by GitHub |
 | **Organization → Members** | Read-only | Team names on review requests |

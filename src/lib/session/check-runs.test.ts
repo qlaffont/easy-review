@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
     checkRunDisplayName,
+    latestCheckState,
     mapCheckRuns,
     selectLatestCheckContexts,
     type CheckContextInput,
@@ -72,6 +73,65 @@ describe("selectLatestCheckContexts", () => {
         });
 
         expect(selectLatestCheckContexts([pullRequest, push])).toHaveLength(2);
+    });
+});
+
+describe("jobs a newer run has not created yet", () => {
+    // latomate/medical-service#405 @ f108cf3, as a GitHub App token without Actions access sees it.
+    function job(
+        name: string,
+        suiteId: number,
+        overrides: Partial<Extract<CheckContextInput, { __typename: "CheckRun" }>> = {},
+    ) {
+        return checkRun(name, { checkSuite: { databaseId: suiteId, workflowRun: null }, ...overrides });
+    }
+    const running = { status: "IN_PROGRESS", conclusion: null, completedAt: null };
+    const cancelled = { conclusion: "CANCELLED" };
+    const REPLACED_RUN = 114325967595;
+    const LATEST_RUN = 114326551700;
+
+    it("ignores them while the newer run is still in progress", () => {
+        const nodes = [
+            job("lint", REPLACED_RUN, { startedAt: "2026-11-06T09:17:11Z" }),
+            job("lint", LATEST_RUN, { startedAt: "2026-11-06T09:19:10Z" }),
+            job("build", REPLACED_RUN, { ...cancelled, startedAt: "2026-11-06T09:17:54Z" }),
+            job("build", LATEST_RUN, { ...running, startedAt: "2026-11-06T09:19:20Z" }),
+            job("build-import-client", REPLACED_RUN, { ...cancelled, startedAt: "2026-11-06T09:19:01Z" }),
+        ];
+
+        expect(mapCheckRuns(nodes).map((run) => [run.name, run.state])).toEqual([
+            ["lint", "success"],
+            ["build", "pending"],
+        ]);
+        expect(latestCheckState(nodes, "failure")).toBe("pending");
+    });
+
+    it("keeps a failure once the newer run has finished without that job", () => {
+        const nodes = [
+            job("build", REPLACED_RUN, cancelled),
+            job("build", LATEST_RUN),
+            job("build-import-client", REPLACED_RUN, cancelled),
+        ];
+
+        expect(latestCheckState(nodes, "failure")).toBe("failure");
+    });
+
+    it("keeps a failure from another workflow that only shares a job name", () => {
+        const nodes = [
+            job("build", REPLACED_RUN),
+            job("test", REPLACED_RUN, { conclusion: "FAILURE" }),
+            job("build", LATEST_RUN, running),
+            job("e2e", LATEST_RUN, running),
+        ];
+
+        expect(mapCheckRuns(nodes).map((run) => run.name)).toContain("test");
+        expect(latestCheckState(nodes, "failure")).toBe("failure");
+    });
+
+    it("keeps older checks from an unrelated suite", () => {
+        const nodes = [job("CodeRabbit", 114325926079), job("build", LATEST_RUN, running)];
+
+        expect(mapCheckRuns(nodes).map((run) => run.name)).toEqual(["CodeRabbit", "build"]);
     });
 });
 

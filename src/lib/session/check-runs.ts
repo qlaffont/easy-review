@@ -11,6 +11,9 @@ export type CheckContextInput =
           startedAt: string | null;
           completedAt: string | null;
           checkSuite?: {
+              /** Grows with each suite, so it orders runs when `workflowRun` is unreadable. */
+              databaseId?: number | null;
+              /** Null unless the token has Actions read access. */
               workflowRun?: {
                   event?: string | null;
                   workflow?: { name?: string | null } | null;
@@ -56,6 +59,54 @@ function contextRank(context: CheckContextInput): number {
     return Number.isFinite(parsed) ? parsed : 0;
 }
 
+function suiteIdOf(context: CheckContextInput): number | null {
+    return context.__typename === "CheckRun" ? (context.checkSuite?.databaseId ?? null) : null;
+}
+
+/**
+ * A run in progress has not created the jobs waiting on its earlier ones, so those jobs only
+ * exist in the runs it replaces, and GitHub lists none of them until the new run gets there.
+ *
+ * The workflow is often unreadable, so a run counts as replaced when the running suite's checks
+ * are all among its own. Requiring the suite to still be running means a wrong match can only
+ * hide a check until that suite finishes, and the commit reads as pending, never as passed.
+ */
+function withoutChecksAwaitingRunningSuite(contexts: Array<CheckContextInput>): Array<CheckContextInput> {
+    const keysBySuite = new Map<number, Set<string>>();
+    const runningSuiteIds = new Set<number>();
+
+    for (const context of contexts) {
+        const suiteId = suiteIdOf(context);
+        if (suiteId === null || context.__typename !== "CheckRun") {
+            continue;
+        }
+        const keys = keysBySuite.get(suiteId) ?? new Set<string>();
+        keys.add(contextKey(context));
+        keysBySuite.set(suiteId, keys);
+        if (context.status !== "COMPLETED") {
+            runningSuiteIds.add(suiteId);
+        }
+    }
+
+    return contexts.filter((context) => {
+        const suiteId = suiteIdOf(context);
+        const suiteKeys = suiteId === null ? undefined : keysBySuite.get(suiteId);
+        if (suiteId === null || !suiteKeys) {
+            return true;
+        }
+        const key = contextKey(context);
+        return ![...runningSuiteIds].some((runningId) => {
+            const runningKeys = keysBySuite.get(runningId);
+            return (
+                runningKeys !== undefined &&
+                runningId > suiteId &&
+                !runningKeys.has(key) &&
+                [...runningKeys].every((runningKey) => suiteKeys.has(runningKey))
+            );
+        });
+    });
+}
+
 /**
  * GitHub’s PR checks popover keeps one row per check name (latest attempt).
  * `statusCheckRollup` still returns every re-run / suite attempt — collapse those here.
@@ -64,11 +115,9 @@ export function selectLatestCheckContexts(
     nodes: ReadonlyArray<CheckContextInput | null | undefined>,
 ): Array<CheckContextInput> {
     const latest = new Map<string, { context: CheckContextInput; rank: number }>();
+    const visible = withoutChecksAwaitingRunningSuite(nodes.filter((node) => node != null));
 
-    for (const node of nodes) {
-        if (!node) {
-            continue;
-        }
+    for (const node of visible) {
         const key = contextKey(node);
         const rank = contextRank(node);
         const current = latest.get(key);

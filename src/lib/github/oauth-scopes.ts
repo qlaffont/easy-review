@@ -24,6 +24,11 @@ export const GITHUB_APP_PERMISSION_DEFS = [
         why: "Check runs and Actions status on the PR overview.",
     },
     {
+        name: "Actions",
+        access: "Read-only",
+        why: "Workflow names on check runs, so reruns are told apart from other workflows.",
+    },
+    {
         name: "Commit statuses",
         access: "Read-only",
         why: "Legacy status contexts (CI bots) alongside Checks.",
