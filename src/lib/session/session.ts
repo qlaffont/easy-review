@@ -88,11 +88,20 @@ import {
     visibleSectionDefinitions,
 } from "#/lib/session/inbox-sections.ts";
 import {
+    optimisticIssueComment,
+    optimisticReviewItem,
+    optimisticThread,
+    optimisticThreadComment,
+    optimisticThreadId,
+    withViewerReview,
+} from "#/lib/session/optimistic.ts";
+import {
     comparePullRequestsByUpdatedAtDesc,
     matchesPullRequestSearchQuery,
     parsePullRequestUrl,
 } from "#/lib/session/pull-request-search.ts";
 import { resolveGithubPullRequestStack, type ResolvedPullRequestStack } from "#/lib/session/pull-request-stacks.ts";
+import { createPullRequestWriteQueues, type PullRequestRefreshOptions } from "#/lib/session/pull-request-writes.ts";
 import {
     applyQueuedAutoMerge,
     isPullRequestReadyToAutoMerge,
@@ -436,6 +445,14 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
     const latestRepositoryMetadataLoads = new Map<string, number>();
     /** Last-write-wins for summary typing so overlapping persists cannot drop characters. */
     const latestDraftBodyWrites = new Map<string, number>();
+    /** Writes applied to the UI and on their way to GitHub. */
+    const writes = createPullRequestWriteQueues(({ repository, number }, options) =>
+        refreshAfterMutation(repository, number, options),
+    );
+    /** Drafts the UI has already cleared, kept until GitHub accepts the review or we restore them. */
+    const reviewSubmissions = new Map<string, ReviewDraft>();
+    /** Node ids of staged comments, for a removal clicked while the comment was still uploading. */
+    const stagedCommentNodeIds = new Map<string, string>();
     /** In-app auto-merge queue — not GitHub’s repository auto-merge setting. */
     let queuedAutoMerges = new Map<string, QueuedAutoMerge>();
     const autoMergingKeys = new Set<string>();
@@ -1322,6 +1339,17 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
         );
     }
 
+    async function setSectionNotifyOnNewPullRequest(
+        id: InboxSectionId,
+        notifyOnNewPullRequest: boolean,
+    ): Promise<void> {
+        await persistSectionLayout(
+            state.state.inbox.sectionLayout.map((entry) =>
+                entry.id === id ? { ...entry, notifyOnNewPullRequest } : entry,
+            ),
+        );
+    }
+
     async function moveSection(id: InboxSectionId, direction: "up" | "down"): Promise<void> {
         const layout = [...state.state.inbox.sectionLayout];
         const visibleIndexes = layout.flatMap((entry, index) => (entry.hidden ? [] : [index]));
@@ -1396,6 +1424,7 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
             label: recipe?.suggestedLabel ?? "Custom section",
             hidden: false,
             defaultExpanded: true,
+            notifyOnNewPullRequest: false,
             color: recipe?.color ?? "muted",
             customColor: null,
             icon: recipe?.icon ?? "filter",
@@ -1594,6 +1623,59 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
             return fromQuery;
         }
         return state.state.conversationComments[key]?.items ?? [];
+    }
+
+    /** Update loaded threads in place. Threads nobody fetched yet stay unfetched, not empty and fresh. */
+    function patchReviewThreads(key: string, patch: (items: Array<ReviewThread>) => Array<ReviewThread>): void {
+        const items =
+            queryClient.getQueryData<ReviewThreadsQueryData>(queryKeys.pullRequest.threads(key))?.items ??
+            state.state.reviewThreads[key]?.items;
+        if (!items) {
+            return;
+        }
+        const nextItems = patch(items);
+        queryClient.setQueryData<ReviewThreadsQueryData>(queryKeys.pullRequest.threads(key), { items: nextItems });
+        state.setState((prev) => ({
+            ...prev,
+            reviewThreads: { ...prev.reviewThreads, [key]: { status: "ready", items: nextItems, error: null } },
+        }));
+    }
+
+    /** Update a loaded conversation in place. One nobody fetched yet stays unfetched. */
+    function patchConversation(
+        key: string,
+        patch: (items: Array<PullRequestTimelineItem>) => Array<PullRequestTimelineItem>,
+    ): void {
+        const items =
+            queryClient.getQueryData<ConversationQueryData>(queryKeys.pullRequest.conversation(key))?.items ??
+            state.state.conversationComments[key]?.items;
+        if (!items) {
+            return;
+        }
+        const nextItems = patch(items);
+        queryClient.setQueryData<ConversationQueryData>(queryKeys.pullRequest.conversation(key), { items: nextItems });
+        state.setState((prev) => ({
+            ...prev,
+            conversationComments: {
+                ...prev.conversationComments,
+                [key]: { status: "ready", items: nextItems, error: null },
+            },
+        }));
+    }
+
+    function patchPullRequestDetail(
+        repository: string,
+        number: number,
+        patch: (detail: PullRequestDetail) => PullRequestDetail,
+    ): void {
+        const detail = resolvePullRequestDetail(repository, number);
+        if (!detail) {
+            return;
+        }
+        const key = pullRequestKey(repository, number);
+        const nextDetail = patch(detail);
+        setPullRequestDetailQueryData(queryClient, key, nextDetail);
+        setPullRequest(key, { status: "ready", detail: nextDetail, error: null });
     }
 
     function pullRequestFilesAreLoaded(key: string): boolean {
@@ -1941,8 +2023,8 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
         return { ...draft, githubReviewId: reviewId, githubReviewNodeId: reviewNodeId };
     }
 
-    async function syncDraftWithHead(detail: PullRequestDetail): Promise<void> {
-        const key = pullRequestKey(detail.repository, detail.number);
+    /** The draft this browser and GitHub hold for the live head, and whether storage needs rewriting. */
+    async function draftFromHead(detail: PullRequestDetail): Promise<{ draft: ReviewDraft; persist: boolean }> {
         const login = viewerLogin();
         const stored = login
             ? await readJson<ReviewDraft>(draftStorageKey(login, detail.repository, detail.number))
@@ -1957,23 +2039,40 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
                 detail,
                 emptyDraft(detail.repository, detail.number, detail.headSha),
             );
-            await persistDraft(draft);
-            return;
+            return { draft, persist: true };
         }
 
-        let draft: ReviewDraft = {
+        const draft = await mergeDraftWithGithubPendingReview(detail, {
             ...base,
             repository: detail.repository,
             number: detail.number,
             stale: headMoved && hasWork,
             headSha: headMoved && hasWork ? stored!.headSha : boundHead ? stored!.headSha : detail.headSha,
+        });
+
+        return {
+            draft,
+            persist: (Boolean(stored) && !boundHead && draft.comments.length > 0) || Boolean(draft.githubReviewId),
         };
+    }
 
-        draft = await mergeDraftWithGithubPendingReview(detail, draft);
+    /** Skipped while writes are in flight: they own the draft, and re-syncing after them is enough. */
+    async function syncDraftWithHead(detail: PullRequestDetail): Promise<void> {
+        const pullRequest = { repository: detail.repository, number: detail.number };
+        if (writes.hasPending(pullRequest)) {
+            void writes.requestRefresh(pullRequest, {});
+            return;
+        }
 
+        const stamp = writes.stamp(pullRequest);
+        const { draft, persist } = await draftFromHead(detail);
+        if (writes.stamp(pullRequest) !== stamp) {
+            return;
+        }
+
+        const key = pullRequestKey(detail.repository, detail.number);
         state.setState((prev) => ({ ...prev, reviewDrafts: { ...prev.reviewDrafts, [key]: draft } }));
-
-        if ((stored && !boundHead && draft.comments.length > 0) || draft.githubReviewId) {
+        if (persist) {
             await persistDraft(draft);
         }
     }
@@ -2049,14 +2148,49 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
         await persistDraft(next);
     }
 
+    /** The draft holding a staged comment: the live one, or the one a submitting review took with it. */
+    function stagedDraft(key: string, commentId: string): ReviewDraft | undefined {
+        const submission = reviewSubmissions.get(key);
+        return submission?.comments.some((comment) => comment.id === commentId)
+            ? submission
+            : state.state.reviewDrafts[key];
+    }
+
+    async function saveStagedDraft(key: string, commentId: string, draft: ReviewDraft): Promise<void> {
+        if (reviewSubmissions.get(key)?.comments.some((comment) => comment.id === commentId)) {
+            reviewSubmissions.set(key, draft);
+            return;
+        }
+        await persistDraft(draft);
+    }
+
+    /**
+     * First comment of a session: the UI shows it before the stored draft and GitHub's pending
+     * review are read, so fold those in without losing what the reviewer did in the meantime.
+     */
+    async function adoptStoredDraft(key: string, commentId: string, detail: PullRequestDetail): Promise<void> {
+        const { draft: base } = await draftFromHead(detail);
+        const live = stagedDraft(key, commentId);
+        if (!live) {
+            await persistDraft(base);
+            return;
+        }
+        await saveStagedDraft(key, commentId, {
+            ...base,
+            body: live.body.trim() ? live.body : base.body,
+            event: live.event === "comment" ? base.event : live.event,
+            comments: [...base.comments, ...live.comments.filter((c) => !base.comments.some((b) => b.id === c.id))],
+        });
+    }
+
     async function addPendingComment(
         repository: string,
         number: number,
         input: { path: string; line: number; side: DiffSide; body: string },
     ): Promise<PendingLineComment> {
-        const draft = await ensureDraft(repository, number);
-        const detail = resolvePullRequestDetail(repository, number);
-        const headSha = detail?.headSha ?? draft.headSha;
+        const key = pullRequestKey(repository, number);
+        const hadDraft = Boolean(state.state.reviewDrafts[key]);
+        const draft = getReviewDraft(repository, number);
         const comment: PendingLineComment = {
             id: crypto.randomUUID(),
             path: input.path,
@@ -2064,40 +2198,87 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
             side: input.side,
             body: input.body,
         };
-
-        let nextDraft: ReviewDraft = {
+        const painted: ReviewDraft = {
             ...draft,
-            headSha: draft.comments.length === 0 && !draft.stale ? headSha : draft.headSha,
+            headSha:
+                draft.comments.length === 0 && !draft.stale
+                    ? (resolvePullRequestDetail(repository, number)?.headSha ?? draft.headSha)
+                    : draft.headSha,
             comments: [...draft.comments, comment],
         };
 
-        if (detail) {
-            nextDraft = await ensureGithubPendingReview(detail, nextDraft);
-            if (nextDraft.githubReviewNodeId) {
+        // Storage is written only once it has been read: a first comment must not overwrite a saved draft.
+        state.setState((prev) => ({ ...prev, reviewDrafts: { ...prev.reviewDrafts, [key]: painted } }));
+        const persisted = hadDraft ? persistDraft(painted) : Promise.resolve();
+
+        return writes.enqueue(
+            { repository, number },
+            async () => {
+                await persisted;
+                const detail = resolvePullRequestDetail(repository, number);
+                if (!detail) {
+                    const live = state.state.reviewDrafts[key];
+                    if (live) {
+                        await persistDraft(live);
+                    }
+                    return comment;
+                }
+
+                if (!hadDraft) {
+                    await adoptStoredDraft(key, comment.id, detail);
+                }
+
+                const holder = stagedDraft(key, comment.id);
+                const current = holder?.comments.find((entry) => entry.id === comment.id);
+                if (!holder || !current) {
+                    return comment;
+                }
+
+                const withReview = await ensureGithubPendingReview(detail, holder);
+                // Saved before the comment goes out: GitHub allows one pending review, so a retry must reuse it.
+                await saveStagedDraft(key, comment.id, withReview);
+                if (!withReview.githubReviewNodeId) {
+                    return current;
+                }
+
                 const { commentId, commentNodeId } = await github.addPullRequestReviewThread(requireToken(), {
                     pullRequestNodeId: detail.pullRequestNodeId,
-                    pullRequestReviewNodeId: nextDraft.githubReviewNodeId,
-                    path: input.path,
-                    line: input.line,
-                    side: input.side,
-                    body: input.body,
+                    pullRequestReviewNodeId: withReview.githubReviewNodeId,
+                    path: current.path,
+                    line: current.line,
+                    side: current.side,
+                    body: current.body,
                 });
-                comment.githubCommentId = commentId;
-                comment.githubCommentNodeId = commentNodeId;
-                nextDraft = {
-                    ...nextDraft,
-                    comments: nextDraft.comments.map((entry) =>
-                        entry.id === comment.id
-                            ? { ...entry, githubCommentId: commentId, githubCommentNodeId: commentNodeId }
-                            : entry,
-                    ),
-                };
-            }
-        }
+                stagedCommentNodeIds.set(comment.id, commentNodeId);
 
-        await persistDraft(nextDraft);
-
-        return comment;
+                const synced = { githubCommentId: commentId, githubCommentNodeId: commentNodeId };
+                const latest = stagedDraft(key, comment.id);
+                if (latest) {
+                    await saveStagedDraft(key, comment.id, {
+                        ...latest,
+                        githubReviewId: withReview.githubReviewId,
+                        githubReviewNodeId: withReview.githubReviewNodeId,
+                        comments: latest.comments.map((entry) =>
+                            entry.id === comment.id ? { ...entry, ...synced } : entry,
+                        ),
+                    });
+                }
+                return { ...current, ...synced };
+            },
+            {
+                onFailure: async () => {
+                    const threadId = optimisticThreadId(comment.id);
+                    patchReviewThreads(key, (items) => items.filter((thread) => thread.id !== threadId));
+                    const holder = stagedDraft(key, comment.id);
+                    if (holder) {
+                        await saveStagedDraft(key, comment.id, {
+                            ...holder,
+                            comments: holder.comments.filter((entry) => entry.id !== comment.id),
+                        });
+                    }
+                },
+            },
+        );
     }
 
     async function updatePendingComment(
@@ -2106,30 +2287,81 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
         commentId: string,
         body: string,
     ): Promise<void> {
-        const draft = await ensureDraft(repository, number);
-        const existing = draft.comments.find((comment) => comment.id === commentId);
-        const nextDraft: ReviewDraft = {
-            ...draft,
-            comments: draft.comments.map((comment) => (comment.id === commentId ? { ...comment, body } : comment)),
-        };
-
-        if (existing?.githubCommentNodeId) {
-            await github.updatePendingReviewComment(requireToken(), existing.githubCommentNodeId, body);
+        const key = pullRequestKey(repository, number);
+        const draft = state.state.reviewDrafts[key];
+        const previousBody = draft?.comments.find((comment) => comment.id === commentId)?.body;
+        if (!draft || previousBody === undefined) {
+            return;
         }
 
-        await persistDraft(nextDraft);
+        function withBody(target: ReviewDraft, nextBody: string): ReviewDraft {
+            return {
+                ...target,
+                comments: target.comments.map((comment) =>
+                    comment.id === commentId ? { ...comment, body: nextBody } : comment,
+                ),
+            };
+        }
+
+        const persisted = persistDraft(withBody(draft, body));
+
+        return writes.enqueue(
+            { repository, number },
+            async () => {
+                await persisted;
+                const nodeId = stagedDraft(key, commentId)?.comments.find(
+                    (comment) => comment.id === commentId,
+                )?.githubCommentNodeId;
+                if (nodeId) {
+                    await github.updatePendingReviewComment(requireToken(), nodeId, body);
+                }
+            },
+            {
+                onFailure: async () => {
+                    const holder = stagedDraft(key, commentId);
+                    if (holder) {
+                        await saveStagedDraft(key, commentId, withBody(holder, previousBody));
+                    }
+                },
+            },
+        );
     }
 
     async function removePendingComment(repository: string, number: number, commentId: string): Promise<void> {
-        const draft = await ensureDraft(repository, number);
-        const existing = draft.comments.find((comment) => comment.id === commentId);
-        const comments = draft.comments.filter((comment) => comment.id !== commentId);
-
-        if (existing?.githubCommentNodeId) {
-            await github.deletePendingReviewComment(requireToken(), existing.githubCommentNodeId);
+        const key = pullRequestKey(repository, number);
+        const draft = state.state.reviewDrafts[key];
+        const index = draft?.comments.findIndex((comment) => comment.id === commentId) ?? -1;
+        if (!draft || index < 0) {
+            return;
         }
 
-        await persistDraft({ ...draft, comments });
+        const removed = draft.comments[index]!;
+        const persisted = persistDraft({
+            ...draft,
+            comments: draft.comments.filter((comment) => comment.id !== commentId),
+        });
+
+        return writes.enqueue(
+            { repository, number },
+            async () => {
+                await persisted;
+                const nodeId = removed.githubCommentNodeId ?? stagedCommentNodeIds.get(commentId);
+                if (nodeId) {
+                    await github.deletePendingReviewComment(requireToken(), nodeId);
+                }
+            },
+            {
+                onFailure: async () => {
+                    const live = state.state.reviewDrafts[key];
+                    if (live) {
+                        await persistDraft({
+                            ...live,
+                            comments: [...live.comments.slice(0, index), removed, ...live.comments.slice(index)],
+                        });
+                    }
+                },
+            },
+        );
     }
 
     /** Drop a stale or unwanted draft so the reviewer can start clean against the current head. */
@@ -2138,40 +2370,158 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
         await persistDraft(emptyDraft(repository, number, headSha));
     }
 
-    async function submitReview(repository: string, number: number): Promise<void> {
-        const draft = await ensureDraft(repository, number);
-        const detail = resolvePullRequestDetail(repository, number);
-
+    function reviewBlockedReason(draft: ReviewDraft, detail: PullRequestDetail | null): string | null {
         if (!detail) {
-            throw new EasyReviewError("unknown", "Load the pull request before submitting a review.");
+            return "Load the pull request before submitting a review.";
         }
-
         if (draft.stale || draft.headSha !== detail.headSha) {
-            throw new EasyReviewError(
-                "unknown",
-                "This draft was written against an older head commit. Discard it and review the new tip.",
-            );
+            return "This draft was written against an older head commit. Discard it and review the new tip.";
         }
-
         if (!draft.body.trim() && draft.comments.length === 0 && draft.event === "comment") {
-            throw new EasyReviewError("unknown", "Add a comment or a summary before submitting a review.");
+            return "Add a comment or a summary before submitting a review.";
+        }
+        return null;
+    }
+
+    /** Why a review cannot be submitted, for the UI to say before it treats the review as sent. */
+    async function getReviewBlockedReason(repository: string, number: number): Promise<string | null> {
+        const key = pullRequestKey(repository, number);
+        const draft = state.state.reviewDrafts[key] ?? (await ensureDraft(repository, number));
+        return reviewBlockedReason(draft, resolvePullRequestDetail(repository, number));
+    }
+
+    /** Show the review as submitted: the viewer's verdict, and pending comments turned into threads. */
+    function paintSubmittedReview(detail: PullRequestDetail, draft: ReviewDraft, author: GithubViewer): () => void {
+        const { repository, number } = detail;
+        const key = pullRequestKey(repository, number);
+        const threads = draft.comments.map((comment) =>
+            optimisticThread(author, { ...comment, id: optimisticThreadId(comment.id) }),
+        );
+        const threadIds = new Set(threads.map((thread) => thread.id));
+        const reviewItem = optimisticReviewItem(
+            { login: author.login, avatarUrl: author.avatarUrl },
+            draft.event,
+            draft.body,
+        );
+
+        patchReviewThreads(key, (items) => [...items, ...threads]);
+        patchConversation(key, (items) => [...items, reviewItem]);
+        patchPullRequestDetail(repository, number, (current) => withViewerReview(current, author.login, draft.event));
+        patchInboxRow(withViewerReview(detail, author.login, draft.event));
+
+        return () => {
+            patchReviewThreads(key, (items) => items.filter((thread) => !threadIds.has(thread.id)));
+            patchConversation(key, (items) => items.filter((item) => item.id !== reviewItem.id));
+            patchPullRequestDetail(repository, number, (current) => ({
+                ...current,
+                reviewers: detail.reviewers,
+                reviewRequests: detail.reviewRequests,
+            }));
+            patchInboxRow(detail);
+        };
+    }
+
+    /** Comments the pending review never received, e.g. when a tab closed before they uploaded. */
+    async function uploadUnsyncedComments(key: string, detail: PullRequestDetail): Promise<void> {
+        const submission = reviewSubmissions.get(key);
+        if (!submission?.githubReviewId || submission.comments.every((comment) => comment.githubCommentId)) {
+            return;
         }
 
-        await github.submitReview(requireToken(), {
-            repository,
-            number,
-            headSha: detail.headSha,
-            event: draft.event,
-            body: draft.body,
-            githubReviewId: draft.githubReviewId,
-            comments: draft.githubReviewId
-                ? []
-                : draft.comments.map(({ path, line, side, body }) => ({ path, line, side, body })),
-        });
+        let current = await ensureGithubPendingReview(detail, submission);
+        const reviewNodeId = current.githubReviewNodeId;
+        if (!reviewNodeId) {
+            return;
+        }
 
-        await persistDraft(emptyDraft(repository, number, detail.headSha));
-        void refreshAfterMutation(repository, number, { reloadReviewSurfaces: true, reloadStack: true });
-        invalidateInbox();
+        for (const comment of current.comments) {
+            if (comment.githubCommentId) {
+                continue;
+            }
+            const { commentId, commentNodeId } = await github.addPullRequestReviewThread(requireToken(), {
+                pullRequestNodeId: detail.pullRequestNodeId,
+                pullRequestReviewNodeId: reviewNodeId,
+                path: comment.path,
+                line: comment.line,
+                side: comment.side,
+                body: comment.body,
+            });
+            // Kept as we go, so a retry after a later failure does not post this one twice.
+            current = {
+                ...current,
+                comments: current.comments.map((entry) =>
+                    entry.id === comment.id
+                        ? { ...entry, githubCommentId: commentId, githubCommentNodeId: commentNodeId }
+                        : entry,
+                ),
+            };
+            reviewSubmissions.set(key, current);
+        }
+    }
+
+    async function submitReview(repository: string, number: number): Promise<void> {
+        const key = pullRequestKey(repository, number);
+        const draft = state.state.reviewDrafts[key] ?? (await ensureDraft(repository, number));
+        const detail = resolvePullRequestDetail(repository, number);
+        const blocked = reviewBlockedReason(draft, detail);
+        if (blocked !== null || !detail) {
+            throw new EasyReviewError("unknown", blocked ?? "Load the pull request before submitting a review.");
+        }
+
+        requireToken();
+        const author = state.state.auth.viewer;
+        if (!author) {
+            throw unauthorized();
+        }
+
+        reviewSubmissions.set(key, draft);
+        const unpaint = paintSubmittedReview(detail, draft, author);
+        // Memory only: storage keeps the draft until GitHub accepts it, in case the tab goes away first.
+        state.setState((prev) => ({
+            ...prev,
+            reviewDrafts: { ...prev.reviewDrafts, [key]: emptyDraft(repository, number, detail.headSha) },
+        }));
+
+        return writes.enqueue(
+            { repository, number },
+            async () => {
+                await uploadUnsyncedComments(key, detail);
+                const submission = reviewSubmissions.get(key) ?? draft;
+
+                await github.submitReview(requireToken(), {
+                    repository,
+                    number,
+                    headSha: detail.headSha,
+                    event: submission.event,
+                    body: submission.body,
+                    githubReviewId: submission.githubReviewId,
+                    comments: submission.githubReviewId
+                        ? []
+                        : submission.comments.map(({ path, line, side, body }) => ({ path, line, side, body })),
+                });
+
+                reviewSubmissions.delete(key);
+                await persistDraft(state.state.reviewDrafts[key] ?? emptyDraft(repository, number, detail.headSha));
+                invalidateInbox();
+            },
+            {
+                refresh: { reloadReviewSurfaces: true, reloadStack: true },
+                // Closing the tab or merging next should not wait for the re-read.
+                settleBeforeRefresh: true,
+                onFailure: async () => {
+                    const submission = reviewSubmissions.get(key) ?? draft;
+                    reviewSubmissions.delete(key);
+                    unpaint();
+                    const live = state.state.reviewDrafts[key];
+                    await persistDraft({
+                        ...submission,
+                        body: live?.body.trim() ? live.body : submission.body,
+                        event: live && live.event !== "comment" ? live.event : submission.event,
+                        comments: [...submission.comments, ...(live?.comments ?? [])],
+                    });
+                },
+            },
+        );
     }
 
     /** Publish one line comment immediately as a Comment review (does not touch the staged draft). */
@@ -2190,15 +2540,32 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
             throw new EasyReviewError("unknown", "Comment body is required.");
         }
 
-        await github.addPullRequestReviewThread(requireToken(), {
-            pullRequestNodeId: detail.pullRequestNodeId,
-            body,
-            path: input.path,
-            line: input.line,
-            side: input.side,
-        });
+        requireToken();
+        const author = state.state.auth.viewer;
+        if (!author) {
+            throw unauthorized();
+        }
 
-        await refreshAfterMutation(repository, number, { reloadReviewSurfaces: true });
+        const key = pullRequestKey(repository, number);
+        const thread = optimisticThread(author, { ...input, body });
+        patchReviewThreads(key, (items) => [...items, thread]);
+
+        return writes.enqueue(
+            { repository, number },
+            async () => {
+                await github.addPullRequestReviewThread(requireToken(), {
+                    pullRequestNodeId: detail.pullRequestNodeId,
+                    body,
+                    path: input.path,
+                    line: input.line,
+                    side: input.side,
+                });
+            },
+            {
+                refresh: { reloadReviewSurfaces: true },
+                onFailure: () => patchReviewThreads(key, (items) => items.filter((entry) => entry.id !== thread.id)),
+            },
+        );
     }
 
     async function loadReviewThreads(repository: string, number: number): Promise<void> {
@@ -2217,10 +2584,7 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
         try {
             const data = await queryClient.fetchQuery({
                 queryKey: queryKeys.pullRequest.threads(key),
-                queryFn: async () => {
-                    const items = await github.listReviewThreads(requireToken(), repository, number);
-                    return { items };
-                },
+                queryFn: async () => ({ items: await readReviewThreads(repository, number) }),
             });
             if (attempt !== latestReviewThreadLoads.get(key)) {
                 return;
@@ -2249,6 +2613,16 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
         }
     }
 
+    /** Threads from GitHub, or what is on screen if the response could predate a write in flight. */
+    function readReviewThreads(repository: string, number: number): Promise<Array<ReviewThread>> {
+        const key = pullRequestKey(repository, number);
+        return writes.readAround(
+            { repository, number },
+            () => github.listReviewThreads(requireToken(), repository, number),
+            () => queryClient.getQueryData<ReviewThreadsQueryData>(queryKeys.pullRequest.threads(key))?.items,
+        );
+    }
+
     function getReviewThreads(repository: string, number: number): ReviewThreadsState {
         const key = pullRequestKey(repository, number);
         const cached = queryClient.getQueryData<ReviewThreadsQueryData>(queryKeys.pullRequest.threads(key));
@@ -2269,26 +2643,45 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
             throw new EasyReviewError("unknown", "Write a reply before sending it.");
         }
 
-        const reply = await github.replyToReviewThread(requireToken(), threadId, trimmed);
+        requireToken();
+        const author = state.state.auth.viewer;
+        if (!author) {
+            throw unauthorized();
+        }
+
         const key = pullRequestKey(repository, number);
-        state.setState((prev) => {
-            const nextItems = resolveReviewThreadItems(key).map((thread) =>
-                thread.id === threadId ? { ...thread, comments: [...thread.comments, reply] } : thread,
+        const painted = optimisticThreadComment(author, trimmed);
+
+        function replacePainted(replacement: Array<ReviewThreadComment>) {
+            patchReviewThreads(key, (items) =>
+                items.map((thread) =>
+                    thread.id === threadId
+                        ? {
+                              ...thread,
+                              comments: thread.comments.flatMap((comment) =>
+                                  comment.id === painted.id ? replacement : [comment],
+                              ),
+                          }
+                        : thread,
+                ),
             );
-            queryClient.setQueryData<ReviewThreadsQueryData>(queryKeys.pullRequest.threads(key), { items: nextItems });
-            return {
-                ...prev,
-                reviewThreads: {
-                    ...prev.reviewThreads,
-                    [key]: {
-                        status: "ready",
-                        items: nextItems,
-                        error: null,
-                    },
-                },
-            };
-        });
-        return reply;
+        }
+
+        patchReviewThreads(key, (items) =>
+            items.map((thread) =>
+                thread.id === threadId ? { ...thread, comments: [...thread.comments, painted] } : thread,
+            ),
+        );
+
+        return writes.enqueue(
+            { repository, number },
+            async () => {
+                const reply = await github.replyToReviewThread(requireToken(), threadId, trimmed);
+                replacePainted([reply]);
+                return reply;
+            },
+            { onFailure: () => replacePainted([]) },
+        );
     }
 
     async function setReviewThreadResolved(
@@ -2297,25 +2690,21 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
         threadId: string,
         resolved: boolean,
     ): Promise<void> {
-        await github.setReviewThreadResolved(requireToken(), threadId, resolved);
         const key = pullRequestKey(repository, number);
-        state.setState((prev) => {
-            const nextItems = resolveReviewThreadItems(key).map((thread) =>
-                thread.id === threadId ? { ...thread, isResolved: resolved } : thread,
+
+        function paint(isResolved: boolean) {
+            patchReviewThreads(key, (items) =>
+                items.map((thread) => (thread.id === threadId ? { ...thread, isResolved } : thread)),
             );
-            queryClient.setQueryData<ReviewThreadsQueryData>(queryKeys.pullRequest.threads(key), { items: nextItems });
-            return {
-                ...prev,
-                reviewThreads: {
-                    ...prev.reviewThreads,
-                    [key]: {
-                        status: "ready",
-                        items: nextItems,
-                        error: null,
-                    },
-                },
-            };
-        });
+        }
+
+        paint(resolved);
+
+        return writes.enqueue(
+            { repository, number },
+            () => github.setReviewThreadResolved(requireToken(), threadId, resolved),
+            { onFailure: () => paint(!resolved) },
+        );
     }
 
     async function loadConversationComments(repository: string, number: number): Promise<void> {
@@ -2338,10 +2727,7 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
         try {
             const data = await queryClient.fetchQuery({
                 queryKey: queryKeys.pullRequest.conversation(key),
-                queryFn: async () => {
-                    const items = await github.listPullRequestTimeline(requireToken(), repository, number);
-                    return { items };
-                },
+                queryFn: async () => ({ items: await readConversation(repository, number) }),
             });
             if (attempt !== latestConversationCommentLoads.get(key)) {
                 return;
@@ -2371,6 +2757,25 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
                 },
             }));
         }
+    }
+
+    /** The timeline from GitHub, or what is on screen if the response could predate a write in flight. */
+    function readConversation(repository: string, number: number): Promise<Array<PullRequestTimelineItem>> {
+        const key = pullRequestKey(repository, number);
+        return writes.readAround(
+            { repository, number },
+            () => github.listPullRequestTimeline(requireToken(), repository, number),
+            () => queryClient.getQueryData<ConversationQueryData>(queryKeys.pullRequest.conversation(key))?.items,
+        );
+    }
+
+    /** Overview from GitHub, or what is on screen if the response could predate a write in flight. */
+    function readPullRequestDetail(repository: string, number: number): Promise<PullRequestDetail> {
+        return writes.readAround(
+            { repository, number },
+            async () => decoratePullRequestDetail(await github.getPullRequest(requireToken(), repository, number)),
+            () => resolvePullRequestDetail(repository, number) ?? undefined,
+        );
     }
 
     function getConversationComments(repository: string, number: number): ConversationCommentsState {
@@ -2626,42 +3031,41 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
             throw new EasyReviewError("unknown", "Write a comment before posting.");
         }
 
-        const comment = await github.addPullRequestComment(requireToken(), repository, number, trimmed);
+        requireToken();
+        const author = state.state.auth.viewer;
+        if (!author) {
+            throw unauthorized();
+        }
+
         const key = pullRequestKey(repository, number);
-        const timelineComment: PullRequestTimelineItem = { kind: "comment", ...comment };
-        state.setState((prev) => {
-            const nextItems = [...resolveConversationItems(key), timelineComment];
-            queryClient.setQueryData<ConversationQueryData>(queryKeys.pullRequest.conversation(key), {
-                items: nextItems,
-            });
-            const detail = resolvePullRequestDetail(repository, number);
-            const nextDetail = detail != null ? { ...detail, commentCount: detail.commentCount + 1 } : null;
-            if (nextDetail) {
-                setPullRequestDetailQueryData(queryClient, key, nextDetail);
-            }
-            const view = prev.pullRequests[key];
-            return {
-                ...prev,
-                conversationComments: {
-                    ...prev.conversationComments,
-                    [key]: {
-                        status: "ready",
-                        items: nextItems,
-                        error: null,
-                    },
+        const painted = optimisticIssueComment(author, trimmed);
+
+        function changeCommentCount(delta: number) {
+            patchPullRequestDetail(repository, number, (detail) => ({
+                ...detail,
+                commentCount: detail.commentCount + delta,
+            }));
+        }
+
+        patchConversation(key, (items) => [...items, painted]);
+        changeCommentCount(1);
+
+        return writes.enqueue(
+            { repository, number },
+            async () => {
+                const comment = await github.addPullRequestComment(requireToken(), repository, number, trimmed);
+                patchConversation(key, (items) =>
+                    items.map((item) => (item.id === painted.id ? { kind: "comment", ...comment } : item)),
+                );
+                return comment;
+            },
+            {
+                onFailure: () => {
+                    patchConversation(key, (items) => items.filter((item) => item.id !== painted.id));
+                    changeCommentCount(-1);
                 },
-                pullRequests: nextDetail
-                    ? {
-                          ...prev.pullRequests,
-                          [key]: {
-                              ...(view ?? initialPullRequestView),
-                              detail: nextDetail,
-                          },
-                      }
-                    : prev.pullRequests,
-            };
-        });
-        return comment;
+            },
+        );
     }
 
     /**
@@ -2671,19 +3075,24 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
      * cannot paint over the mutation result. Soft-fails the fetch so a successful
      * GitHub write is not reported as an action failure.
      */
-    type PullRequestMutationRefreshOptions = {
-        /** Reload conversation/threads when those surfaces were already fetched. */
-        reloadSecondary?: boolean;
-        /** Always reload review threads and conversation (after submitting review comments). */
-        reloadReviewSurfaces?: boolean;
-        /** Refresh other GitHub stack layers after merge / close. */
-        reloadStack?: boolean;
-    };
+    /** Move this pull request's Inbox row to the sections it now belongs to. */
+    function patchInboxRow(detail: PullRequestDetail): InboxQueryData | null {
+        const login = state.state.auth.viewer?.login;
+        if (!login) {
+            return null;
+        }
+        const nextInbox = patchInboxPullRequest(readInboxQueryData(), toInboxSummary(detail), {
+            viewerLogin: login,
+            sections: state.state.inbox.sectionLayout,
+        });
+        syncInboxQueryData(nextInbox);
+        return nextInbox;
+    }
 
     async function refreshAfterMutation(
         repository: string,
         number: number,
-        options?: PullRequestMutationRefreshOptions,
+        options?: PullRequestRefreshOptions,
     ): Promise<void> {
         const key = pullRequestKey(repository, number);
         const attempt = (latestPullRequestLoads.get(key) ?? 0) + 1;
@@ -2695,8 +3104,6 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
                 return;
             }
 
-            const summary = toInboxSummary(detail);
-
             setPullRequest(key, {
                 status: "ready",
                 refreshing: false,
@@ -2706,25 +3113,18 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
             });
             setPullRequestDetailQueryData(queryClient, key, detail);
 
-            const inboxData = readInboxQueryData();
             const login = state.state.auth.viewer?.login ?? "";
-            if (login) {
-                const nextInbox = patchInboxPullRequest(inboxData, summary, {
-                    viewerLogin: login,
-                    sections: state.state.inbox.sectionLayout,
-                });
-                syncInboxQueryData(nextInbox);
-                if (nextInbox.lastLoadedAt) {
-                    await store.set(
-                        INBOX_CACHE_KEY,
-                        JSON.stringify({
-                            pullRequests: nextInbox.pullRequests,
-                            sectionPullRequests: nextInbox.sectionPullRequests,
-                            sectionCounts: nextInbox.sectionCounts,
-                            lastLoadedAt: nextInbox.lastLoadedAt,
-                        } satisfies InboxCache),
-                    );
-                }
+            const nextInbox = patchInboxRow(detail);
+            if (nextInbox?.lastLoadedAt) {
+                await store.set(
+                    INBOX_CACHE_KEY,
+                    JSON.stringify({
+                        pullRequests: nextInbox.pullRequests,
+                        sectionPullRequests: nextInbox.sectionPullRequests,
+                        sectionCounts: nextInbox.sectionCounts,
+                        lastLoadedAt: nextInbox.lastLoadedAt,
+                    } satisfies InboxCache),
+                );
             }
 
             await syncDraftWithHead(detail);
@@ -3077,33 +3477,39 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
             throw unauthorized();
         }
 
-        const key = pullRequestKey(repository, number);
-        const detail = resolvePullRequestDetail(repository, number);
-        const already = detail?.reactionGroups.some((group) => group.content === content && group.viewerHasReacted);
+        const already = resolvePullRequestDetail(repository, number)?.reactionGroups.some(
+            (group) => group.content === content && group.viewerHasReacted,
+        );
 
-        if (already) {
-            const reactionId = await github.findIssueReactionId(token, repository, number, content, viewerLogin);
-            if (reactionId != null) {
-                await github.deleteIssueReaction(token, repository, number, reactionId);
-            }
-        } else {
-            await github.createIssueReaction(token, repository, number, content);
-        }
-
-        if (detail) {
-            const nextDetail = {
+        function paint(reacted: boolean) {
+            patchPullRequestDetail(repository, number, (detail) => ({
                 ...detail,
-                reactionGroups: patchReactionGroups(detail.reactionGroups, content, !already),
-            };
-            setPullRequestDetailQueryData(queryClient, key, nextDetail);
-            setPullRequest(key, {
-                status: "ready",
-                refreshing: false,
-                detail: nextDetail,
-                lastLoadedAt: new Date().toISOString(),
-                error: null,
-            });
+                reactionGroups: patchReactionGroups(detail.reactionGroups, content, reacted),
+            }));
         }
+
+        paint(!already);
+
+        return writes.enqueue(
+            { repository, number },
+            async () => {
+                if (already) {
+                    const reactionId = await github.findIssueReactionId(
+                        token,
+                        repository,
+                        number,
+                        content,
+                        viewerLogin,
+                    );
+                    if (reactionId != null) {
+                        await github.deleteIssueReaction(token, repository, number, reactionId);
+                    }
+                } else {
+                    await github.createIssueReaction(token, repository, number, content);
+                }
+            },
+            { onFailure: () => paint(Boolean(already)) },
+        );
     }
 
     async function toggleIssueCommentReaction(
@@ -3119,51 +3525,45 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
         }
 
         const key = pullRequestKey(repository, number);
-        const conversationItems = resolveConversationItems(key);
-        const item = conversationItems.find((entry) => entry.kind === "comment" && entry.databaseId === commentId);
+        const item = resolveConversationItems(key).find(
+            (entry) => entry.kind === "comment" && entry.databaseId === commentId,
+        );
         const already =
             item?.kind === "comment" &&
             item.reactionGroups.some((group) => group.content === content && group.viewerHasReacted);
 
-        if (already) {
-            const reactionId = await github.findIssueCommentReactionId(
-                token,
-                repository,
-                commentId,
-                content,
-                viewerLogin,
+        function paint(reacted: boolean) {
+            patchConversation(key, (items) =>
+                items.map((entry) =>
+                    entry.kind === "comment" && entry.databaseId === commentId
+                        ? { ...entry, reactionGroups: patchReactionGroups(entry.reactionGroups, content, reacted) }
+                        : entry,
+                ),
             );
-            if (reactionId != null) {
-                await github.deleteIssueCommentReaction(token, repository, commentId, reactionId);
-            }
-        } else {
-            await github.createIssueCommentReaction(token, repository, commentId, content);
         }
 
-        state.setState((prev) => {
-            const nextItems = conversationItems.map((entry) =>
-                entry.kind === "comment" && entry.databaseId === commentId
-                    ? {
-                          ...entry,
-                          reactionGroups: patchReactionGroups(entry.reactionGroups, content, !already),
-                      }
-                    : entry,
-            );
-            queryClient.setQueryData<ConversationQueryData>(queryKeys.pullRequest.conversation(key), {
-                items: nextItems,
-            });
-            return {
-                ...prev,
-                conversationComments: {
-                    ...prev.conversationComments,
-                    [key]: {
-                        status: "ready",
-                        items: nextItems,
-                        error: null,
-                    },
-                },
-            };
-        });
+        paint(!already);
+
+        return writes.enqueue(
+            { repository, number },
+            async () => {
+                if (already) {
+                    const reactionId = await github.findIssueCommentReactionId(
+                        token,
+                        repository,
+                        commentId,
+                        content,
+                        viewerLogin,
+                    );
+                    if (reactionId != null) {
+                        await github.deleteIssueCommentReaction(token, repository, commentId, reactionId);
+                    }
+                } else {
+                    await github.createIssueCommentReaction(token, repository, commentId, content);
+                }
+            },
+            { onFailure: () => paint(already) },
+        );
     }
 
     async function toggleReviewCommentReaction(
@@ -3179,57 +3579,48 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
         }
 
         const key = pullRequestKey(repository, number);
-        const threadItems = resolveReviewThreadItems(key);
-        let already = false;
+        const comment = resolveReviewThreadItems(key)
+            .flatMap((thread) => thread.comments)
+            .find((entry) => entry.databaseId === commentId);
+        const already = Boolean(
+            comment?.reactionGroups.some((group) => group.content === content && group.viewerHasReacted),
+        );
 
-        for (const thread of threadItems) {
-            const comment = thread.comments.find((entry) => entry.databaseId === commentId);
-            if (comment) {
-                already = comment.reactionGroups.some((group) => group.content === content && group.viewerHasReacted);
-                break;
-            }
-        }
-
-        if (already) {
-            const reactionId = await github.findReviewCommentReactionId(
-                token,
-                repository,
-                commentId,
-                content,
-                viewerLogin,
+        function paint(reacted: boolean) {
+            patchReviewThreads(key, (items) =>
+                items.map((thread) => ({
+                    ...thread,
+                    comments: thread.comments.map((entry) =>
+                        entry.databaseId === commentId
+                            ? { ...entry, reactionGroups: patchReactionGroups(entry.reactionGroups, content, reacted) }
+                            : entry,
+                    ),
+                })),
             );
-            if (reactionId != null) {
-                await github.deleteReviewCommentReaction(token, repository, commentId, reactionId);
-            }
-        } else {
-            await github.createReviewCommentReaction(token, repository, commentId, content);
         }
 
-        state.setState((prev) => {
-            const nextItems = threadItems.map((thread) => ({
-                ...thread,
-                comments: thread.comments.map((comment) =>
-                    comment.databaseId === commentId
-                        ? {
-                              ...comment,
-                              reactionGroups: patchReactionGroups(comment.reactionGroups, content, !already),
-                          }
-                        : comment,
-                ),
-            }));
-            queryClient.setQueryData<ReviewThreadsQueryData>(queryKeys.pullRequest.threads(key), { items: nextItems });
-            return {
-                ...prev,
-                reviewThreads: {
-                    ...prev.reviewThreads,
-                    [key]: {
-                        status: "ready",
-                        items: nextItems,
-                        error: null,
-                    },
-                },
-            };
-        });
+        paint(!already);
+
+        return writes.enqueue(
+            { repository, number },
+            async () => {
+                if (already) {
+                    const reactionId = await github.findReviewCommentReactionId(
+                        token,
+                        repository,
+                        commentId,
+                        content,
+                        viewerLogin,
+                    );
+                    if (reactionId != null) {
+                        await github.deleteReviewCommentReaction(token, repository, commentId, reactionId);
+                    }
+                } else {
+                    await github.createReviewCommentReaction(token, repository, commentId, content);
+                }
+            },
+            { onFailure: () => paint(already) },
+        );
     }
 
     async function mergePullRequest(
@@ -3238,6 +3629,8 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
         method: MergeMethod,
         options?: MergePullRequestOptions,
     ): Promise<void> {
+        // A merge clicked right after an approve must not reach GitHub ahead of that approve.
+        await writes.settled({ repository, number });
         const token = requireToken();
         const detail = resolvePullRequestDetail(repository, number);
         if (detail?.githubStack) {
@@ -3462,38 +3855,41 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
             throw new EasyReviewError("unknown", "Comment body is required.");
         }
 
-        const updated = await github.updateIssueComment(requireToken(), repository, commentId, trimmed);
         const key = pullRequestKey(repository, number);
-        const conversationItems = resolveConversationItems(key);
+        const previous = resolveConversationItems(key).find(
+            (entry) => entry.kind === "comment" && entry.databaseId === commentId,
+        );
 
-        state.setState((prev) => {
-            const nextItems = conversationItems.map((entry) =>
-                entry.kind === "comment" && entry.databaseId === commentId
-                    ? {
-                          ...entry,
-                          body: updated.body,
-                          lastEditedAt: updated.lastEditedAt,
-                          editor: updated.editor,
-                          editCount: updated.editCount,
-                          edits: updated.edits,
-                      }
-                    : entry,
+        function paint(patch: Partial<Extract<PullRequestTimelineItem, { kind: "comment" }>>) {
+            patchConversation(key, (items) =>
+                items.map((entry) =>
+                    entry.kind === "comment" && entry.databaseId === commentId ? { ...entry, ...patch } : entry,
+                ),
             );
-            queryClient.setQueryData<ConversationQueryData>(queryKeys.pullRequest.conversation(key), {
-                items: nextItems,
-            });
-            return {
-                ...prev,
-                conversationComments: {
-                    ...prev.conversationComments,
-                    [key]: {
-                        status: "ready",
-                        items: nextItems,
-                        error: null,
-                    },
+        }
+
+        paint({ body: trimmed });
+
+        return writes.enqueue(
+            { repository, number },
+            async () => {
+                const updated = await github.updateIssueComment(requireToken(), repository, commentId, trimmed);
+                paint({
+                    body: updated.body,
+                    lastEditedAt: updated.lastEditedAt,
+                    editor: updated.editor,
+                    editCount: updated.editCount,
+                    edits: updated.edits,
+                });
+            },
+            {
+                onFailure: () => {
+                    if (previous?.kind === "comment") {
+                        paint({ body: previous.body });
+                    }
                 },
-            };
-        });
+            },
+        );
     }
 
     async function updateReviewComment(
@@ -3507,41 +3903,49 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
             throw new EasyReviewError("unknown", "Comment body is required.");
         }
 
-        const updated = await github.updateReviewComment(requireToken(), repository, commentId, trimmed);
         const key = pullRequestKey(repository, number);
-        state.setState((prev) => {
-            const nextItems = resolveReviewThreadItems(key).map((thread) => ({
-                ...thread,
-                comments: thread.comments.map((entry) =>
-                    entry.id === commentId ? { ...entry, body: updated.body } : entry,
-                ),
-            }));
-            queryClient.setQueryData<ReviewThreadsQueryData>(queryKeys.pullRequest.threads(key), { items: nextItems });
-            return {
-                ...prev,
-                reviewThreads: {
-                    ...prev.reviewThreads,
-                    [key]: {
-                        status: "ready",
-                        items: nextItems,
-                        error: null,
-                    },
-                },
-            };
-        });
+        const previous = resolveReviewThreadItems(key)
+            .flatMap((thread) => thread.comments)
+            .find((entry) => entry.id === commentId);
 
-        const draft = getReviewDraft(repository, number);
-        if (draft.comments.some((comment) => comment.githubCommentNodeId === commentId)) {
-            const nextDraft: ReviewDraft = {
-                ...draft,
-                comments: draft.comments.map((comment) =>
-                    comment.githubCommentNodeId === commentId ? { ...comment, body: trimmed } : comment,
-                ),
-            };
-            await persistDraft(nextDraft);
+        function paint(nextBody: string) {
+            patchReviewThreads(key, (items) =>
+                items.map((thread) => ({
+                    ...thread,
+                    comments: thread.comments.map((entry) =>
+                        entry.id === commentId ? { ...entry, body: nextBody } : entry,
+                    ),
+                })),
+            );
         }
 
-        await refreshAfterMutation(repository, number, { reloadReviewSurfaces: true });
+        paint(trimmed);
+
+        return writes.enqueue(
+            { repository, number },
+            async () => {
+                const updated = await github.updateReviewComment(requireToken(), repository, commentId, trimmed);
+                paint(updated.body);
+
+                const draft = getReviewDraft(repository, number);
+                if (draft.comments.some((comment) => comment.githubCommentNodeId === commentId)) {
+                    await persistDraft({
+                        ...draft,
+                        comments: draft.comments.map((comment) =>
+                            comment.githubCommentNodeId === commentId ? { ...comment, body: trimmed } : comment,
+                        ),
+                    });
+                }
+            },
+            {
+                refresh: { reloadReviewSurfaces: true },
+                onFailure: () => {
+                    if (previous) {
+                        paint(previous.body);
+                    }
+                },
+            },
+        );
     }
 
     async function updatePullRequestReview(
@@ -3550,26 +3954,32 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
         reviewId: string,
         body: string,
     ): Promise<void> {
-        await github.updatePullRequestReview(requireToken(), reviewId, body);
         const key = pullRequestKey(repository, number);
-        const conversationItems = resolveConversationItems(key);
-        const nextItems = conversationItems.map((entry) =>
-            entry.kind === "review" && entry.id === reviewId ? { ...entry, body } : entry,
+        const previous = resolveConversationItems(key).find(
+            (entry) => entry.kind === "review" && entry.id === reviewId,
         );
-        queryClient.setQueryData<ConversationQueryData>(queryKeys.pullRequest.conversation(key), {
-            items: nextItems,
-        });
-        state.setState((prev) => ({
-            ...prev,
-            conversationComments: {
-                ...prev.conversationComments,
-                [key]: {
-                    status: "ready",
-                    items: nextItems,
-                    error: null,
+
+        function paint(nextBody: string) {
+            patchConversation(key, (items) =>
+                items.map((entry) =>
+                    entry.kind === "review" && entry.id === reviewId ? { ...entry, body: nextBody } : entry,
+                ),
+            );
+        }
+
+        paint(body);
+
+        return writes.enqueue(
+            { repository, number },
+            () => github.updatePullRequestReview(requireToken(), reviewId, body),
+            {
+                onFailure: () => {
+                    if (previous?.kind === "review") {
+                        paint(previous.body);
+                    }
                 },
             },
-        }));
+        );
     }
 
     async function closePullRequest(repository: string, number: number): Promise<void> {
@@ -3714,6 +4124,7 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
         setSectionCustomColor,
         setSectionIcon,
         setSectionDefaultExpanded,
+        setSectionNotifyOnNewPullRequest,
         setSectionFilter,
         resetSectionFilter,
         addCustomSection,
@@ -3740,6 +4151,10 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
         listComparedFiles,
         getFileDiffBetween,
         getReviewDraft,
+        getReviewBlockedReason,
+        readReviewThreads,
+        readConversation,
+        readPullRequestDetail,
         setReviewEvent,
         setReviewBody,
         addPendingComment,

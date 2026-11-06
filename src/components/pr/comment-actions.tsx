@@ -10,6 +10,11 @@ import {
 } from "#/components/ui/dropdown-menu.tsx";
 import { notifyCopied, notifyError } from "#/lib/toast.ts";
 
+/** Stands in for the timestamp until GitHub confirms a comment. */
+export function CommentSendingLabel() {
+    return <span className="text-xs text-muted-foreground motion-safe:animate-pulse">Sending…</span>;
+}
+
 export function CommentActionsMenu({
     url,
     body,

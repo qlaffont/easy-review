@@ -33,18 +33,20 @@ Notable flows:
 | Tab visible, idle | Quiet revalidate about every 3 minutes |
 | Manual **Refresh** | Full inbox refetch |
 | After review / merge | Inbox marked stale and reloaded when returning to the board |
-| Tab in background + notifications on | Refetch about every 5 minutes |
+| Tab hidden or not focused + notifications on | Refetch about every 5 minutes |
 
 ## Background notifications (optional)
 
-**Inbox settings → Background updates → Notify when open sections change**
+**Inbox settings → Background updates → Notify when a pull request appears**
 
 - Requires browser notification permission.
-- Only while the tab is in the background.
-- Compares PRs in **expanded** sections; notifies on meaningful changes (reviews, checks, comments, new rows, etc.).
-- More than three updates in one sync → one summary notification.
+- Only while the tab is hidden or not focused, and only while it is open: the browser must keep the page running (no web push).
+- Notifies when a PR enters a section with **Notify** on (per section, expanded or not). Changes to a PR already in the section don't notify.
+- **Notify** is on by default for Needs your review, Returned to you, and Approved.
+- Sections load one page at a time. In a section with more rows than loaded, a new row only counts when the section total grew, so an old PR moving up doesn't notify.
+- More than three new PRs in one sync → one summary notification.
 
-Stored in `localStorage` (`easy-review:inbox-prefs:v1`).
+The main switch is stored in `localStorage` (`easy-review:inbox-prefs:v1`). **Notify** is part of the section layout, so it is included in Export / Import and restored by Reset.
 
 ## Keyboard
 

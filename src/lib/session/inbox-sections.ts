@@ -128,6 +128,8 @@ export type InboxSectionLayoutEntry = {
     hidden: boolean;
     /** Whether the section starts expanded when there is no saved collapse state (or after reset). */
     defaultExpanded: boolean;
+    /** Send a desktop notification when a pull request appears here while the user is away. */
+    notifyOnNewPullRequest: boolean;
     color: SectionColorId;
     /** Custom accent as `#RRGGBB`; when set it overrides the preset `color` for rendering. */
     customColor: string | null;
@@ -228,6 +230,8 @@ const DEFAULT_EXPANDED_SECTION_IDS = new Set<PresetInboxSectionId>([
     "approved",
 ]);
 
+const DEFAULT_NOTIFY_SECTION_IDS = new Set<PresetInboxSectionId>(["needs-your-review", "returned-to-you", "approved"]);
+
 export function defaultSectionLayout(): Array<InboxSectionLayoutEntry> {
     return DEFAULT_INBOX_SECTIONS.map((definition) => {
         const appearance = DEFAULT_SECTION_APPEARANCE[definition.id];
@@ -236,6 +240,7 @@ export function defaultSectionLayout(): Array<InboxSectionLayoutEntry> {
             label: definition.label,
             hidden: DEFAULT_HIDDEN_SECTION_IDS.has(definition.id),
             defaultExpanded: DEFAULT_EXPANDED_SECTION_IDS.has(definition.id),
+            notifyOnNewPullRequest: DEFAULT_NOTIFY_SECTION_IDS.has(definition.id),
             color: appearance.color,
             customColor: null,
             icon: appearance.icon,
@@ -276,6 +281,7 @@ function parseLayoutEntry(entry: {
     label?: unknown;
     hidden?: unknown;
     defaultExpanded?: unknown;
+    notifyOnNewPullRequest?: unknown;
     color?: unknown;
     customColor?: unknown;
     icon?: unknown;
@@ -291,6 +297,7 @@ function parseLayoutEntry(entry: {
     const appearance = appearanceForSectionId(entry.id);
     const fallbackFilter = preset ? defaultFilterForPreset(entry.id) : emptySectionFilter();
     const fallbackExpanded = preset ? DEFAULT_EXPANDED_SECTION_IDS.has(entry.id as PresetInboxSectionId) : false;
+    const fallbackNotify = preset ? DEFAULT_NOTIFY_SECTION_IDS.has(entry.id as PresetInboxSectionId) : false;
 
     return {
         id: entry.id,
@@ -304,6 +311,8 @@ function parseLayoutEntry(entry: {
         ),
         hidden: entry.hidden === true,
         defaultExpanded: typeof entry.defaultExpanded === "boolean" ? entry.defaultExpanded : fallbackExpanded,
+        notifyOnNewPullRequest:
+            typeof entry.notifyOnNewPullRequest === "boolean" ? entry.notifyOnNewPullRequest : fallbackNotify,
         color: isSectionColorId(entry.color) ? entry.color : appearance.color,
         customColor: normalizeHexColor(entry.customColor),
         icon: isSectionIconId(entry.icon) ? entry.icon : appearance.icon,
@@ -498,6 +507,7 @@ export function normalizeSectionLayout(
               label?: unknown;
               hidden?: unknown;
               defaultExpanded?: unknown;
+              notifyOnNewPullRequest?: unknown;
               color?: unknown;
               customColor?: unknown;
               icon?: unknown;

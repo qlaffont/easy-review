@@ -19,7 +19,7 @@ import { useEffect, useMemo, useState, type ReactNode } from "react";
 
 import type { PullRequestTimelineItem, ReviewState, ReviewThread } from "#/lib/session/types.ts";
 
-import { CommentActionsMenu, quoteMarkdown } from "#/components/pr/comment-actions.tsx";
+import { CommentActionsMenu, CommentSendingLabel, quoteMarkdown } from "#/components/pr/comment-actions.tsx";
 import { CommitChecksMenu } from "#/components/pr/commit-checks-menu.tsx";
 import { CommitVerifiedBadge } from "#/components/pr/commit-verified-badge.tsx";
 import { DiffHunkPreview, suggestionOriginalFromHunk } from "#/components/pr/diff-hunk-preview.tsx";
@@ -46,8 +46,9 @@ import { ConversationLoadingSkeleton } from "#/components/ui/loading.tsx";
 import { RelativeTime } from "#/components/ui/relative-time.tsx";
 import { mentionCandidatesFromPullRequest } from "#/lib/composer-commands.ts";
 import { useConversationQuery, usePullRequestPage, useReviewThreadsQuery } from "#/lib/query/pull-request.ts";
+import { isThreadSending } from "#/lib/session/optimistic.ts";
 import { useSession, useSessionState } from "#/lib/session/provider.tsx";
-import { notifyAction } from "#/lib/toast.ts";
+import { notifyAction, notifyOptimistic } from "#/lib/toast.ts";
 import { cn } from "#/lib/utils.ts";
 
 type ConversationEntry =
@@ -82,14 +83,15 @@ export function PullRequestConversation({
     const authorLogin = page.detail?.author ?? page.summary?.author ?? null;
     const [owner = "", repo = ""] = repository.split("/");
     const [body, setBody] = useState("");
-    const [posting, setPosting] = useState(false);
     const [closing, setClosing] = useState(false);
     const [error, setError] = useState<string | null>(null);
 
     const hasBody = body.trim().length > 0;
-    const unresolvedThreads = useMemo(() => threads.items.filter((thread) => !thread.isResolved), [threads.items]);
-    const [resolvingAll, setResolvingAll] = useState(false);
-    const busy = posting || closing || resolvingAll;
+    const unresolvedThreads = useMemo(
+        () => threads.items.filter((thread) => !thread.isResolved && !isThreadSending(thread)),
+        [threads.items],
+    );
+    const busy = closing;
     const loading =
         (timeline.status === "loading" && timeline.items.length === 0) ||
         (threads.status === "loading" && threads.items.length === 0 && timeline.items.length === 0);
@@ -119,25 +121,19 @@ export function PullRequestConversation({
         onQuoteApplied?.();
     }, [quoteInsert, onQuoteApplied]);
 
-    async function post() {
+    function post() {
         if (!hasBody || busy) {
             return;
         }
 
-        setPosting(true);
+        const posted = body;
+        setBody("");
         setError(null);
-        try {
-            await notifyAction(() => session.addPullRequestComment(repository, number, body), {
-                loading: "Posting comment…",
-                success: "Comment posted",
-                error: "Could not post the comment.",
-            });
-            setBody("");
-        } catch (cause) {
-            setError(cause instanceof Error ? cause.message : "Could not post the comment.");
-        } finally {
-            setPosting(false);
-        }
+        void notifyOptimistic(() => session.addPullRequestComment(repository, number, posted), {
+            error: "Could not post the comment.",
+            pullRequest: `${repository}#${number}`,
+            copyText: posted,
+        });
     }
 
     async function closePullRequest() {
@@ -169,34 +165,21 @@ export function PullRequestConversation({
         }
     }
 
-    async function resolveAllThreads() {
+    function resolveAllThreads() {
         if (busy || unresolvedThreads.length === 0) {
             return;
         }
 
-        setResolvingAll(true);
         setError(null);
-        const count = unresolvedThreads.length;
-        try {
-            await notifyAction(
-                async () => {
-                    await Promise.all(
-                        unresolvedThreads.map((thread) =>
-                            session.setReviewThreadResolved(repository, number, thread.id, true),
-                        ),
-                    );
-                },
-                {
-                    loading: "Resolving threads…",
-                    success: count === 1 ? "Thread resolved" : `Resolved ${count} threads`,
-                    error: "Could not resolve all threads.",
-                },
-            );
-        } catch (cause) {
-            setError(cause instanceof Error ? cause.message : "Could not resolve all threads.");
-        } finally {
-            setResolvingAll(false);
-        }
+        void notifyOptimistic(
+            () =>
+                Promise.all(
+                    unresolvedThreads.map((thread) =>
+                        session.setReviewThreadResolved(repository, number, thread.id, true),
+                    ),
+                ),
+            { error: "Could not resolve all threads.", pullRequest: `${repository}#${number}` },
+        );
     }
 
     return (
@@ -257,7 +240,7 @@ export function PullRequestConversation({
                         repository={repository}
                         pullRequestNumber={number}
                         mentionUsers={mentionUsers}
-                        onSubmitKey={() => void post()}
+                        onSubmitKey={post}
                         footer={
                             <div className="flex flex-wrap items-center justify-end gap-2">
                                 {unresolvedThreads.length > 0 ? (
@@ -266,9 +249,9 @@ export function PullRequestConversation({
                                         variant="outline"
                                         disabled={busy}
                                         className="h-7"
-                                        onClick={() => void resolveAllThreads()}
+                                        onClick={resolveAllThreads}
                                     >
-                                        {resolvingAll ? "Resolving…" : "Resolve all threads"}
+                                        Resolve all threads
                                     </Button>
                                 ) : null}
                                 {canClose ? (
@@ -309,9 +292,9 @@ export function PullRequestConversation({
                                     size="sm"
                                     disabled={busy || !hasBody}
                                     className="h-7 bg-[#1f883d] text-white hover:bg-[#1a7f37] dark:bg-[#238636] dark:hover:bg-[#2ea043]"
-                                    onClick={() => void post()}
+                                    onClick={post}
                                 >
-                                    {posting ? "Commenting…" : "Comment"}
+                                    Comment
                                 </Button>
                             </div>
                         }
@@ -351,88 +334,55 @@ function TimelineReviewThread({
     const [open, setOpen] = useState(!thread.isResolved);
     const [replyOpen, setReplyOpen] = useState(false);
     const [reply, setReply] = useState("");
-    const [sending, setSending] = useState(false);
-    const [resolving, setResolving] = useState(false);
+    const threadSending = isThreadSending(thread);
+    const pullRequest = `${repository}#${number}`;
 
     if (!root) {
         return null;
     }
 
-    async function sendReply() {
+    function sendReply() {
         const body = reply.trim();
-        if (!body || sending) {
+        if (!body) {
             return;
         }
-        setSending(true);
-        try {
-            await notifyAction(() => session.replyToReviewThread(repository, number, thread.id, body), {
-                loading: "Sending reply…",
-                success: "Reply posted",
-                error: "Could not post the reply.",
-            });
-            setReply("");
-            setReplyOpen(false);
-        } finally {
-            setSending(false);
-        }
+        setReply("");
+        setReplyOpen(false);
+        void notifyOptimistic(() => session.replyToReviewThread(repository, number, thread.id, body), {
+            error: "Could not post the reply.",
+            pullRequest,
+            copyText: body,
+        });
     }
 
-    async function replyAndResolve() {
+    function replyAndResolve() {
         const body = reply.trim();
-        if (!body || sending || resolving || thread.isResolved) {
+        if (!body || thread.isResolved) {
             return;
         }
-        setSending(true);
-        setResolving(true);
-        try {
-            await notifyAction(
-                async () => {
-                    await session.replyToReviewThread(repository, number, thread.id, body);
-                    await session.setReviewThreadResolved(repository, number, thread.id, true);
-                },
-                {
-                    loading: "Replying and resolving…",
-                    success: "Reply posted · conversation resolved",
-                    error: "Could not reply and resolve.",
-                },
-            );
-            setReply("");
-            setReplyOpen(false);
-            setOpen(false);
-        } finally {
-            setSending(false);
-            setResolving(false);
-        }
+        setReply("");
+        setReplyOpen(false);
+        setOpen(false);
+        void notifyOptimistic(
+            () =>
+                Promise.all([
+                    session.replyToReviewThread(repository, number, thread.id, body),
+                    session.setReviewThreadResolved(repository, number, thread.id, true),
+                ]),
+            { error: "Could not reply and resolve.", pullRequest, copyText: body },
+        );
     }
 
-    async function toggleResolved() {
-        if (resolving) {
-            return;
-        }
+    function toggleResolved() {
         const next = !thread.isResolved;
-        setResolving(true);
-        try {
-            await notifyAction(
-                () => session.setReviewThreadResolved(repository, number, thread.id, next),
-                next
-                    ? {
-                          loading: "Resolving conversation…",
-                          success: "Conversation resolved",
-                          error: "Could not resolve the conversation.",
-                      }
-                    : {
-                          loading: "Unresolving conversation…",
-                          success: "Conversation reopened",
-                          error: "Could not unresolve the conversation.",
-                      },
-            );
-            setOpen(!next);
-            if (next) {
-                setReplyOpen(false);
-            }
-        } finally {
-            setResolving(false);
+        setOpen(!next);
+        if (next) {
+            setReplyOpen(false);
         }
+        void notifyOptimistic(() => session.setReviewThreadResolved(repository, number, thread.id, next), {
+            error: next ? "Could not resolve the conversation." : "Could not unresolve the conversation.",
+            pullRequest,
+        });
     }
 
     return (
@@ -449,7 +399,11 @@ function TimelineReviewThread({
                 <header className="flex flex-wrap items-center gap-x-2 gap-y-1 border-b bg-muted/30 px-3 py-2 text-xs">
                     <AvatarTiny login={root.author} avatarUrl={root.authorAvatarUrl} />
                     <span className="font-semibold text-foreground">{root.author}</span>
-                    <RelativeTime iso={root.createdAt} prefix="commented" className="text-muted-foreground" />
+                    {root.sending ? (
+                        <CommentSendingLabel />
+                    ) : (
+                        <RelativeTime iso={root.createdAt} prefix="commented" className="text-muted-foreground" />
+                    )}
                     <Link
                         to="/pr/$owner/$repo/$number"
                         params={{ owner, repo, number: String(number) }}
@@ -497,26 +451,35 @@ function TimelineReviewThread({
                                                 Author
                                             </span>
                                         ) : null}
-                                        <RelativeTime iso={comment.createdAt} className="text-muted-foreground" />
-                                        <div className="ml-auto">
-                                            <CommentActionsMenu
-                                                url={comment.url}
-                                                body={comment.body}
-                                                onQuote={
-                                                    canReply && comment.body.trim()
-                                                        ? () => {
-                                                              setReply((current) => {
-                                                                  const quoted = quoteMarkdown(comment.body);
-                                                                  return current.trim()
-                                                                      ? `${current.replace(/\s*$/, "")}\n\n${quoted}`
-                                                                      : quoted;
-                                                              });
-                                                              setReplyOpen(true);
-                                                          }
-                                                        : undefined
-                                                }
-                                            />
-                                        </div>
+                                        {comment.sending ? (
+                                            <CommentSendingLabel />
+                                        ) : (
+                                            <>
+                                                <RelativeTime
+                                                    iso={comment.createdAt}
+                                                    className="text-muted-foreground"
+                                                />
+                                                <div className="ml-auto">
+                                                    <CommentActionsMenu
+                                                        url={comment.url}
+                                                        body={comment.body}
+                                                        onQuote={
+                                                            canReply && comment.body.trim()
+                                                                ? () => {
+                                                                      setReply((current) => {
+                                                                          const quoted = quoteMarkdown(comment.body);
+                                                                          return current.trim()
+                                                                              ? `${current.replace(/\s*$/, "")}\n\n${quoted}`
+                                                                              : quoted;
+                                                                      });
+                                                                      setReplyOpen(true);
+                                                                  }
+                                                                : undefined
+                                                        }
+                                                    />
+                                                </div>
+                                            </>
+                                        )}
                                     </header>
                                     <Markdown
                                         source={comment.body}
@@ -535,7 +498,7 @@ function TimelineReviewThread({
                                                       repository,
                                                       number,
                                                       path: thread.path,
-                                                      canApply: canApplySuggestions,
+                                                      canApply: canApplySuggestions && !threadSending,
                                                   }
                                                 : null
                                         }
@@ -550,7 +513,7 @@ function TimelineReviewThread({
                                 </div>
                             ))}
 
-                            {canReply ? (
+                            {threadSending ? null : canReply ? (
                                 <div className="border-t pt-2">
                                     {replyOpen ? (
                                         <MarkdownComposer
@@ -560,18 +523,16 @@ function TimelineReviewThread({
                                             onChange={setReply}
                                             rows={2}
                                             placeholder="Reply — @mention or / for commands"
-                                            disabled={sending}
                                             previewBaseUrl={baseUrl}
                                             repository={repository}
                                             pullRequestNumber={number}
                                             mentionUsers={mentionUsers}
-                                            onSubmitKey={() => void sendReply()}
+                                            onSubmitKey={sendReply}
                                             footer={
                                                 <>
                                                     <Button
                                                         size="sm"
                                                         variant="outline"
-                                                        disabled={sending || resolving}
                                                         onClick={() => {
                                                             setReply("");
                                                             setReplyOpen(false);
@@ -580,31 +541,26 @@ function TimelineReviewThread({
                                                         Cancel
                                                     </Button>
                                                     {thread.isResolved ? (
-                                                        <Button
-                                                            size="sm"
-                                                            variant="outline"
-                                                            disabled={resolving}
-                                                            onClick={() => void toggleResolved()}
-                                                        >
+                                                        <Button size="sm" variant="outline" onClick={toggleResolved}>
                                                             Unresolve
                                                         </Button>
                                                     ) : (
                                                         <Button
                                                             size="sm"
-                                                            disabled={sending || resolving || !reply.trim()}
+                                                            disabled={!reply.trim()}
                                                             className="bg-[#1f883d] text-white hover:bg-[#1a7f37] dark:bg-[#238636] dark:hover:bg-[#2ea043]"
-                                                            onClick={() => void replyAndResolve()}
+                                                            onClick={replyAndResolve}
                                                         >
-                                                            {sending || resolving ? "Working…" : "Reply and resolve"}
+                                                            Reply and resolve
                                                         </Button>
                                                     )}
                                                     <Button
                                                         size="sm"
-                                                        disabled={sending || resolving || !reply.trim()}
+                                                        disabled={!reply.trim()}
                                                         className="bg-[#1f883d] text-white hover:bg-[#1a7f37] dark:bg-[#238636] dark:hover:bg-[#2ea043]"
-                                                        onClick={() => void sendReply()}
+                                                        onClick={sendReply}
                                                     >
-                                                        {sending ? "Replying…" : "Reply"}
+                                                        Reply
                                                     </Button>
                                                 </>
                                             }
@@ -618,13 +574,7 @@ function TimelineReviewThread({
                                             >
                                                 Reply…
                                             </button>
-                                            <Button
-                                                type="button"
-                                                size="sm"
-                                                variant="outline"
-                                                disabled={resolving}
-                                                onClick={() => void toggleResolved()}
-                                            >
+                                            <Button type="button" size="sm" variant="outline" onClick={toggleResolved}>
                                                 {thread.isResolved ? "Unresolve" : "Resolve"}
                                             </Button>
                                         </div>
@@ -632,13 +582,7 @@ function TimelineReviewThread({
                                 </div>
                             ) : (
                                 <div className="border-t pt-2">
-                                    <Button
-                                        type="button"
-                                        size="sm"
-                                        variant="outline"
-                                        disabled={resolving}
-                                        onClick={() => void toggleResolved()}
-                                    >
+                                    <Button type="button" size="sm" variant="outline" onClick={toggleResolved}>
                                         {thread.isResolved ? "Unresolve conversation" : "Resolve conversation"}
                                     </Button>
                                 </div>
@@ -687,7 +631,11 @@ function IssueTimelineComment({
                             Bot
                         </span>
                     ) : null}
-                    <RelativeTime iso={item.createdAt} prefix="commented" className="text-muted-foreground" />
+                    {item.sending ? (
+                        <CommentSendingLabel />
+                    ) : (
+                        <RelativeTime iso={item.createdAt} prefix="commented" className="text-muted-foreground" />
+                    )}
                     <EditedMeta
                         lastEditedAt={item.lastEditedAt}
                         editor={item.editor}
@@ -697,15 +645,17 @@ function IssueTimelineComment({
                         authorLogin={item.author}
                         authorAvatarUrl={item.authorAvatarUrl}
                     />
-                    <div className="ml-auto">
-                        <CommentActionsMenu
-                            url={item.url}
-                            body={item.body}
-                            canEdit={canEdit}
-                            onEdit={canEdit ? () => setEditing(true) : undefined}
-                            onQuote={item.body.trim() && onQuote ? () => onQuote(item.body) : undefined}
-                        />
-                    </div>
+                    {item.sending ? null : (
+                        <div className="ml-auto">
+                            <CommentActionsMenu
+                                url={item.url}
+                                body={item.body}
+                                canEdit={canEdit}
+                                onEdit={canEdit ? () => setEditing(true) : undefined}
+                                onQuote={item.body.trim() && onQuote ? () => onQuote(item.body) : undefined}
+                            />
+                        </div>
+                    )}
                 </header>
                 <div className="px-3 py-3">
                     <EditableCommentBody
@@ -713,27 +663,31 @@ function IssueTimelineComment({
                         baseUrl={baseUrl}
                         repository={repository}
                         number={number}
-                        canEdit={canEdit}
+                        canEdit={canEdit && !item.sending}
                         editing={editing}
                         onEditingChange={setEditing}
                         onSave={(body) => session.updateIssueComment(repository, number, item.databaseId, body)}
                     />
                 </div>
-                <div className="border-t px-3 py-2">
-                    <ReactionBar
-                        groups={item.reactionGroups}
-                        onToggle={(content) => {
-                            void notifyAction(
-                                () => session.toggleIssueCommentReaction(repository, number, item.databaseId, content),
-                                {
-                                    loading: "Updating reaction…",
-                                    success: "Reaction updated",
-                                    error: "Could not update the reaction.",
-                                },
-                            );
-                        }}
-                    />
-                </div>
+                {item.sending ? null : (
+                    <div className="border-t px-3 py-2">
+                        <ReactionBar
+                            groups={item.reactionGroups}
+                            onToggle={(content) => {
+                                void notifyOptimistic(
+                                    () =>
+                                        session.toggleIssueCommentReaction(
+                                            repository,
+                                            number,
+                                            item.databaseId,
+                                            content,
+                                        ),
+                                    { error: "Could not update the reaction.", pullRequest: `${repository}#${number}` },
+                                );
+                            }}
+                        />
+                    </div>
+                )}
             </article>
         </>
     );
@@ -768,18 +722,24 @@ function ReviewTimelineComment({
                     <a href={item.url} target="_blank" rel="noreferrer" className="font-semibold hover:underline">
                         {item.author.login}
                     </a>
-                    <RelativeTime
-                        iso={item.createdAt}
-                        prefix={reviewVerb(item.state)}
-                        className="text-muted-foreground"
-                    />
-                    <div className="ml-auto">
-                        <CommentActionsMenu
-                            url={item.url}
-                            body={item.body}
-                            onQuote={item.body.trim() && onQuote ? () => onQuote(item.body) : undefined}
-                        />
-                    </div>
+                    {item.sending ? (
+                        <CommentSendingLabel />
+                    ) : (
+                        <>
+                            <RelativeTime
+                                iso={item.createdAt}
+                                prefix={reviewVerb(item.state)}
+                                className="text-muted-foreground"
+                            />
+                            <div className="ml-auto">
+                                <CommentActionsMenu
+                                    url={item.url}
+                                    body={item.body}
+                                    onQuote={item.body.trim() && onQuote ? () => onQuote(item.body) : undefined}
+                                />
+                            </div>
+                        </>
+                    )}
                 </header>
                 <div className="px-3 py-3">
                     <Markdown source={source} baseUrl={baseUrl} onToggleTask={onToggleTask} />

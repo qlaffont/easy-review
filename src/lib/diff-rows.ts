@@ -183,7 +183,6 @@ export function buildVirtualRows({
     splitView,
     pendingComments,
     threads,
-    showInlineComments,
     compose,
 }: {
     lines: ReadonlyArray<DiffLine>;
@@ -192,18 +191,15 @@ export function buildVirtualRows({
     splitView: SplitView;
     pendingComments: ReadonlyArray<PendingLineComment>;
     threads: ReadonlyArray<ReviewThread>;
-    showInlineComments: boolean;
     compose: LineTarget | null;
 }): Array<DiffVirtualRow> {
     const rows: Array<DiffVirtualRow> = [];
 
     function pushAnnotations(targets: ReadonlyArray<SideLine>, textFor: (target: SideLine) => string) {
-        if (showInlineComments) {
-            for (const target of targets) {
-                const notes = annotationsForTarget(path, target, textFor(target), pendingComments, threads);
-                if (notes) {
-                    rows.push({ key: `notes-${target.side}-${target.line}`, kind: "notes", notes });
-                }
+        for (const target of targets) {
+            const notes = annotationsForTarget(path, target, textFor(target), pendingComments, threads);
+            if (notes) {
+                rows.push({ key: `notes-${target.side}-${target.line}`, kind: "notes", notes });
             }
         }
         if (compose && targets.some((target) => target.side === compose.side && target.line === compose.line)) {

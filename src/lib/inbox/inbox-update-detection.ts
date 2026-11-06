@@ -2,153 +2,78 @@ import type { InboxQueryData } from "#/lib/query/types.ts";
 import type { InboxSectionId } from "#/lib/session/inbox-sections.ts";
 import type { PullRequestSummary } from "#/lib/session/types.ts";
 
-export type ExpandedSectionSnapshot = Map<string, PullRequestSummary>;
-
-export type InboxPullRequestUpdate = {
-    pullRequest: PullRequestSummary;
-    summary: string;
-    isNew: boolean;
+type SectionMembership = {
+    keys: ReadonlySet<string>;
+    totalCount: number;
 };
 
-/** PRs currently visible in expanded inbox sections — keyed by stable `key`. */
-export function snapshotExpandedSections(
+/** Which pull requests each loaded section holds. A section that never loaded has no entry. */
+export type SectionMembershipSnapshot = ReadonlyMap<InboxSectionId, SectionMembership>;
+
+export type NewPullRequest = {
+    pullRequest: PullRequestSummary;
+    sectionId: InboxSectionId;
+};
+
+export function snapshotSectionMembership(
     data: InboxQueryData | undefined,
-    expandedSectionIds: ReadonlyArray<InboxSectionId>,
-): ExpandedSectionSnapshot {
-    const map = new Map<string, PullRequestSummary>();
+    sectionIds: ReadonlyArray<InboxSectionId>,
+): SectionMembershipSnapshot {
+    const snapshot = new Map<InboxSectionId, SectionMembership>();
     if (!data) {
-        return map;
+        return snapshot;
     }
 
-    for (const sectionId of expandedSectionIds) {
-        for (const pullRequest of data.sectionPullRequests[sectionId] ?? []) {
-            map.set(pullRequest.key, pullRequest);
+    for (const sectionId of sectionIds) {
+        const pullRequests = data.sectionPullRequests[sectionId];
+        if (pullRequests) {
+            snapshot.set(sectionId, {
+                keys: new Set(pullRequests.map((pullRequest) => pullRequest.key)),
+                totalCount: data.sectionCounts[sectionId] ?? pullRequests.length,
+            });
         }
     }
 
-    return map;
+    return snapshot;
 }
 
-export function detectInboxUpdates(
-    before: ExpandedSectionSnapshot,
-    after: ExpandedSectionSnapshot,
-): Array<InboxPullRequestUpdate> {
-    const updates: Array<InboxPullRequestUpdate> = [];
+/**
+ * Pull requests that entered a watched section since `before`, one entry per pull
+ * request (the first section in `sectionIds` order wins).
+ *
+ * Only the first page of a section is loaded, so an unseen row in a section that had
+ * more rows than it loaded may just be an old pull request moving up after an update.
+ * Those rows only count when the section total grew, and only up to that growth.
+ */
+export function detectNewPullRequests(
+    before: SectionMembershipSnapshot,
+    data: InboxQueryData | undefined,
+    sectionIds: ReadonlyArray<InboxSectionId>,
+): Array<NewPullRequest> {
+    const found = new Map<string, NewPullRequest>();
+    if (!data) {
+        return [];
+    }
 
-    for (const pullRequest of after.values()) {
-        const previous = before.get(pullRequest.key);
+    for (const sectionId of sectionIds) {
+        const previous = before.get(sectionId);
         if (!previous) {
-            updates.push({ pullRequest, summary: "New in inbox", isNew: true });
             continue;
         }
 
-        const summary = describePullRequestUpdate(previous, pullRequest);
-        if (summary) {
-            updates.push({ pullRequest, summary, isNew: false });
+        const unseen = (data.sectionPullRequests[sectionId] ?? []).filter(
+            (pullRequest) => !previous.keys.has(pullRequest.key),
+        );
+        const wasTruncated = previous.totalCount > previous.keys.size;
+        const growth = (data.sectionCounts[sectionId] ?? 0) - previous.totalCount;
+        const entered = wasTruncated ? unseen.slice(0, Math.max(0, growth)) : unseen;
+
+        for (const pullRequest of entered) {
+            if (!found.has(pullRequest.key)) {
+                found.set(pullRequest.key, { pullRequest, sectionId });
+            }
         }
     }
 
-    return updates;
-}
-
-function describePullRequestUpdate(before: PullRequestSummary, after: PullRequestSummary): string | null {
-    if (pullRequestFingerprint(before) === pullRequestFingerprint(after)) {
-        return null;
-    }
-
-    if (before.state !== after.state) {
-        if (after.state === "merged") {
-            return "Merged";
-        }
-        if (after.state === "closed") {
-            return "Closed";
-        }
-        return "Reopened";
-    }
-
-    if (before.reviewDecision !== after.reviewDecision) {
-        switch (after.reviewDecision) {
-            case "approved":
-                return "Approved";
-            case "changes-requested":
-                return "Changes requested";
-            case "review-required":
-                return "Review required";
-            default:
-                return "Review status changed";
-        }
-    }
-
-    if (before.checks !== after.checks) {
-        switch (after.checks) {
-            case "success":
-                return "Checks passing";
-            case "failure":
-                return "Checks failing";
-            case "pending":
-                return "Checks pending";
-            default:
-                return "Checks updated";
-        }
-    }
-
-    if (before.commentCount !== after.commentCount) {
-        return after.commentCount > before.commentCount ? "New comments" : "Comments updated";
-    }
-
-    if (!sameStringArray(before.reviewRequests, after.reviewRequests)) {
-        return "Review requests updated";
-    }
-
-    if (!sameReviewers(before.reviewers, after.reviewers)) {
-        return "Reviews updated";
-    }
-
-    if (before.title !== after.title) {
-        return "Title updated";
-    }
-
-    if (before.isDraft !== after.isDraft) {
-        return after.isDraft ? "Marked draft" : "Marked ready for review";
-    }
-
-    if (before.mergeStateStatus !== after.mergeStateStatus) {
-        return "Merge status updated";
-    }
-
-    return "Updated";
-}
-
-function pullRequestFingerprint(pullRequest: PullRequestSummary): string {
-    return JSON.stringify({
-        updatedAt: pullRequest.updatedAt,
-        state: pullRequest.state,
-        isDraft: pullRequest.isDraft,
-        reviewDecision: pullRequest.reviewDecision,
-        checks: pullRequest.checks,
-        commentCount: pullRequest.commentCount,
-        reviewRequests: pullRequest.reviewRequests,
-        reviewers: pullRequest.reviewers,
-        mergeStateStatus: pullRequest.mergeStateStatus,
-        title: pullRequest.title,
-    });
-}
-
-function sameStringArray(left: ReadonlyArray<string>, right: ReadonlyArray<string>): boolean {
-    if (left.length !== right.length) {
-        return false;
-    }
-    return left.every((value, index) => value === right[index]);
-}
-
-function sameReviewers(left: PullRequestSummary["reviewers"], right: PullRequestSummary["reviewers"]): boolean {
-    if (left.length !== right.length) {
-        return false;
-    }
-    return left.every(
-        (reviewer, index) =>
-            reviewer.login === right[index]?.login &&
-            reviewer.state === right[index]?.state &&
-            reviewer.reviewId === right[index]?.reviewId,
-    );
+    return [...found.values()];
 }

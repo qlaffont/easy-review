@@ -20,6 +20,7 @@ import { mentionCandidatesFromPullRequest } from "#/lib/composer-commands.ts";
 import { shouldCloseTabAfterReview, useDiffPreferences } from "#/lib/diff-preferences.ts";
 import { usePullRequestPage, useReviewThreadsQuery } from "#/lib/query/pull-request.ts";
 import { useReviewDraft } from "#/lib/query/review-draft.ts";
+import { isThreadSending } from "#/lib/session/optimistic.ts";
 import { useSession } from "#/lib/session/provider.tsx";
 import { nextStackPullRequestAfterReview } from "#/lib/session/pull-request-stacks.ts";
 import { getStackPreferences } from "#/lib/stack-preferences.ts";
@@ -27,7 +28,9 @@ import {
     notifyAction,
     notifyBackgroundActionAfterNavigating,
     notifyBackgroundActionWithInboxPrompt,
+    notifyOptimistic,
     notifySuccess,
+    notifySuccessWithInboxPrompt,
 } from "#/lib/toast.ts";
 import { cn } from "#/lib/utils.ts";
 
@@ -71,14 +74,16 @@ export function ReviewChangesMenu({ repository, number }: { repository: string; 
     const threads = useReviewThreadsQuery(repository, number);
     const [open, setOpen] = useState(false);
     const [submitting, setSubmitting] = useState(false);
-    const [resolvingAll, setResolvingAll] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [mergeMethod, setMergeMethod] = useState<MergeMethod | null>(null);
     const busyRef = useRef(false);
 
     const detail = page.detail;
     const mentionUsers = useMemo(() => mentionCandidatesFromPullRequest(detail), [detail]);
-    const unresolvedThreads = useMemo(() => threads.items.filter((thread) => !thread.isResolved), [threads.items]);
+    const unresolvedThreads = useMemo(
+        () => threads.items.filter((thread) => !thread.isResolved && !isThreadSending(thread)),
+        [threads.items],
+    );
     const unresolvedCount = unresolvedThreads.length;
     const pendingCount = draft.comments.length;
     const mergeOptions = detail ? mergeMethodOptions(detail.allowedMergeMethods, detail.commitCount) : [];
@@ -94,12 +99,53 @@ export function ReviewChangesMenu({ repository, number }: { repository: string; 
         ? `https://github.com/${detail.repository}/blob/${detail.headRefName}/`
         : `https://github.com/${repository}/`;
 
-    function handleSubmit() {
-        submit(() => session.submitReview(repository, number), {
-            loading: "Submitting review…",
-            success: "Review submitted",
-            error: "Could not submit the review.",
+    /** The review counts as sent as soon as it is clicked; a refusal raises an alert and restores the draft. */
+    async function handleSubmit() {
+        const blockedReason = await session.getReviewBlockedReason(repository, number);
+        if (blockedReason) {
+            setError(blockedReason);
+            setOpen(true);
+            return;
+        }
+
+        setError(null);
+        setOpen(false);
+
+        const nextInStack = nextStackPullRequestAfterReview(detail, getStackPreferences());
+        const closeTab = nextInStack === null && shouldCloseTabAfterReview();
+        const staysOnPage = nextInStack === null && (closeTab || !preferences.returnToInboxAfterReviewOrMerge);
+        const message = "Could not submit the review.";
+        const accepted = notifyOptimistic(() => session.submitReview(repository, number), {
+            error: message,
+            pullRequest: `${repository}#${number}`,
+            copyText: draft.body.trim() || undefined,
         });
+
+        if (nextInStack) {
+            const [owner = "", repo = ""] = nextInStack.repository.split("/");
+            notifySuccess("Review submitted");
+            void navigate({
+                to: "/pr/$owner/$repo/$number",
+                params: { owner, repo, number: String(nextInStack.number) },
+            });
+        } else if (!closeTab) {
+            notifySuccessWithInboxPrompt("Review submitted", {
+                returnToInbox: preferences.returnToInboxAfterReviewOrMerge,
+                onGoToInbox: () => {
+                    session.invalidateInbox();
+                    void navigate({ to: "/" });
+                },
+            });
+        }
+
+        if (await accepted) {
+            if (closeTab) {
+                window.close();
+            }
+        } else if (staysOnPage) {
+            setError(message);
+            setOpen(true);
+        }
     }
 
     function handleApproveAndMerge(method: MergeMethod) {
@@ -170,35 +216,17 @@ export function ReviewChangesMenu({ repository, number }: { repository: string; 
             });
     }
 
-    async function resolveAllThreads() {
-        if (busyRef.current || unresolvedCount === 0) {
-            return;
-        }
-
-        busyRef.current = true;
-        setResolvingAll(true);
+    function resolveAllThreads() {
         setError(null);
-        try {
-            await notifyAction(
-                async () => {
-                    await Promise.all(
-                        unresolvedThreads.map((thread) =>
-                            session.setReviewThreadResolved(repository, number, thread.id, true),
-                        ),
-                    );
-                },
-                {
-                    loading: "Resolving threads…",
-                    success: unresolvedCount === 1 ? "Thread resolved" : `Resolved ${unresolvedCount} threads`,
-                    error: "Could not resolve all threads.",
-                },
-            );
-        } catch (cause) {
-            setError(cause instanceof Error ? cause.message : "Could not resolve all threads.");
-        } finally {
-            busyRef.current = false;
-            setResolvingAll(false);
-        }
+        void notifyOptimistic(
+            () =>
+                Promise.all(
+                    unresolvedThreads.map((thread) =>
+                        session.setReviewThreadResolved(repository, number, thread.id, true),
+                    ),
+                ),
+            { error: "Could not resolve all threads.", pullRequest: `${repository}#${number}` },
+        );
     }
 
     return (
@@ -322,9 +350,13 @@ export function ReviewChangesMenu({ repository, number }: { repository: string; 
                                             type="button"
                                             className="shrink-0 cursor-pointer text-muted-foreground hover:text-destructive"
                                             onClick={() => {
-                                                void session
-                                                    .removePendingComment(repository, number, comment.id)
-                                                    .then(() => notifySuccess("Pending comment removed"));
+                                                void notifyOptimistic(
+                                                    () => session.removePendingComment(repository, number, comment.id),
+                                                    {
+                                                        error: "Could not remove the comment.",
+                                                        pullRequest: `${repository}#${number}`,
+                                                    },
+                                                );
                                             }}
                                         >
                                             Remove
@@ -340,10 +372,10 @@ export function ReviewChangesMenu({ repository, number }: { repository: string; 
                             <Button
                                 size="sm"
                                 variant="outline"
-                                disabled={draft.stale || submitting || resolvingAll}
-                                onClick={() => void resolveAllThreads()}
+                                disabled={draft.stale || submitting}
+                                onClick={resolveAllThreads}
                             >
-                                {resolvingAll ? "Resolving…" : "Resolve all threads"}
+                                Resolve all threads
                             </Button>
                         ) : null}
                         {showApproveAndMerge ? (
@@ -351,14 +383,14 @@ export function ReviewChangesMenu({ repository, number }: { repository: string; 
                                 method={activeMergeMethod}
                                 options={mergeOptions}
                                 blockedReason={mergeBlockedReason}
-                                disabled={draft.stale || submitting || resolvingAll}
+                                disabled={draft.stale || submitting}
                                 onSelectMethod={setMergeMethod}
                                 onSubmit={handleApproveAndMerge}
                             />
                         ) : null}
                         <Button
                             size="sm"
-                            disabled={draft.stale || submitting || resolvingAll}
+                            disabled={draft.stale || submitting}
                             className="bg-[#1f883d] text-white hover:bg-[#1a7f37] dark:bg-[#238636] dark:hover:bg-[#2ea043]"
                             onClick={() => void handleSubmit()}
                         >

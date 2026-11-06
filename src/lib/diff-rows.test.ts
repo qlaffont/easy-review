@@ -38,7 +38,6 @@ function rows(overrides: Partial<Parameters<typeof buildVirtualRows>[0]> = {}): 
         splitView: "both",
         pendingComments: [],
         threads: [],
-        showInlineComments: true,
         compose: null,
         ...overrides,
     });

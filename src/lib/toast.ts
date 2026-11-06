@@ -8,6 +8,67 @@ const INBOX_PROMPT_DESCRIPTION = "Pick up the next pull request in your inbox.";
 const INBOX_PROMPT_ACTION_LABEL = "Go to Inbox";
 const INBOX_PROMPT_DURATION_MS = 10_000;
 
+let optimisticActionsInFlight = 0;
+
+function warnBeforeLeaving(event: BeforeUnloadEvent): void {
+    event.preventDefault();
+}
+
+/** Closing the tab cancels requests, which would lose an action the UI already showed as done. */
+async function holdTabWhile<T>(work: Promise<T>): Promise<T> {
+    if (optimisticActionsInFlight === 0) {
+        window.addEventListener("beforeunload", warnBeforeLeaving);
+    }
+    optimisticActionsInFlight += 1;
+    try {
+        return await work;
+    } finally {
+        optimisticActionsInFlight -= 1;
+        if (optimisticActionsInFlight === 0) {
+            window.removeEventListener("beforeunload", warnBeforeLeaving);
+        }
+    }
+}
+
+/**
+ * Send an action the UI has already applied: stay quiet while it runs, and raise an alert that
+ * stays until dismissed if GitHub refuses it. Retry re-runs the action, and `copyText` keeps text
+ * the reviewer wrote from being lost when the refusal is permanent. Resolves to whether it succeeded.
+ */
+export async function notifyOptimistic(
+    action: () => Promise<unknown>,
+    options: {
+        error: string;
+        /** `owner/repo#123`, since the reviewer may have moved on by the time this fails. */
+        pullRequest: string;
+        copyText?: string;
+    },
+): Promise<boolean> {
+    try {
+        await holdTabWhile(action());
+        return true;
+    } catch (cause) {
+        toast.error(options.error, {
+            description: `${options.pullRequest}: ${errorMessage(cause, "GitHub refused the request.")}`,
+            duration: Number.POSITIVE_INFINITY,
+            action: {
+                label: "Retry",
+                onClick: () => void notifyOptimistic(action, options),
+            },
+            cancel: options.copyText
+                ? {
+                      label: "Copy text",
+                      onClick: () => {
+                          const text = options.copyText ?? "";
+                          void navigator.clipboard.writeText(text).then(() => notifyCopied("text"));
+                      },
+                  }
+                : undefined,
+        });
+        return false;
+    }
+}
+
 /** Run an action and show loading → success / error toasts. */
 export async function notifyAction<T>(
     action: () => Promise<T>,
@@ -46,19 +107,7 @@ export async function notifyActionWithInboxPrompt<T>(
     try {
         const result = await action();
         toast.dismiss(toastId);
-        if (options.returnToInbox) {
-            toast.success(messages.success);
-            options.onGoToInbox();
-        } else {
-            toast.success(messages.success, {
-                description: INBOX_PROMPT_DESCRIPTION,
-                action: {
-                    label: INBOX_PROMPT_ACTION_LABEL,
-                    onClick: options.onGoToInbox,
-                },
-                duration: INBOX_PROMPT_DURATION_MS,
-            });
-        }
+        notifySuccessWithInboxPrompt(messages.success, options);
         return result;
     } catch (cause) {
         toast.dismiss(toastId);
@@ -117,6 +166,27 @@ export function notifyBackgroundActionAfterNavigating<T>(
 ): Promise<T> {
     navigate();
     return notifyAction(action, messages);
+}
+
+/** Go back to the Inbox when `returnToInbox` is on, otherwise offer a shortcut to it. */
+export function notifySuccessWithInboxPrompt(
+    message: string,
+    options: { returnToInbox: boolean; onGoToInbox: () => void },
+): void {
+    if (options.returnToInbox) {
+        toast.success(message);
+        options.onGoToInbox();
+        return;
+    }
+
+    toast.success(message, {
+        description: INBOX_PROMPT_DESCRIPTION,
+        action: {
+            label: INBOX_PROMPT_ACTION_LABEL,
+            onClick: options.onGoToInbox,
+        },
+        duration: INBOX_PROMPT_DURATION_MS,
+    });
 }
 
 export function notifySuccess(message: string): void {

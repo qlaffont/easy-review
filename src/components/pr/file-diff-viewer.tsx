@@ -103,7 +103,7 @@ export function FileDiffViewer({
     threads,
     viewerLogin,
     viewerAvatarUrl,
-    showInlineComments,
+    minimizeComments,
     disabled,
     previewBaseUrl,
     repository,
@@ -136,7 +136,7 @@ export function FileDiffViewer({
     threads: Array<ReviewThread>;
     viewerLogin: string | null;
     viewerAvatarUrl: string | null;
-    showInlineComments: boolean;
+    minimizeComments: boolean;
     disabled?: boolean;
     previewBaseUrl: string;
     repository: string;
@@ -154,15 +154,14 @@ export function FileDiffViewer({
     onSplitViewChange: (splitView: SplitView) => void;
     onSplitRatioChange: (ratio: number) => void;
     onLoadAnyway: () => void;
-    onAddComment: (target: LineTarget, body: string) => Promise<void>;
-    onAddSingleComment: (target: LineTarget, body: string) => Promise<void>;
+    onAddComment: (target: LineTarget, body: string) => void;
+    onAddSingleComment: (target: LineTarget, body: string) => void;
     onRemovePending: (commentId: string) => Promise<void>;
     onUpdatePending: (commentId: string, body: string) => Promise<void>;
     onReplyToThread: (threadId: string, body: string) => Promise<void>;
 }) {
     const [compose, setCompose] = useState<LineTarget | null>(null);
     const [draftBody, setDraftBody] = useState("");
-    const [saving, setSaving] = useState<"stage" | "single" | null>(null);
     const [showFullFile, setShowFullFile] = useState(false);
     const [searchOpen, setSearchOpen] = useState(false);
     const [searchQuery, setSearchQuery] = useState("");
@@ -268,27 +267,18 @@ export function FileDiffViewer({
         setDraftBody("");
     }
 
-    async function saveComment(mode: "stage" | "single") {
-        if (!compose || saving) {
-            return;
-        }
-
+    function saveComment(mode: "stage" | "single") {
         const body = noteValue.trim();
-        if (!body) {
+        if (!compose || !body) {
             return;
         }
 
-        setSaving(mode);
-        try {
-            if (mode === "stage") {
-                await onAddComment(compose, body);
-            } else {
-                await onAddSingleComment(compose, body);
-            }
-            resetComposer();
-        } finally {
-            setSaving(null);
+        if (mode === "stage") {
+            onAddComment(compose, body);
+        } else {
+            onAddSingleComment(compose, body);
         }
+        resetComposer();
     }
 
     const canSuggest = compose?.side === "RIGHT";
@@ -366,7 +356,7 @@ export function FileDiffViewer({
                         threads={threads}
                         viewerLogin={viewerLogin}
                         viewerAvatarUrl={viewerAvatarUrl}
-                        showInlineComments={showInlineComments}
+                        minimizeComments={minimizeComments}
                         previewBaseUrl={previewBaseUrl}
                         repository={repository}
                         number={number}
@@ -377,7 +367,6 @@ export function FileDiffViewer({
                         noteValue={noteValue}
                         canSuggest={canSuggest}
                         canSave={canSave}
-                        saving={saving}
                         hasPendingReview={pendingComments.length > 0}
                         onNoteChange={setDraftBody}
                         onCancelCompose={resetComposer}
@@ -656,7 +645,6 @@ function LineCommentComposer({
     noteValue,
     canSuggest,
     canSave,
-    saving,
     hasPendingReview,
     disabled,
     previewBaseUrl,
@@ -673,7 +661,6 @@ function LineCommentComposer({
     noteValue: string;
     canSuggest: boolean;
     canSave: boolean;
-    saving: "stage" | "single" | null;
     hasPendingReview: boolean;
     disabled?: boolean;
     previewBaseUrl: string;
@@ -688,7 +675,6 @@ function LineCommentComposer({
 }) {
     const sideLabel = compose.side === "LEFT" ? "L" : "R";
     const author = viewerLogin ?? "you";
-    const busy = saving != null;
     const hasSuggestion = hasSuggestionFence(noteValue);
     const stageLabel = hasPendingReview ? "Add review comment" : "Start a review";
 
@@ -770,14 +756,7 @@ function LineCommentComposer({
                         className="shadow-sm"
                         footer={
                             <>
-                                <Button
-                                    type="button"
-                                    size="sm"
-                                    variant="outline"
-                                    className="h-7"
-                                    disabled={busy}
-                                    onClick={onCancel}
-                                >
+                                <Button type="button" size="sm" variant="outline" className="h-7" onClick={onCancel}>
                                     Cancel
                                 </Button>
                                 <Button
@@ -785,19 +764,19 @@ function LineCommentComposer({
                                     size="sm"
                                     variant="outline"
                                     className="h-7"
-                                    disabled={busy || !canSave || disabled}
+                                    disabled={!canSave || disabled}
                                     onClick={() => onSave("single")}
                                 >
-                                    {saving === "single" ? "Commenting…" : "Add single comment"}
+                                    Add single comment
                                 </Button>
                                 <Button
                                     type="button"
                                     size="sm"
-                                    disabled={busy || !canSave || disabled}
+                                    disabled={!canSave || disabled}
                                     className="h-7 bg-[#1f883d] text-white hover:bg-[#1a7f37] dark:bg-[#238636] dark:hover:bg-[#2ea043]"
                                     onClick={() => onSave("stage")}
                                 >
-                                    {saving === "stage" ? "Adding…" : stageLabel}
+                                    {stageLabel}
                                 </Button>
                             </>
                         }
@@ -1135,7 +1114,7 @@ function VirtualDiffLines({
     threads,
     viewerLogin,
     viewerAvatarUrl,
-    showInlineComments,
+    minimizeComments,
     previewBaseUrl,
     repository,
     number,
@@ -1146,7 +1125,6 @@ function VirtualDiffLines({
     noteValue,
     canSuggest,
     canSave,
-    saving,
     hasPendingReview,
     onNoteChange,
     onCancelCompose,
@@ -1172,7 +1150,7 @@ function VirtualDiffLines({
     threads: Array<ReviewThread>;
     viewerLogin: string | null;
     viewerAvatarUrl: string | null;
-    showInlineComments: boolean;
+    minimizeComments: boolean;
     previewBaseUrl: string;
     repository: string;
     number: number;
@@ -1183,7 +1161,6 @@ function VirtualDiffLines({
     noteValue: string;
     canSuggest: boolean;
     canSave: boolean;
-    saving: "stage" | "single" | null;
     hasPendingReview: boolean;
     onNoteChange: (value: string) => void;
     onCancelCompose: () => void;
@@ -1228,10 +1205,9 @@ function VirtualDiffLines({
                 splitView,
                 pendingComments,
                 threads,
-                showInlineComments,
                 compose: selected,
             }),
-        [lines, path, layout, splitView, pendingComments, threads, showInlineComments, selected],
+        [lines, path, layout, splitView, pendingComments, threads, selected],
     );
     const virtualRowsRef = useRef(virtualRows);
     virtualRowsRef.current = virtualRows;
@@ -1711,6 +1687,7 @@ function VirtualDiffLines({
                                             canApplySuggestions={canApplySuggestions}
                                             mentionUsers={mentionUsers}
                                             disabled={disabled}
+                                            minimized={minimizeComments}
                                             onRemovePending={onRemovePending}
                                             onUpdatePending={onUpdatePending}
                                             onReply={onReplyToThread}
@@ -1721,7 +1698,6 @@ function VirtualDiffLines({
                                             noteValue={noteValue}
                                             canSuggest={canSuggest}
                                             canSave={canSave}
-                                            saving={saving}
                                             hasPendingReview={hasPendingReview}
                                             disabled={disabled}
                                             previewBaseUrl={previewBaseUrl}

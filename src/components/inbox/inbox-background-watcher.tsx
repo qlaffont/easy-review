@@ -1,88 +1,99 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { useEffect, useEffectEvent, useRef } from "react";
+import { useEffect, useEffectEvent, useMemo, useRef } from "react";
 
 import { useInboxPreferences } from "#/lib/inbox-preferences.ts";
-import { showInboxUpdateNotifications } from "#/lib/inbox/inbox-notifications.ts";
+import { isTabAttended, showNewPullRequestNotifications } from "#/lib/inbox/inbox-notifications.ts";
 import {
-    detectInboxUpdates,
-    snapshotExpandedSections,
-    type ExpandedSectionSnapshot,
+    detectNewPullRequests,
+    snapshotSectionMembership,
+    type SectionMembershipSnapshot,
 } from "#/lib/inbox/inbox-update-detection.ts";
 import { getInboxQueryData } from "#/lib/query/inbox.ts";
+import { defaultLabelForSection } from "#/lib/session/inbox-sections.ts";
 import { useSession, useSessionState } from "#/lib/session/provider.tsx";
 import { BACKGROUND_INBOX_REVALIDATE_INTERVAL_MS } from "#/lib/session/quiet-revalidate.ts";
 
 /**
- * While the tab is hidden, refresh the inbox every five minutes and notify when
- * pull requests in expanded sections change.
+ * While the user is away from this tab (hidden or not focused), refresh the inbox every
+ * five minutes and notify when a pull request appears in a section marked for notifications.
  */
 export function InboxBackgroundWatcher() {
     const session = useSession();
     const queryClient = useQueryClient();
     const login = useSessionState((state) => state.auth.viewer?.login ?? "");
-    const expandedSections = useSessionState((state) => state.inbox.expandedSections);
+    const sectionLayout = useSessionState((state) => state.inbox.sectionLayout);
     const selectedCount = useSessionState((state) => state.repos.selected.length);
     const lastLoadedAt = useSessionState((state) => state.inbox.lastLoadedAt);
     const [preferences] = useInboxPreferences();
-    const lastSnapshot = useRef<ExpandedSectionSnapshot>(new Map());
+    const watchedSections = useMemo(
+        () => sectionLayout.filter((entry) => !entry.hidden && entry.notifyOnNewPullRequest),
+        [sectionLayout],
+    );
+    const lastSeen = useRef<SectionMembershipSnapshot>(new Map());
     const syncing = useRef(false);
 
-    const captureSnapshot = useEffectEvent(() => {
-        if (!login) {
-            lastSnapshot.current = new Map();
-            return;
-        }
-        lastSnapshot.current = snapshotExpandedSections(getInboxQueryData(queryClient, login), expandedSections);
+    /** What the user has seen: only moves forward while they are looking at the tab. */
+    const captureLastSeen = useEffectEvent(() => {
+        lastSeen.current = snapshotSectionMembership(
+            login ? getInboxQueryData(queryClient, login) : undefined,
+            watchedSections.map((entry) => entry.id),
+        );
     });
 
-    const syncWhenHidden = useEffectEvent(async () => {
+    const syncWhenAway = useEffectEvent(async () => {
         if (!login || selectedCount === 0 || !preferences.backgroundNotifications) {
             return;
         }
-        if (document.visibilityState !== "hidden") {
-            return;
-        }
-        if (syncing.current) {
+        if (isTabAttended() || syncing.current) {
             return;
         }
 
         syncing.current = true;
-        const before = new Map(lastSnapshot.current);
 
         try {
             await session.refreshInbox();
-            const after = snapshotExpandedSections(getInboxQueryData(queryClient, login), expandedSections);
-            lastSnapshot.current = after;
 
-            if (before.size === 0) {
-                return;
-            }
+            const data = getInboxQueryData(queryClient, login);
+            const sectionIds = watchedSections.map((entry) => entry.id);
+            const entered = detectNewPullRequests(lastSeen.current, data, sectionIds);
+            lastSeen.current = snapshotSectionMembership(data, sectionIds);
 
-            const updates = detectInboxUpdates(before, after);
-            showInboxUpdateNotifications(updates);
+            showNewPullRequestNotifications(
+                entered.map(({ pullRequest, sectionId }) => {
+                    const section = watchedSections.find((entry) => entry.id === sectionId);
+                    return {
+                        repository: pullRequest.repository,
+                        number: pullRequest.number,
+                        key: pullRequest.key,
+                        title: pullRequest.title,
+                        sectionLabel: section?.label.trim() || defaultLabelForSection(sectionId),
+                    };
+                }),
+            );
         } finally {
             syncing.current = false;
         }
     });
 
     useEffect(() => {
-        if (document.visibilityState !== "visible") {
-            return;
+        if (isTabAttended()) {
+            captureLastSeen();
         }
-        captureSnapshot();
-    }, [login, expandedSections, lastLoadedAt]);
+    }, [login, watchedSections, lastLoadedAt]);
 
     useEffect(() => {
-        function onVisibilityChange() {
-            if (document.visibilityState === "visible") {
-                captureSnapshot();
-                return;
+        function onAttentionChange() {
+            if (isTabAttended()) {
+                captureLastSeen();
             }
-            void syncWhenHidden();
         }
 
-        document.addEventListener("visibilitychange", onVisibilityChange);
-        return () => document.removeEventListener("visibilitychange", onVisibilityChange);
+        window.addEventListener("focus", onAttentionChange);
+        document.addEventListener("visibilitychange", onAttentionChange);
+        return () => {
+            window.removeEventListener("focus", onAttentionChange);
+            document.removeEventListener("visibilitychange", onAttentionChange);
+        };
     }, []);
 
     useEffect(() => {
@@ -91,7 +102,7 @@ export function InboxBackgroundWatcher() {
         }
 
         const timer = window.setInterval(() => {
-            void syncWhenHidden();
+            void syncWhenAway();
         }, BACKGROUND_INBOX_REVALIDATE_INTERVAL_MS);
 
         return () => window.clearInterval(timer);

@@ -22,8 +22,8 @@ export async function fetchPullRequestDetail(
     signal?: AbortSignal,
 ): Promise<PullRequestDetailQueryData> {
     void signal;
-    const detail = await session.github.getPullRequest(session.requireToken(), repository, number);
-    return { detail: session.decoratePullRequestDetail(detail), lastLoadedAt: new Date().toISOString() };
+    const detail = await session.readPullRequestDetail(repository, number);
+    return { detail, lastLoadedAt: new Date().toISOString() };
 }
 
 export async function fetchPullRequestFiles(
@@ -60,8 +60,7 @@ export async function fetchReviewThreads(
     signal?: AbortSignal,
 ): Promise<ReviewThreadsQueryData> {
     void signal;
-    const items = await session.github.listReviewThreads(session.requireToken(), repository, number);
-    return { items };
+    return { items: await session.readReviewThreads(repository, number) };
 }
 
 export async function fetchConversation(
@@ -71,8 +70,7 @@ export async function fetchConversation(
     signal?: AbortSignal,
 ): Promise<ConversationQueryData> {
     void signal;
-    const items = await session.github.listPullRequestTimeline(session.requireToken(), repository, number);
-    return { items };
+    return { items: await session.readConversation(repository, number) };
 }
 
 export async function fetchPullRequestCommits(

@@ -63,7 +63,7 @@ import {
 import { useReviewDraftStaging } from "#/lib/query/review-draft.ts";
 import { shouldConfirmLargeFile } from "#/lib/session/diff-policy.ts";
 import { useSession } from "#/lib/session/provider.tsx";
-import { notifyAction, notifyError } from "#/lib/toast.ts";
+import { notifyAction, notifyError, notifyOptimistic } from "#/lib/toast.ts";
 import { cn } from "#/lib/utils.ts";
 
 const FileDiffViewer = lazy(() =>
@@ -611,7 +611,7 @@ export function ReviewChanges({
                                         threads={threadsOnFile}
                                         viewerLogin={viewer?.login ?? null}
                                         viewerAvatarUrl={viewer?.avatarUrl ?? null}
-                                        showInlineComments={!preferences.minimizeComments}
+                                        minimizeComments={preferences.minimizeComments}
                                         disabled={draft.stale}
                                         repository={repository}
                                         number={number}
@@ -639,8 +639,8 @@ export function ReviewChanges({
                                                 error: "Could not load the file.",
                                             })
                                         }
-                                        onAddComment={async (target, body) => {
-                                            await notifyAction(
+                                        onAddComment={(target, body) => {
+                                            void notifyOptimistic(
                                                 () =>
                                                     session.addPendingComment(repository, number, {
                                                         path: target.path,
@@ -649,14 +649,14 @@ export function ReviewChanges({
                                                         body,
                                                     }),
                                                 {
-                                                    loading: "Adding comment to review…",
-                                                    success: "Comment staged for review",
                                                     error: "Could not stage the comment.",
+                                                    pullRequest: `${repository}#${number}`,
+                                                    copyText: body,
                                                 },
                                             );
                                         }}
-                                        onAddSingleComment={async (target, body) => {
-                                            await notifyAction(
+                                        onAddSingleComment={(target, body) => {
+                                            void notifyOptimistic(
                                                 () =>
                                                     session.addSingleLineComment(repository, number, {
                                                         path: target.path,
@@ -665,9 +665,9 @@ export function ReviewChanges({
                                                         body,
                                                     }),
                                                 {
-                                                    loading: "Posting comment…",
-                                                    success: "Comment posted",
                                                     error: "Could not post the comment.",
+                                                    pullRequest: `${repository}#${number}`,
+                                                    copyText: body,
                                                 },
                                             );
                                         }}

@@ -69,7 +69,7 @@ import { usePullRequestPage } from "#/lib/query/pull-request.ts";
 import { pullRequestSeo, usePageSeo } from "#/lib/seo.ts";
 import { useSession } from "#/lib/session/provider.tsx";
 import { useCheckStatusRevalidate } from "#/lib/session/quiet-revalidate.ts";
-import { notifyAction, notifyCopied, notifyError } from "#/lib/toast.ts";
+import { notifyAction, notifyCopied, notifyError, notifyOptimistic } from "#/lib/toast.ts";
 import { cn } from "#/lib/utils.ts";
 
 const PullRequestConversation = lazy(() =>
@@ -1186,12 +1186,11 @@ function Description({
                     <ReactionBar
                         groups={detail.reactionGroups}
                         onToggle={(content) => {
-                            void notifyAction(
+                            void notifyOptimistic(
                                 () => session.toggleIssueReaction(detail.repository, detail.number, content),
                                 {
-                                    loading: "Updating reaction…",
-                                    success: "Reaction updated",
                                     error: "Could not update the reaction.",
+                                    pullRequest: `${detail.repository}#${detail.number}`,
                                 },
                             );
                         }}

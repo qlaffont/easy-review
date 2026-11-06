@@ -376,6 +376,8 @@ export type ReviewThreadComment = {
     /** Permalink on GitHub (`…#discussion_r…`). */
     url: string;
     reactionGroups: Array<ReactionGroup>;
+    /** Shown before GitHub confirms it: no real id or permalink yet. */
+    sending?: boolean;
 };
 
 /** A conversation comment on the pull request (GitHub issue comment), not a diff review. */
@@ -393,6 +395,8 @@ export type PullRequestComment = {
     editCount: number;
     edits: Array<ContentEdit>;
     reactionGroups: Array<ReactionGroup>;
+    /** Shown before GitHub confirms it: no real id or permalink yet. */
+    sending?: boolean;
 };
 
 type TimelineActor = {
@@ -516,6 +520,8 @@ export type PullRequestTimelineItem =
           state: ReviewState;
           body: string;
           url: string;
+          /** Shown before GitHub confirms it: no real id or permalink yet. */
+          sending?: boolean;
       }
     | {
           kind: "head-ref-force-pushed";

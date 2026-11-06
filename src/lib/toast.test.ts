@@ -1,6 +1,7 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { toast } from "sonner";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { notifyBackgroundActionWithInboxPrompt } from "#/lib/toast.ts";
+import { notifyBackgroundActionWithInboxPrompt, notifyOptimistic } from "#/lib/toast.ts";
 
 vi.mock("sonner", () => ({
     toast: {
@@ -13,9 +14,11 @@ vi.mock("sonner", () => ({
 }));
 
 const close = vi.fn();
+const addEventListener = vi.fn();
+const removeEventListener = vi.fn();
 
 Object.defineProperty(globalThis, "window", {
-    value: { close },
+    value: { close, addEventListener, removeEventListener },
     configurable: true,
 });
 
@@ -77,5 +80,70 @@ describe("notifyBackgroundActionWithInboxPrompt closing the tab", () => {
         });
 
         expect(close).not.toHaveBeenCalled();
+    });
+});
+
+describe("notifyOptimistic", () => {
+    const options = { error: "Could not post", pullRequest: "acme/api#1", copyText: "my comment" };
+
+    beforeEach(() => {
+        vi.clearAllMocks();
+    });
+
+    it("stays quiet when the action succeeds", async () => {
+        await expect(notifyOptimistic(() => Promise.resolve(), options)).resolves.toBe(true);
+        expect(toast.error).not.toHaveBeenCalled();
+        expect(toast.loading).not.toHaveBeenCalled();
+    });
+
+    it("raises an alert that stays, naming the pull request and the reason", async () => {
+        await expect(notifyOptimistic(() => Promise.reject(new Error("Nope")), options)).resolves.toBe(false);
+
+        expect(toast.error).toHaveBeenCalledWith(
+            "Could not post",
+            expect.objectContaining({
+                description: "acme/api#1: Nope",
+                duration: Number.POSITIVE_INFINITY,
+                action: expect.objectContaining({ label: "Retry" }),
+                cancel: expect.objectContaining({ label: "Copy text" }),
+            }),
+        );
+    });
+
+    it("retries the same action from the alert", async () => {
+        const action = vi.fn(() => Promise.reject(new Error("Nope")));
+        await notifyOptimistic(action, options);
+
+        const retry = vi.mocked(toast.error).mock.calls[0]![1]?.action;
+        if (!retry || typeof retry !== "object" || !("onClick" in retry)) {
+            throw new Error("Expected the alert to offer Retry");
+        }
+        retry.onClick(undefined as never);
+        await vi.waitFor(() => expect(toast.error).toHaveBeenCalledTimes(2));
+
+        expect(action).toHaveBeenCalledTimes(2);
+    });
+
+    it("offers no copy when the action carries no text", async () => {
+        await notifyOptimistic(() => Promise.reject(new Error("Nope")), { error: "x", pullRequest: "acme/api#1" });
+
+        expect(vi.mocked(toast.error).mock.calls[0]![1]).toMatchObject({ cancel: undefined });
+    });
+
+    it("warns before the tab closes only while an action is in flight", async () => {
+        let finish = () => {};
+        const running = notifyOptimistic(
+            () =>
+                new Promise<void>((resolve) => {
+                    finish = resolve;
+                }),
+            options,
+        );
+        expect(addEventListener).toHaveBeenCalledWith("beforeunload", expect.any(Function));
+        expect(removeEventListener).not.toHaveBeenCalled();
+
+        finish();
+        await running;
+        expect(removeEventListener).toHaveBeenCalledWith("beforeunload", expect.any(Function));
     });
 });

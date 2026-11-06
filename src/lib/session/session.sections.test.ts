@@ -141,6 +141,22 @@ describe("inbox section customization", () => {
         expect(reloaded.getSectionLayout().find((entry) => entry.id === "approved")?.defaultExpanded).toBe(false);
     });
 
+    it("notifies on the review sections by default and persists changes across reload", async () => {
+        const session = await connectedWithInbox();
+        const notifying = (layout: ReturnType<typeof session.getSectionLayout>) =>
+            layout.filter((entry) => entry.notifyOnNewPullRequest).map((entry) => entry.id);
+
+        expect(notifying(session.getSectionLayout())).toEqual(["needs-your-review", "returned-to-you", "approved"]);
+
+        await session.setSectionNotifyOnNewPullRequest("approved", false);
+        await session.setSectionNotifyOnNewPullRequest("drafts", true);
+
+        const reloaded = createEasyReviewSession({ github, queryClient: createTestQueryClient(), store });
+        await reloaded.connect(TOKEN);
+
+        expect(notifying(reloaded.getSectionLayout())).toEqual(["needs-your-review", "returned-to-you", "drafts"]);
+    });
+
     it("persists color and icon across reload", async () => {
         const session = await connectedWithInbox();
         await session.setSectionColor("needs-your-review", "violet");

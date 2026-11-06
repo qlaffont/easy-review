@@ -4,7 +4,7 @@ import { MarkdownComposer } from "#/components/pr/markdown-composer.tsx";
 import { Markdown } from "#/components/pr/markdown.tsx";
 import { useMarkdownTaskToggle } from "#/components/pr/use-markdown-task-toggle.ts";
 import { Button } from "#/components/ui/button.tsx";
-import { notifyAction } from "#/lib/toast.ts";
+import { notifyOptimistic } from "#/lib/toast.ts";
 
 type EditableCommentBodyProps = {
     body: string;
@@ -30,7 +30,6 @@ export function EditableCommentBody({
     markdownProps,
 }: EditableCommentBodyProps) {
     const [draft, setDraft] = useState(body);
-    const [saving, setSaving] = useState(false);
     const { source, onToggleTask } = useMarkdownTaskToggle(body, onSave);
 
     if (editing && canEdit) {
@@ -41,7 +40,6 @@ export function EditableCommentBody({
                 value={draft}
                 onChange={setDraft}
                 rows={4}
-                disabled={saving}
                 previewBaseUrl={baseUrl}
                 repository={repository}
                 pullRequestNumber={number}
@@ -51,7 +49,6 @@ export function EditableCommentBody({
                             type="button"
                             size="sm"
                             variant="outline"
-                            disabled={saving}
                             onClick={() => {
                                 setDraft(body);
                                 onEditingChange(false);
@@ -62,20 +59,15 @@ export function EditableCommentBody({
                         <Button
                             type="button"
                             size="sm"
-                            disabled={saving || !draft.trim()}
+                            disabled={!draft.trim()}
                             onClick={() => {
-                                setSaving(true);
-                                void notifyAction(
-                                    async () => {
-                                        await onSave(draft.trim());
-                                        onEditingChange(false);
-                                    },
-                                    {
-                                        loading: "Saving comment…",
-                                        success: "Comment updated",
-                                        error: "Could not update the comment.",
-                                    },
-                                ).finally(() => setSaving(false));
+                                const next = draft.trim();
+                                onEditingChange(false);
+                                void notifyOptimistic(() => onSave(next), {
+                                    error: "Could not update the comment.",
+                                    pullRequest: `${repository}#${number}`,
+                                    copyText: next,
+                                });
                             }}
                         >
                             Save

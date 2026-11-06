@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 
 export type InboxPreferences = {
-    /** Desktop notifications when open inbox sections change while the tab is in the background. */
+    /** Desktop notifications when a pull request appears in a section marked for them, while away from the tab. */
     backgroundNotifications: boolean;
     /** When true, inbox rows open Easy Review. When false, they open GitHub. */
     openInEasyReview: boolean;

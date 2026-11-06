@@ -53,8 +53,9 @@ import { Label } from "#/components/ui/label.tsx";
 import { Textarea } from "#/components/ui/textarea.tsx";
 import { useDiffPreferences } from "#/lib/diff-preferences.ts";
 import { useReviewThreadsQuery } from "#/lib/query/pull-request.ts";
+import { isThreadSending } from "#/lib/session/optimistic.ts";
 import { useSession, useSessionState } from "#/lib/session/provider.tsx";
-import { notifyAction, notifyActionWithInboxPrompt } from "#/lib/toast.ts";
+import { notifyAction, notifyActionWithInboxPrompt, notifyOptimistic } from "#/lib/toast.ts";
 import { cn } from "#/lib/utils.ts";
 
 export function PullRequestControls({ detail }: { detail: PullRequestDetail }) {
@@ -63,7 +64,10 @@ export function PullRequestControls({ detail }: { detail: PullRequestDetail }) {
     const viewerLogin = useSessionState((state) => state.auth.viewer?.login);
     const [preferences] = useDiffPreferences();
     const threads = useReviewThreadsQuery(detail.repository, detail.number);
-    const unresolvedThreads = useMemo(() => threads.items.filter((thread) => !thread.isResolved), [threads.items]);
+    const unresolvedThreads = useMemo(
+        () => threads.items.filter((thread) => !thread.isResolved && !isThreadSending(thread)),
+        [threads.items],
+    );
     const [error, setError] = useState<string | null>(null);
     const [busy, setBusy] = useState(false);
     const [bypassRules, setBypassRules] = useState(false);
@@ -193,25 +197,15 @@ export function PullRequestControls({ detail }: { detail: PullRequestDetail }) {
         setMergeDialogOpen(open);
     }
 
-    async function resolveAllThreads() {
-        if (busyRef.current || unresolvedThreads.length === 0) {
-            return;
-        }
-
-        const count = unresolvedThreads.length;
-        await run(
-            async () => {
-                await Promise.all(
+    function resolveAllThreads() {
+        void notifyOptimistic(
+            () =>
+                Promise.all(
                     unresolvedThreads.map((thread) =>
                         session.setReviewThreadResolved(detail.repository, detail.number, thread.id, true),
                     ),
-                );
-            },
-            {
-                loading: "Resolving threads…",
-                success: count === 1 ? "Thread resolved" : `Resolved ${count} threads`,
-                error: "Could not resolve all threads.",
-            },
+                ),
+            { error: "Could not resolve all threads.", pullRequest: `${detail.repository}#${detail.number}` },
         );
     }
 
@@ -459,7 +453,7 @@ export function PullRequestControls({ detail }: { detail: PullRequestDetail }) {
                     </DropdownMenu>
                 ) : null}
                 {unresolvedThreads.length > 0 ? (
-                    <Button size="sm" variant="outline" disabled={busy} onClick={() => void resolveAllThreads()}>
+                    <Button size="sm" variant="outline" disabled={busy} onClick={resolveAllThreads}>
                         Resolve all threads
                     </Button>
                 ) : null}

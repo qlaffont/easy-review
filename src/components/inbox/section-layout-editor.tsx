@@ -88,7 +88,9 @@ export function SectionLayoutEditor({ open, onOpenChange }: { open: boolean; onO
     const sectionImportRef = useRef<HTMLInputElement>(null);
     const [filterSectionId, setFilterSectionId] = useState<InboxSectionId | null>(null);
     const [inboxPreferences, setInboxPreferences] = useInboxPreferences();
-    const notificationsBlocked = notificationPermission() === "denied";
+    const permission = notificationPermission();
+    const notificationsBlocked = permission === "denied";
+    const notificationsAllowed = permission === "granted";
 
     const visible = layout.filter((entry) => !entry.hidden);
     const hiddenPresetsById = new Map(
@@ -191,9 +193,9 @@ export function SectionLayoutEditor({ open, onOpenChange }: { open: boolean; onO
                         <SettingsSectionHeading icon={Bell}>Background updates</SettingsSectionHeading>
                         <SettingsPreferenceRow
                             icon={Bell}
-                            title="Notify when open sections change"
-                            description="While this tab is in the background, refresh the inbox every 5 minutes and send a desktop notification when a pull request in an expanded section updates."
-                            checked={inboxPreferences.backgroundNotifications}
+                            title="Notify when a pull request appears"
+                            description="While you are away from this tab, refresh the inbox every 5 minutes and send a desktop notification when a pull request appears in a section with Notify on."
+                            checked={inboxPreferences.backgroundNotifications && notificationsAllowed}
                             disabled={notificationsBlocked}
                             onCheckedChange={(checked) => {
                                 void (async () => {
@@ -366,6 +368,9 @@ export function SectionLayoutEditor({ open, onOpenChange }: { open: boolean; onO
                                             onDefaultExpanded={(defaultExpanded) =>
                                                 void session.setSectionDefaultExpanded(entry.id, defaultExpanded)
                                             }
+                                            onNotify={(notify) =>
+                                                void session.setSectionNotifyOnNewPullRequest(entry.id, notify)
+                                            }
                                             onEditFilters={() => setFilterSectionId(entry.id)}
                                             onDuplicate={() => {
                                                 void session.duplicateSection(entry.id).then((id) => {
@@ -417,6 +422,7 @@ function SectionLayoutRow({
     onCustomColor,
     onIcon,
     onDefaultExpanded,
+    onNotify,
     onEditFilters,
     onDuplicate,
     onRemove,
@@ -430,6 +436,7 @@ function SectionLayoutRow({
     onCustomColor: (customColor: string) => void;
     onIcon: (icon: SectionIconId) => void;
     onDefaultExpanded: (defaultExpanded: boolean) => void;
+    onNotify: (notify: boolean) => void;
     onEditFilters: () => void;
     onDuplicate: () => void;
     onRemove: () => void;
@@ -552,14 +559,24 @@ function SectionLayoutRow({
             <SectionFilterSummaryLine sectionId={entry.id} />
 
             <div className="flex min-w-0 flex-wrap items-center justify-between gap-2 pl-16">
-                <label className="flex items-center gap-2 text-xs text-muted-foreground">
-                    <Switch
-                        checked={entry.defaultExpanded}
-                        onCheckedChange={onDefaultExpanded}
-                        aria-label={`Expand ${sectionLabel} by default`}
-                    />
-                    Expanded by default
-                </label>
+                <div className="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-2">
+                    <label className="flex items-center gap-2 text-xs text-muted-foreground">
+                        <Switch
+                            checked={entry.defaultExpanded}
+                            onCheckedChange={onDefaultExpanded}
+                            aria-label={`Expand ${sectionLabel} by default`}
+                        />
+                        Expanded by default
+                    </label>
+                    <label className="flex items-center gap-2 text-xs text-muted-foreground">
+                        <Switch
+                            checked={entry.notifyOnNewPullRequest}
+                            onCheckedChange={onNotify}
+                            aria-label={`Notify when a pull request appears in ${sectionLabel}`}
+                        />
+                        Notify
+                    </label>
+                </div>
                 <Button
                     type="button"
                     variant="ghost"

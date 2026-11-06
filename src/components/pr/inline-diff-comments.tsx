@@ -4,7 +4,7 @@ import { useState } from "react";
 import type { MentionCandidate } from "#/components/pr/composer-autocomplete.tsx";
 import type { DiffSide, PendingLineComment, ReviewThread } from "#/lib/session/types.ts";
 
-import { CommentActionsMenu, quoteMarkdown } from "#/components/pr/comment-actions.tsx";
+import { CommentActionsMenu, CommentSendingLabel, quoteMarkdown } from "#/components/pr/comment-actions.tsx";
 import { suggestionOriginalFromHunk } from "#/components/pr/diff-hunk-preview.tsx";
 import { EditableCommentBody } from "#/components/pr/editable-comment-body.tsx";
 import { MarkdownComposer } from "#/components/pr/markdown-composer.tsx";
@@ -13,8 +13,9 @@ import { ReviewThreadCommentReactions } from "#/components/pr/reaction-bar.tsx";
 import { ReviewThreadStatusLabels } from "#/components/pr/review-thread-status.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import { RelativeTime } from "#/components/ui/relative-time.tsx";
+import { isThreadSending } from "#/lib/session/optimistic.ts";
 import { useSession } from "#/lib/session/provider.tsx";
-import { notifyAction } from "#/lib/toast.ts";
+import { notifyOptimistic } from "#/lib/toast.ts";
 import { cn } from "#/lib/utils.ts";
 
 export function InlineDiffComments({
@@ -31,6 +32,7 @@ export function InlineDiffComments({
     mentionUsers,
     disabled,
     canApplySuggestions,
+    minimized,
     onRemovePending,
     onUpdatePending,
     onReply,
@@ -48,6 +50,8 @@ export function InlineDiffComments({
     mentionUsers?: Array<MentionCandidate>;
     disabled?: boolean;
     canApplySuggestions?: boolean;
+    /** Show each comment as its one-line header until opened. */
+    minimized: boolean;
     onRemovePending: (commentId: string) => Promise<void>;
     onUpdatePending: (commentId: string, body: string) => Promise<void>;
     onReply: (threadId: string, body: string) => Promise<void>;
@@ -74,6 +78,7 @@ export function InlineDiffComments({
                         repository={repository}
                         number={number}
                         disabled={disabled}
+                        minimized={minimized}
                         onRemove={() => onRemovePending(comment.id)}
                         onUpdate={(body) => onUpdatePending(comment.id, body)}
                     />
@@ -96,12 +101,24 @@ export function InlineDiffComments({
                         canApplySuggestions={Boolean(canApplySuggestions) && side === "RIGHT"}
                         mentionUsers={mentionUsers}
                         disabled={disabled}
+                        minimized={minimized}
                         onReply={(body) => onReply(thread.id, body)}
                     />
                 ))}
             </div>
         </div>
     );
+}
+
+/** Open/closed state of a comment card, reset whenever the Minimize comments preference changes. */
+function useCardOpen(openByDefault: boolean, minimized: boolean) {
+    const [open, setOpen] = useState(openByDefault && !minimized);
+    const [appliedMinimized, setAppliedMinimized] = useState(minimized);
+    if (appliedMinimized !== minimized) {
+        setAppliedMinimized(minimized);
+        setOpen(openByDefault && !minimized);
+    }
+    return [open, setOpen] as const;
 }
 
 function PendingCommentCard({
@@ -115,6 +132,7 @@ function PendingCommentCard({
     suggestionOriginal,
     suggestionLine,
     disabled,
+    minimized,
     onRemove,
     onUpdate,
 }: {
@@ -128,13 +146,14 @@ function PendingCommentCard({
     suggestionOriginal: string;
     suggestionLine: number;
     disabled?: boolean;
+    minimized: boolean;
     onRemove: () => Promise<void>;
     onUpdate: (body: string) => Promise<void>;
 }) {
-    const [open, setOpen] = useState(true);
+    const [open, setOpen] = useCardOpen(true, minimized);
     const [editing, setEditing] = useState(false);
     const [draft, setDraft] = useState(comment.body);
-    const [removing, setRemoving] = useState(false);
+    const pullRequest = `${repository}#${number}`;
     const author = viewerLogin ?? "you";
 
     return (
@@ -170,7 +189,7 @@ function PendingCommentCard({
                                 size="icon-sm"
                                 variant="ghost"
                                 className="size-7 text-muted-foreground"
-                                disabled={disabled || removing}
+                                disabled={disabled}
                                 aria-label="Edit pending comment"
                                 onClick={() => setEditing(true)}
                             >
@@ -181,15 +200,13 @@ function PendingCommentCard({
                                 size="icon-sm"
                                 variant="ghost"
                                 className="size-7 text-muted-foreground"
-                                disabled={disabled || removing}
+                                disabled={disabled}
                                 aria-label="Remove pending comment"
                                 onClick={() => {
-                                    setRemoving(true);
-                                    void notifyAction(onRemove, {
-                                        loading: "Removing comment…",
-                                        success: "Comment removed",
+                                    void notifyOptimistic(onRemove, {
                                         error: "Could not remove the comment.",
-                                    }).finally(() => setRemoving(false));
+                                        pullRequest,
+                                    });
                                 }}
                             >
                                 <Trash2 className="size-3.5" aria-hidden="true" />
@@ -204,7 +221,7 @@ function PendingCommentCard({
                                 value={draft}
                                 onChange={setDraft}
                                 rows={4}
-                                disabled={disabled || removing}
+                                disabled={disabled}
                                 previewBaseUrl={previewBaseUrl}
                                 repository={repository}
                                 pullRequestNumber={number}
@@ -216,7 +233,7 @@ function PendingCommentCard({
                                             type="button"
                                             size="sm"
                                             variant="outline"
-                                            disabled={disabled || removing}
+                                            disabled={disabled}
                                             onClick={() => {
                                                 setDraft(comment.body);
                                                 setEditing(false);
@@ -227,19 +244,15 @@ function PendingCommentCard({
                                         <Button
                                             type="button"
                                             size="sm"
-                                            disabled={disabled || removing || !draft.trim()}
+                                            disabled={disabled || !draft.trim()}
                                             onClick={() => {
-                                                void notifyAction(
-                                                    async () => {
-                                                        await onUpdate(draft.trim());
-                                                        setEditing(false);
-                                                    },
-                                                    {
-                                                        loading: "Saving comment…",
-                                                        success: "Comment updated",
-                                                        error: "Could not update the comment.",
-                                                    },
-                                                );
+                                                const next = draft.trim();
+                                                setEditing(false);
+                                                void notifyOptimistic(() => onUpdate(next), {
+                                                    error: "Could not update the comment.",
+                                                    pullRequest,
+                                                    copyText: next,
+                                                });
                                             }}
                                         >
                                             Save
@@ -275,6 +288,7 @@ function ThreadCommentCard({
     canApplySuggestions,
     mentionUsers,
     disabled,
+    minimized,
     onReply,
 }: {
     label: string;
@@ -289,35 +303,31 @@ function ThreadCommentCard({
     canApplySuggestions: boolean;
     mentionUsers?: Array<MentionCandidate>;
     disabled?: boolean;
+    minimized: boolean;
     onReply: (body: string) => Promise<void>;
 }) {
-    const [open, setOpen] = useState(!thread.isResolved);
+    const [open, setOpen] = useCardOpen(!thread.isResolved, minimized);
     const [replyOpen, setReplyOpen] = useState(false);
     const [reply, setReply] = useState("");
-    const [sending, setSending] = useState(false);
     const root = thread.comments[0];
+    const threadSending = isThreadSending(thread);
 
     if (!root) {
         return null;
     }
 
-    async function sendReply() {
+    function sendReply() {
         const body = reply.trim();
-        if (!body || disabled || sending) {
+        if (!body || disabled) {
             return;
         }
-        setSending(true);
-        try {
-            await notifyAction(() => onReply(body), {
-                loading: "Sending reply…",
-                success: "Reply posted",
-                error: "Could not post the reply.",
-            });
-            setReply("");
-            setReplyOpen(false);
-        } finally {
-            setSending(false);
-        }
+        setReply("");
+        setReplyOpen(false);
+        void notifyOptimistic(() => onReply(body), {
+            error: "Could not post the reply.",
+            pullRequest: `${repository}#${number}`,
+            copyText: body,
+        });
     }
 
     return (
@@ -357,7 +367,7 @@ function ThreadCommentCard({
                             suggestionLine={suggestionLine}
                             repository={repository}
                             number={number}
-                            canApplySuggestions={canApplySuggestions}
+                            canApplySuggestions={canApplySuggestions && !threadSending}
                             disabled={disabled}
                             onQuote={(body) => {
                                 setReply((current) => {
@@ -368,7 +378,7 @@ function ThreadCommentCard({
                             }}
                         />
                     ))}
-                    {!thread.isResolved ? (
+                    {!thread.isResolved && !threadSending ? (
                         <div className="border-t pt-2">
                             {replyOpen ? (
                                 <MarkdownComposer
@@ -378,20 +388,19 @@ function ThreadCommentCard({
                                     onChange={setReply}
                                     rows={2}
                                     placeholder="Reply — @mention or / for commands"
-                                    disabled={disabled || sending}
+                                    disabled={disabled}
                                     previewBaseUrl={previewBaseUrl}
                                     suggestionOriginal={suggestionOriginal}
                                     suggestionLine={suggestionLine}
                                     repository={repository}
                                     mentionUsers={mentionUsers}
                                     pullRequestNumber={number}
-                                    onSubmitKey={() => void sendReply()}
+                                    onSubmitKey={sendReply}
                                     footer={
                                         <>
                                             <Button
                                                 size="sm"
                                                 variant="outline"
-                                                disabled={sending}
                                                 onClick={() => {
                                                     setReply("");
                                                     setReplyOpen(false);
@@ -401,11 +410,11 @@ function ThreadCommentCard({
                                             </Button>
                                             <Button
                                                 size="sm"
-                                                disabled={disabled || sending || !reply.trim()}
+                                                disabled={disabled || !reply.trim()}
                                                 className="bg-[#1f883d] text-white hover:bg-[#1a7f37] dark:bg-[#238636] dark:hover:bg-[#2ea043]"
-                                                onClick={() => void sendReply()}
+                                                onClick={sendReply}
                                             >
-                                                {sending ? "Replying…" : "Reply"}
+                                                Reply
                                             </Button>
                                         </>
                                     }
@@ -467,20 +476,26 @@ function ReviewThreadInlineComment({
                 <div className="flex min-w-0 items-center gap-2">
                     <AvatarTiny login={comment.author} avatarUrl={comment.authorAvatarUrl} />
                     <span className="truncate text-sm font-semibold">{comment.author}</span>
-                    <RelativeTime iso={comment.createdAt} className="text-xs text-muted-foreground" />
+                    {comment.sending ? (
+                        <CommentSendingLabel />
+                    ) : (
+                        <RelativeTime iso={comment.createdAt} className="text-xs text-muted-foreground" />
+                    )}
                     {isAuthor ? (
                         <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
                             Author
                         </span>
                     ) : null}
                 </div>
-                <CommentActionsMenu
-                    url={comment.url}
-                    body={comment.body}
-                    canEdit={isAuthor}
-                    onEdit={isAuthor ? () => setEditing(true) : undefined}
-                    onQuote={!disabled && comment.body.trim() ? () => onQuote(comment.body) : undefined}
-                />
+                {comment.sending ? null : (
+                    <CommentActionsMenu
+                        url={comment.url}
+                        body={comment.body}
+                        canEdit={isAuthor}
+                        onEdit={isAuthor ? () => setEditing(true) : undefined}
+                        onQuote={!disabled && comment.body.trim() ? () => onQuote(comment.body) : undefined}
+                    />
+                )}
             </header>
             <div className="text-sm">
                 <EditableCommentBody
@@ -488,7 +503,7 @@ function ReviewThreadInlineComment({
                     baseUrl={previewBaseUrl}
                     repository={repository}
                     number={number}
-                    canEdit={isAuthor}
+                    canEdit={isAuthor && !comment.sending}
                     editing={editing}
                     onEditingChange={setEditing}
                     onSave={(body) => session.updateReviewComment(repository, number, comment.id, body)}
