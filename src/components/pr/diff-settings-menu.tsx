@@ -93,6 +93,19 @@ export function DiffSettingsMenu({
                     </span>
                 </DropdownMenuCheckboxItem>
                 <DropdownMenuCheckboxItem
+                    checked={preferences.hideTestFiles}
+                    onCheckedChange={(checked) => onChange({ hideTestFiles: checked === true })}
+                >
+                    <span className="flex flex-1 items-center gap-1.5">
+                        Hide test files
+                        <HelpTooltip label="Leave test files and test folders out of the file list and viewed progress.">
+                            <span className="inline-flex">
+                                <Info className="size-3.5 text-muted-foreground" aria-hidden="true" />
+                            </span>
+                        </HelpTooltip>
+                    </span>
+                </DropdownMenuCheckboxItem>
+                <DropdownMenuCheckboxItem
                     checked={preferences.minimizeComments}
                     onCheckedChange={(checked) => onChange({ minimizeComments: checked === true })}
                 >

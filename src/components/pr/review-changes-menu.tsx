@@ -17,7 +17,7 @@ import {
 import { HelpTooltip } from "#/components/ui/help-tooltip.tsx";
 import { Popover, PopoverContent, PopoverTrigger } from "#/components/ui/popover.tsx";
 import { mentionCandidatesFromPullRequest } from "#/lib/composer-commands.ts";
-import { useDiffPreferences } from "#/lib/diff-preferences.ts";
+import { shouldCloseTabAfterReview, useDiffPreferences } from "#/lib/diff-preferences.ts";
 import { usePullRequestPage, useReviewThreadsQuery } from "#/lib/query/pull-request.ts";
 import { useReviewDraft } from "#/lib/query/review-draft.ts";
 import { useSession } from "#/lib/session/provider.tsx";
@@ -138,7 +138,8 @@ export function ReviewChangesMenu({ repository, number }: { repository: string; 
         setOpen(false);
 
         const nextInStack = nextStackPullRequestAfterReview(detail, getStackPreferences());
-        const leavesPage = nextInStack !== null || preferences.returnToInboxAfterReviewOrMerge;
+        const closeTab = shouldCloseTabAfterReview();
+        const leavesPage = nextInStack !== null || (preferences.returnToInboxAfterReviewOrMerge && !closeTab);
         const submission = nextInStack
             ? notifyBackgroundActionAfterNavigating(action, messages, () => {
                   const [owner = "", repo = ""] = nextInStack.repository.split("/");
@@ -149,6 +150,7 @@ export function ReviewChangesMenu({ repository, number }: { repository: string; 
               })
             : notifyBackgroundActionWithInboxPrompt(action, messages, {
                   returnToInbox: preferences.returnToInboxAfterReviewOrMerge,
+                  closeTab,
                   onGoToInbox: () => {
                       session.invalidateInbox();
                       void navigate({ to: "/" });

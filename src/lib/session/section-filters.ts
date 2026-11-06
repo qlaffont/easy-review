@@ -8,6 +8,8 @@ import type {
     ReviewState,
 } from "#/lib/session/types.ts";
 
+import { isBotLogin } from "#/lib/session/reviewer-status.ts";
+
 /** Default window for the “Recently merged” preset. */
 export const RECENTLY_MERGED_WITHIN_DAYS = 7;
 
@@ -106,6 +108,13 @@ export function resolvePerson(value: string, viewerLogin: string): string {
     return value === VIEWER_PERSON ? viewerLogin : value;
 }
 
+function hasApproval(pullRequest: PullRequestSummary): boolean {
+    return (
+        pullRequest.reviewDecision === "approved" ||
+        pullRequest.reviewers.some((reviewer) => reviewer.state === "approved")
+    );
+}
+
 export function involvementFor(pullRequest: PullRequestSummary, viewerLogin: string): InvolvementKind | null {
     if (pullRequest.state === "merged") {
         return "merged";
@@ -124,6 +133,21 @@ export function involvementFor(pullRequest: PullRequestSummary, viewerLogin: str
                 reviewer.state === "changes-requested" && !pullRequest.reviewRequests.includes(reviewer.login),
         );
         if (pullRequest.reviewDecision === "changes-requested" && hasUnaddressedChangesRequest) {
+            return "my-changes-requested";
+        }
+        // A human comment review with no verdict on the PR is returned the same way. Bots and the
+        // author's own thread replies (submitted as COMMENTED reviews) don't count.
+        const hasUnaddressedCommentReview =
+            !hasApproval(pullRequest) &&
+            pullRequest.reviewers.some(
+                (reviewer) =>
+                    reviewer.state === "commented" &&
+                    reviewer.login !== pullRequest.author &&
+                    !reviewer.isBot &&
+                    !isBotLogin(reviewer.login) &&
+                    !pullRequest.reviewRequests.includes(reviewer.login),
+            );
+        if (hasUnaddressedCommentReview) {
             return "my-changes-requested";
         }
         if (pullRequest.reviewRequests.length > 0) {
@@ -216,9 +240,7 @@ function matchCondition(
             return false;
         }
         case "hasApproval": {
-            const actual =
-                pullRequest.reviewDecision === "approved" ||
-                pullRequest.reviewers.some((reviewer) => reviewer.state === "approved");
+            const actual = hasApproval(pullRequest);
             const expected = value === true || value === "true";
             if (op === "is") return actual === expected;
             if (op === "is_not") return actual !== expected;
@@ -368,11 +390,12 @@ export function defaultFilterForPreset(id: string): SectionFilter {
                 condition("reviewRequests", "includes", VIEWER_PERSON),
             ]);
         case "returned-to-you":
-            return singleCaseFilter("My PR, changes requested", [
+            return singleCaseFilter("My PR, changes requested or commented", [
                 condition("author", "is", VIEWER_PERSON),
                 condition("state", "is", "open"),
                 condition("isDraft", "is", false),
-                condition("reviewDecision", "is", "changes-requested"),
+                // Keeps the GitHub search narrow: comment reviews have no search qualifier of their own.
+                condition("reviewDecision", "is_not", "approved"),
                 condition("involvement", "is", "my-changes-requested"),
             ]);
         case "waiting-for-reviewers-me":
@@ -476,7 +499,7 @@ export const SECTION_RECIPES: ReadonlyArray<SectionRecipe> = [
     {
         id: "returned-to-you",
         label: "Returned to you",
-        description: "Your open PR with changes requested.",
+        description: "Your open PR with changes requested, or commented by a reviewer without approval.",
         filter: defaultFilterForPreset("returned-to-you"),
         suggestedLabel: "Returned to you",
         color: "rose",

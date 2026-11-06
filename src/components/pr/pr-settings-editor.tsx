@@ -3,6 +3,7 @@ import {
     Columns2,
     FileDiff,
     Files,
+    FlaskConical,
     FolderTree,
     GitBranch,
     Inbox,
@@ -11,6 +12,7 @@ import {
     PanelLeft,
     RemoveFormatting,
     Rows2,
+    SquareX,
     Workflow,
     WrapText,
 } from "lucide-react";
@@ -56,6 +58,13 @@ export function PrSettingsEditor({ open, onOpenChange }: { open: boolean; onOpen
                             }
                         />
                         <SettingsPreferenceRow
+                            icon={SquareX}
+                            title="Close tab after review"
+                            description="After you submit a review, close the tab if it has no other page in its history, like a pull request opened in a new tab from the Inbox."
+                            checked={preferences.closeTabAfterReview}
+                            onCheckedChange={(closeTabAfterReview) => setPreferences({ closeTabAfterReview })}
+                        />
+                        <SettingsPreferenceRow
                             icon={GitBranch}
                             title="Delete branch after merge"
                             description="Default the merge confirmation checkbox to remove the head branch once merged."
@@ -86,6 +95,13 @@ export function PrSettingsEditor({ open, onOpenChange }: { open: boolean; onOpen
                             description="Group changed files by folder instead of a flat path list."
                             checked={preferences.fileListLayout === "tree"}
                             onCheckedChange={(tree) => setPreferences({ fileListLayout: tree ? "tree" : "flat" })}
+                        />
+                        <SettingsPreferenceRow
+                            icon={FlaskConical}
+                            title="Hide test files"
+                            description="Leave test files and test folders out of the file list and viewed progress."
+                            checked={preferences.hideTestFiles}
+                            onCheckedChange={(hideTestFiles) => setPreferences({ hideTestFiles })}
                         />
                     </section>
 

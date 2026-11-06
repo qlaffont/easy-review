@@ -9,7 +9,7 @@ Default presets include **Needs your review**, **Returned to you**, **Waiting fo
 Notable flows:
 
 - **Needs your review** — an open, non-draft PR currently requested of you, including when the author re-requested you after you already approved or requested changes.
-- **Returned to you** — your open PR has changes requested and at least one reviewer who requested them has not been re-requested (other pending reviewers don’t count).
+- **Returned to you** — your open PR has changes requested and at least one reviewer who requested them has not been re-requested (other pending reviewers don’t count). Also when a human reviewer left a comment review, the PR has no approval, and that reviewer has not been re-requested (bot reviews and your own replies don’t count).
 - **Waiting for reviewers (me)** — your open PR has no active approval and is awaiting review, including after you re-request validation from a reviewer who requested changes.
 - **Approved** — your open PR has at least one active approval, even while other reviewers are still requested.
 - **Waiting for author** — you already reviewed someone else’s PR and there is no outstanding request of you.
@@ -21,6 +21,8 @@ Notable flows:
 **In-app review:** **Inbox settings → Navigation → Open pull requests in Easy Review**. Also applies to **Enter** and the command palette action “Open selected pull request”.
 
 **Open all in new tabs:** the external-link button in a section header opens every pull request of that section in its own tab, following the same GitHub / Easy Review setting. Rows not loaded yet are fetched first, and sections with more than 20 pull requests ask for confirmation. Browsers allow only one tab per click by default: allow pop-ups for the site to open them all (a toast says when tabs were blocked).
+
+**Close tab after review:** with this PR setting on, submitting a review closes the Easy Review tab if the pull request is the only page in its history. The tab waits for the submission to succeed, so a failure stays visible. A tab with other history entries stays open and follows the usual settings. Opening the next pull request in a stack takes priority over closing.
 
 ## Refresh behavior
 

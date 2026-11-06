@@ -6,7 +6,9 @@ import {
     buildFileTree,
     defaultExpandedDirPaths,
     filePathsInDisplayOrder,
+    filesToReview,
     firstUnviewedPathInDisplayOrder,
+    isTestFilePath,
 } from "#/lib/file-tree.ts";
 
 function file(path: string, status: PullRequestFile["status"] = "modified"): PullRequestFile {
@@ -62,6 +64,50 @@ describe("filePathsInDisplayOrder", () => {
 
     it("returns tree walk order in tree layout", () => {
         expect(filePathsInDisplayOrder(files, "tree")).toEqual(["docs/readme.md", "src/a.ts", "src/b.ts", "z.txt"]);
+    });
+});
+
+describe("isTestFilePath", () => {
+    it.each([
+        "src/lib/file-tree.test.ts",
+        "app/services/findAct.test.tsx",
+        "pkg/server_test.go",
+        "pkg/server-test.js",
+        "src/main/InvoiceTest.kt",
+        "test.ts",
+        "src/__snapshots__/view.test.ts.snap",
+        "test/helpers.ts",
+        "tests/fixtures/data.json",
+        "src/test/kotlin/Invoice.kt",
+        "src/__tests__/view.tsx",
+    ])("treats %s as a test file", (path) => {
+        expect(isTestFilePath(path)).toBe(true);
+    });
+
+    it.each([
+        "src/latest.ts",
+        "src/Latest.ts",
+        "docs/CONTEST.md",
+        "src/attest.config.ts",
+        "src/testimonials/list.ts",
+        "src/contest/rules.ts",
+        "src/test",
+        "src/test-utils.ts",
+        "src/testing.ts",
+    ])("leaves %s alone", (path) => {
+        expect(isTestFilePath(path)).toBe(false);
+    });
+});
+
+describe("filesToReview", () => {
+    const files = [file("src/a.ts"), file("src/a.test.ts"), file("tests/b.ts")];
+
+    it("keeps every file while test files are shown", () => {
+        expect(filesToReview(files, false)).toBe(files);
+    });
+
+    it("drops test files once they are hidden", () => {
+        expect(filesToReview(files, true).map((entry) => entry.path)).toEqual(["src/a.ts"]);
     });
 });
 

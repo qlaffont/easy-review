@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
     fileViewState,
@@ -38,6 +38,29 @@ Object.defineProperty(globalThis, "window", {
 
 afterEach(() => {
     memory.clear();
+});
+
+describe("shouldCloseTabAfterReview", () => {
+    async function shouldClose(closeTabAfterReview: boolean, historyLength: number) {
+        memory.set("easy-review:diff-prefs:v1", JSON.stringify({ closeTabAfterReview }));
+        Object.defineProperty(globalThis, "history", { value: { length: historyLength }, configurable: true });
+        // Preferences are cached per module instance.
+        vi.resetModules();
+        const preferences = await import("#/lib/diff-preferences.ts");
+        return preferences.shouldCloseTabAfterReview();
+    }
+
+    it("closes a tab holding only the pull request when the setting is on", async () => {
+        expect(await shouldClose(true, 1)).toBe(true);
+    });
+
+    it("keeps a tab that has other history entries", async () => {
+        expect(await shouldClose(true, 2)).toBe(false);
+    });
+
+    it("keeps the tab when the setting is off", async () => {
+        expect(await shouldClose(false, 1)).toBe(false);
+    });
 });
 
 describe("fileViewState", () => {

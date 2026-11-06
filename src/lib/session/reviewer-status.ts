@@ -71,6 +71,10 @@ export function aggregateReviewerStatuses(reviews: ReadonlyArray<RawPullRequestR
     return aggregated;
 }
 
+export function isBotLogin(login: string): boolean {
+    return /\[bot\]$/i.test(login) || login === "ghost";
+}
+
 /** PR authors are not meaningful reviewers — match github.com sidebar behavior. */
 export function excludeAuthorFromReviewers<T extends { login: string }>(
     author: string,

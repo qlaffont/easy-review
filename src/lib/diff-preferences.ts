@@ -25,10 +25,14 @@ export type DiffPreferences = {
     fullWidth: boolean;
     /** Flat list of paths, or a compactable directory tree. */
     fileListLayout: FileListLayout;
+    /** Leave test files out of the changed-files sidebar, viewed progress and next-file navigation. */
+    hideTestFiles: boolean;
     /** Desktop width of the changed-files sidebar in pixels. */
     fileListWidth: number;
     /** After submitting a review or merging, navigate back to the Inbox. */
     returnToInboxAfterReviewOrMerge: boolean;
+    /** After submitting a review, close the tab when it was opened only for this pull request. */
+    closeTabAfterReview: boolean;
     /** Default for “Delete branch after merge” in merge dialogs and command palette actions. */
     deleteHeadBranchOnMerge: boolean;
 };
@@ -68,8 +72,10 @@ const DEFAULT_PREFERENCES: DiffPreferences = {
     showFileList: true,
     fullWidth: false,
     fileListLayout: "flat",
+    hideTestFiles: false,
     fileListWidth: FILE_LIST_WIDTH_DEFAULT,
     returnToInboxAfterReviewOrMerge: false,
+    closeTabAfterReview: false,
     deleteHeadBranchOnMerge: true,
 };
 
@@ -98,10 +104,12 @@ function readPreferences(): DiffPreferences {
             showFileList: parsed.showFileList !== false,
             fullWidth: Boolean(parsed.fullWidth),
             fileListLayout: parsed.fileListLayout === "tree" ? "tree" : "flat",
+            hideTestFiles: Boolean(parsed.hideTestFiles),
             fileListWidth: clampFileListWidth(
                 typeof parsed.fileListWidth === "number" ? parsed.fileListWidth : FILE_LIST_WIDTH_DEFAULT,
             ),
             returnToInboxAfterReviewOrMerge: Boolean(parsed.returnToInboxAfterReviewOrMerge),
+            closeTabAfterReview: Boolean(parsed.closeTabAfterReview),
             deleteHeadBranchOnMerge: parsed.deleteHeadBranchOnMerge !== false,
         };
     } catch {
@@ -159,6 +167,15 @@ export function useDiffPreferences() {
 /** Sync read for command-palette / non-React callers. */
 export function shouldReturnToInboxAfterReviewOrMerge(): boolean {
     return getPreferences().returnToInboxAfterReviewOrMerge;
+}
+
+/**
+ * True when the setting is on and the tab holds a single history entry: it was opened for this
+ * pull request, so there is nothing to go back to. It is also the case where browsers let a script
+ * close a tab. Moving around the pull request page replaces the entry instead of adding one.
+ */
+export function shouldCloseTabAfterReview(): boolean {
+    return getPreferences().closeTabAfterReview && window.history.length === 1;
 }
 
 /** Sync read for merge dialogs and command-palette merge actions. */

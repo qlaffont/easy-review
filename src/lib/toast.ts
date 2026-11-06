@@ -70,8 +70,10 @@ export async function notifyActionWithInboxPrompt<T>(
 /**
  * Same toasts as {@link notifyActionWithInboxPrompt}, but does not block the caller.
  * When `returnToInbox` is on, navigates immediately and lets the fetch finish in the background.
+ * `closeTab` takes over from `returnToInbox`: the tab stays open until the action succeeds, because
+ * closing it earlier could cancel the request and would hide a failure.
  */
-export function notifyBackgroundActionWithInboxPrompt<T>(
+export async function notifyBackgroundActionWithInboxPrompt<T>(
     action: () => Promise<T>,
     messages: {
         loading: string;
@@ -80,9 +82,19 @@ export function notifyBackgroundActionWithInboxPrompt<T>(
     },
     options: {
         returnToInbox: boolean;
+        closeTab: boolean;
         onGoToInbox: () => void;
     },
 ): Promise<T> {
+    if (options.closeTab) {
+        const result = await notifyActionWithInboxPrompt(action, messages, {
+            returnToInbox: false,
+            onGoToInbox: options.onGoToInbox,
+        });
+        window.close();
+        return result;
+    }
+
     if (options.returnToInbox) {
         return notifyBackgroundActionAfterNavigating(action, messages, options.onGoToInbox);
     }

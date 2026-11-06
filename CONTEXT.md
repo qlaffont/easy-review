@@ -18,7 +18,7 @@ Single-context glossary for product behavior. ADRs live under `docs/adr/` when w
 | **Section** | A filtered bucket of pull requests (preset or custom). Same PR may appear in multiple sections. |
 | **Expanded section** | Section the user opened on the board; drives keyboard selection and background-notification scope. |
 | **Needs your review** | Open, non-draft PR where the viewer is in `reviewRequests`, including after a re-request while a prior approve/changes-requested review still exists. |
-| **Returned to you** | Author’s PR with `reviewDecision: changes-requested` where at least one reviewer who requested changes has not been re-requested; other pending requests don’t count (`involvement: my-changes-requested`). |
+| **Returned to you** | Author’s PR with `reviewDecision: changes-requested` where at least one reviewer who requested changes has not been re-requested; other pending requests don’t count. Also an unapproved PR with a non-bot comment review whose reviewer has not been re-requested (`involvement: my-changes-requested`). |
 | **Waiting for reviewers (me)** | Author’s open PR awaiting review with no active approval, including after a re-request when no reviewer has approved (`involvement: my-waiting-for-reviewers`). |
 | **Display review state** | UI state for a reviewer row: if their login is in `reviewRequests`, show **pending** even when an older submitted review exists. |
 | **Open in Easy Review** | Inbox preference (`openInEasyReview`): when off (default), row click opens GitHub in a new tab; when on, opens `/pr/...` in-app. |
@@ -44,3 +44,4 @@ Single-context glossary for product behavior. ADRs live under `docs/adr/` when w
 | Term | Meaning |
 | --- | --- |
 | **Split view** | Diff preference for the split layout (`splitView`): **Both** versions side by side, or only the **Old** / **New** version at full width. A one-sided view hides lines that exist only on the other side, plus their comments and find-in-file hits; comments on context lines stay visible because those lines exist in both versions. |
+| **Hide test files** | Diff preference (`hideTestFiles`) that leaves test files out of the file list, viewed progress and next-file navigation. A test file is named like `foo.test.ts`, `foo_test.go` or `FooTest.kt`, or sits under a `test`, `tests` or `__tests__` folder. A link to a hidden file still opens its diff; the PR's file count and line totals stay whole. |

@@ -1,7 +1,11 @@
 import type { EasyReviewSession } from "#/lib/session/session.ts";
 import type { PullRequestDetail, PullRequestState } from "#/lib/session/types.ts";
 
-import { shouldReturnToInboxAfterReviewOrMerge, shouldDeleteHeadBranchOnMerge } from "#/lib/diff-preferences.ts";
+import {
+    shouldCloseTabAfterReview,
+    shouldReturnToInboxAfterReviewOrMerge,
+    shouldDeleteHeadBranchOnMerge,
+} from "#/lib/diff-preferences.ts";
 import { openInboxPullRequest } from "#/lib/inbox/inbox-navigation.ts";
 import { nextStackPullRequestAfterReview } from "#/lib/session/pull-request-stacks.ts";
 import { getStackPreferences } from "#/lib/stack-preferences.ts";
@@ -111,6 +115,7 @@ function submitReviewInBackground(
 
     void notifyBackgroundActionWithInboxPrompt(submit, messages, {
         returnToInbox: shouldReturnToInboxAfterReviewOrMerge(),
+        closeTab: shouldCloseTabAfterReview(),
         onGoToInbox: context.goToInboxFresh,
     });
 }

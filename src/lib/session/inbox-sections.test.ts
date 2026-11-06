@@ -160,6 +160,104 @@ describe("default section filters", () => {
         expect(matchSectionFilter(subject, defaultFilterForPreset("waiting-for-reviewers-me"), VIEWER)).toBe(false);
     });
 
+    it("puts your PR in Returned to you when a human commented without approving or requesting changes", () => {
+        const subject = pullRequest({
+            author: VIEWER,
+            reviewDecision: "review-required",
+            reviewRequests: ["other-reviewer"],
+            reviewers: [{ login: "romainpm", state: "commented", reviewId: 1 }],
+        });
+        expect(matchSectionFilter(subject, defaultFilterForPreset("returned-to-you"), VIEWER)).toBe(true);
+        expect(matchSectionFilter(subject, defaultFilterForPreset("waiting-for-reviewers-me"), VIEWER)).toBe(false);
+    });
+
+    it("moves a commented PR to Waiting for reviewers (me) once the commenter is re-requested", () => {
+        const subject = pullRequest({
+            author: VIEWER,
+            reviewDecision: "review-required",
+            reviewRequests: ["romainpm"],
+            reviewers: [{ login: "romainpm", state: "commented", reviewId: 1 }],
+        });
+        expect(matchSectionFilter(subject, defaultFilterForPreset("returned-to-you"), VIEWER)).toBe(false);
+        expect(matchSectionFilter(subject, defaultFilterForPreset("waiting-for-reviewers-me"), VIEWER)).toBe(true);
+    });
+
+    it.each([
+        ["a bot flagged by GitHub", { login: "coderabbitai", state: "commented", reviewId: 1, isBot: true }],
+        ["a [bot] login", { login: "renovate[bot]", state: "commented", reviewId: 1 }],
+        ["the author replying to a thread", { login: VIEWER, state: "commented", reviewId: 1 }],
+    ] as const)("ignores a comment review from %s", (_name, reviewer) => {
+        const subject = pullRequest({ author: VIEWER, reviewDecision: "review-required", reviewers: [reviewer] });
+        expect(matchSectionFilter(subject, defaultFilterForPreset("returned-to-you"), VIEWER)).toBe(false);
+        expect(matchSectionFilter(subject, defaultFilterForPreset("waiting-for-reviewers-me"), VIEWER)).toBe(true);
+    });
+
+    it("keeps a commented PR in Approved when another reviewer approved it", () => {
+        const subject = pullRequest({
+            author: VIEWER,
+            reviewDecision: "review-required",
+            reviewers: [
+                { login: "romainpm", state: "commented", reviewId: 1 },
+                { login: "other-reviewer", state: "approved", reviewId: 2 },
+            ],
+        });
+        expect(matchSectionFilter(subject, defaultFilterForPreset("returned-to-you"), VIEWER)).toBe(false);
+        expect(matchSectionFilter(subject, defaultFilterForPreset("approved"), VIEWER)).toBe(true);
+    });
+
+    it("searches beyond changes-requested PRs so commented ones reach Returned to you", () => {
+        expect(sectionFilterToSearchQuery(defaultFilterForPreset("returned-to-you"), VIEWER)).toBe(
+            `is:pr author:${VIEWER} is:open draft:false -review:approved`,
+        );
+    });
+
+    it.each([
+        [
+            "the original default",
+            [
+                { field: "author", op: "is", value: "@me" },
+                { field: "state", op: "is", value: "open" },
+                { field: "isDraft", op: "is", value: false },
+                { field: "reviewDecision", op: "is", value: "changes-requested" },
+            ],
+        ],
+        [
+            "the changes-requested-only default",
+            [
+                { field: "author", op: "is", value: "@me" },
+                { field: "state", op: "is", value: "open" },
+                { field: "isDraft", op: "is", value: false },
+                { field: "reviewDecision", op: "is", value: "changes-requested" },
+                { field: "involvement", op: "is", value: "my-changes-requested" },
+            ],
+        ],
+    ])("upgrades %s of Returned to you", (_name, conditions) => {
+        const [entry] = normalizeSectionLayout([
+            {
+                id: "returned-to-you",
+                filter: { cases: [{ id: "case", name: "stored", conditions }] },
+            },
+        ]);
+        const commented = pullRequest({
+            author: VIEWER,
+            reviewDecision: "review-required",
+            reviewers: [{ login: "romainpm", state: "commented", reviewId: 1 }],
+        });
+        expect(matchSectionFilter(commented, entry!.filter, VIEWER)).toBe(true);
+    });
+
+    it("leaves a customized Returned to you filter alone", () => {
+        const conditions = [
+            { id: "c1", field: "author", op: "is", value: "@me" },
+            { id: "c2", field: "reviewDecision", op: "is", value: "changes-requested" },
+            { id: "c3", field: "labels", op: "includes", value: "urgent" },
+        ];
+        const [entry] = normalizeSectionLayout([
+            { id: "returned-to-you", filter: { cases: [{ id: "case", name: "mine", conditions }] } },
+        ]);
+        expect(entry!.filter.cases[0]!.conditions).toEqual(conditions);
+    });
+
     it("puts your own approved pull request in Approved", () => {
         const subject = pullRequest({ author: VIEWER, reviewDecision: "approved" });
         expect(matchSectionFilter(subject, defaultFilterForPreset("approved"), VIEWER)).toBe(true);

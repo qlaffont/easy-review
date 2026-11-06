@@ -404,7 +404,13 @@ function migratePresetFilter(id: InboxSectionId, filter: SectionFilter): Section
             "isDraft|is|false",
             "reviewDecision|is|changes-requested",
         ]);
-        if (fingerprints.size !== legacy.size || [...legacy].some((entry) => !fingerprints.has(entry))) {
+        const changesRequestedOnly = new Set([...legacy, "involvement|is|my-changes-requested"]);
+        if (
+            ![legacy, changesRequestedOnly].some(
+                (expected) =>
+                    fingerprints.size === expected.size && [...expected].every((entry) => fingerprints.has(entry)),
+            )
+        ) {
             return filter;
         }
         return defaultFilterForPreset("returned-to-you");

@@ -6,6 +6,7 @@ import {
     FileDiff,
     FileMinus2,
     FilePlus2,
+    FlaskConical,
     Folder,
     FolderOpen,
     List,
@@ -46,6 +47,7 @@ import {
     buildFileTree,
     defaultExpandedDirPaths,
     filePathsInDisplayOrder,
+    filesToReview,
     firstUnviewedPathInDisplayOrder,
     type FileTreeDirNode,
     type FileTreeNode,
@@ -116,6 +118,10 @@ export function ReviewChanges({
     const filesEpoch = isolatingRange
         ? `${commitRange.baseOid}:${commitRange.headOid}:${rangeFilesStatus}`
         : files.lastLoadedAt;
+    const reviewedFiles = useMemo(
+        () => filesToReview(filesItems, preferences.hideTestFiles),
+        [filesItems, preferences.hideTestFiles],
+    );
 
     const selectedFile = filesItems.find((file) => file.path === selectedPath) ?? null;
     const needsLargeConfirm =
@@ -125,8 +131,10 @@ export function ReviewChanges({
     });
     const selectedDiff = commitRange.mode === "range" ? null : selectedDiffQuery;
 
-    const viewedCount = filesItems.filter((file) => fileViewState(viewedMarks, file.path, headSha) === "viewed").length;
-    const allViewed = filesStatus === "ready" && filesItems.length > 0 && viewedCount === filesItems.length;
+    const viewedCount = reviewedFiles.filter(
+        (file) => fileViewState(viewedMarks, file.path, headSha) === "viewed",
+    ).length;
+    const allViewed = filesStatus === "ready" && reviewedFiles.length > 0 && viewedCount === reviewedFiles.length;
     const showFileDiff = selectedPath !== null && (!allViewed || browsingViewedFile);
     const fileListSelectedPath = showFileDiff ? selectedPath : null;
 
@@ -172,15 +180,12 @@ export function ReviewChanges({
                 }
                 setRangeFiles(items);
                 setRangeFilesStatus("ready");
+                const reviewedItems = filesToReview(items, preferences.hideTestFiles);
                 setSelectedPath((current) => {
-                    if (current && items.some((file) => file.path === current)) {
+                    if (current && reviewedItems.some((file) => file.path === current)) {
                         return current;
                     }
-                    return (
-                        firstUnviewedPathInDisplayOrder(items, preferences.fileListLayout, () => false) ??
-                        items[0]?.path ??
-                        null
-                    );
+                    return firstUnviewedPathInDisplayOrder(reviewedItems, preferences.fileListLayout, () => false);
                 });
             })
             .catch((cause) => {
@@ -206,20 +211,27 @@ export function ReviewChanges({
         }
 
         setSelectedPath((current) => {
-            if (current && filesItems.some((file) => file.path === current)) {
+            if (current && reviewedFiles.some((file) => file.path === current)) {
                 return current;
             }
 
-            return (
-                firstUnviewedPathInDisplayOrder(
-                    filesItems,
-                    preferences.fileListLayout,
-                    (path) => fileViewState(viewedMarks, path, headSha) === "viewed",
-                ) ?? null
+            return firstUnviewedPathInDisplayOrder(
+                reviewedFiles,
+                preferences.fileListLayout,
+                (path) => fileViewState(viewedMarks, path, headSha) === "viewed",
             );
         });
         setBrowsingViewedFile(true);
-    }, [filesItems, filesStatus, initialPath, allViewed, viewedMarks, headSha, preferences.fileListLayout]);
+    }, [
+        filesItems,
+        reviewedFiles,
+        filesStatus,
+        initialPath,
+        allViewed,
+        viewedMarks,
+        headSha,
+        preferences.fileListLayout,
+    ]);
 
     useEffect(() => {
         if (allViewed && !allViewedRef.current) {
@@ -352,7 +364,7 @@ export function ReviewChanges({
         }
 
         if (viewed) {
-            const orderedPaths = filePathsInDisplayOrder(filesItems, preferences.fileListLayout);
+            const orderedPaths = filePathsInDisplayOrder(reviewedFiles, preferences.fileListLayout);
             const index = orderedPaths.indexOf(path);
             if (index === -1) {
                 return;
@@ -416,8 +428,8 @@ export function ReviewChanges({
                                 </span>
                             ) : null}
                         </h2>
-                        {fileCount !== null && fileCount > 0 ? (
-                            <ViewedProgress viewed={viewedCount} total={fileCount} />
+                        {fileCount !== null && reviewedFiles.length > 0 ? (
+                            <ViewedProgress viewed={viewedCount} total={reviewedFiles.length} />
                         ) : null}
                         <CommitRangePicker
                             commits={commits.items}
@@ -559,7 +571,10 @@ export function ReviewChanges({
                     >
                         <div className="h-full max-md:max-h-48 md:w-full">
                             <FileList
-                                files={filesItems}
+                                files={reviewedFiles}
+                                hiddenTestFileCount={filesItems.length - reviewedFiles.length}
+                                hideTestFiles={preferences.hideTestFiles}
+                                onHideTestFilesChange={(hideTestFiles) => setPreferences({ hideTestFiles })}
                                 status={filesStatus}
                                 selectedPath={fileListSelectedPath}
                                 scrollSelectionIntoView={scrollFileListToSelection}
@@ -875,6 +890,9 @@ function FileListResizeHandle({
 
 function FileList({
     files,
+    hiddenTestFileCount,
+    hideTestFiles,
+    onHideTestFilesChange,
     status,
     selectedPath,
     scrollSelectionIntoView,
@@ -886,6 +904,9 @@ function FileList({
     onSelect,
 }: {
     files: Array<PullRequestFile>;
+    hiddenTestFileCount: number;
+    hideTestFiles: boolean;
+    onHideTestFilesChange: (hideTestFiles: boolean) => void;
     status: string;
     selectedPath: string | null;
     scrollSelectionIntoView: boolean;
@@ -946,7 +967,7 @@ function FileList({
         return <FileListLoadingSkeleton />;
     }
 
-    if (files.length === 0) {
+    if (files.length === 0 && hiddenTestFileCount === 0) {
         return <p className="p-3 text-sm text-muted-foreground">No files changed.</p>;
     }
 
@@ -995,6 +1016,24 @@ function FileList({
                     ) : null}
                 </div>
                 <div className="flex items-center justify-end gap-0.5">
+                    {hiddenTestFileCount > 0 ? (
+                        <p className="mr-auto min-w-0 truncate pl-1 text-xs text-muted-foreground tabular-nums">
+                            {hiddenTestFileCount} test {hiddenTestFileCount === 1 ? "file" : "files"} hidden
+                        </p>
+                    ) : null}
+                    <HelpTooltip label={hideTestFiles ? "Show test files" : "Hide test files"}>
+                        <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon-sm"
+                            className={cn("size-7 shrink-0", hideTestFiles && "bg-accent")}
+                            aria-pressed={hideTestFiles}
+                            aria-label="Hide test files"
+                            onClick={() => onHideTestFilesChange(!hideTestFiles)}
+                        >
+                            <FlaskConical className="size-3.5" aria-hidden="true" />
+                        </Button>
+                    </HelpTooltip>
                     <HelpTooltip label="Flat file list">
                         <Button
                             type="button"
@@ -1024,7 +1063,9 @@ function FileList({
                 </div>
             </div>
             <nav ref={listRef} aria-label="Changed files" className="min-h-0 flex-1 overflow-auto">
-                {visibleFiles.length === 0 ? (
+                {files.length === 0 ? (
+                    <p className="p-3 text-sm text-muted-foreground">Only test files changed.</p>
+                ) : visibleFiles.length === 0 ? (
                     <p className="p-3 text-sm text-muted-foreground">No files match “{deferredQuery.trim()}”.</p>
                 ) : layout === "tree" ? (
                     <ul className="flex w-max min-w-full flex-col py-1">

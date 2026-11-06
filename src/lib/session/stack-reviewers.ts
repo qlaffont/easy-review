@@ -1,5 +1,7 @@
 import type { PullRequestSummary } from "#/lib/session/types.ts";
 
+import { isBotLogin } from "#/lib/session/reviewer-status.ts";
+
 export type StackReviewerUpdate = {
     pullRequest: PullRequestSummary;
     /** Users and team names to request on this pull request. */
@@ -12,10 +14,6 @@ export type StackReviewerPlan = {
     /** Open pull requests that lack at least one of {@link reviewers}. */
     updates: Array<StackReviewerUpdate>;
 };
-
-function isBotLogin(login: string): boolean {
-    return /\[bot\]$/i.test(login) || login === "ghost";
-}
 
 /**
  * Plan “request every reviewer on the whole stack”: union the human reviewers of all layers,

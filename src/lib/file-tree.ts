@@ -108,6 +108,31 @@ export function defaultExpandedDirPaths(nodes: ReadonlyArray<FileTreeNode>): Set
     return paths;
 }
 
+const TEST_DIRECTORY = /^_*tests?_*$/i;
+/** `.test.`, `_test.`, `-test.` or a bare `test.` — but not `latest.` or `contest.`. */
+const TEST_FILE_NAME = /(?:^|[._-])test\./i;
+/** `InvoiceTest.kt` — only an uppercase `Test` starts a word here. */
+const CAMEL_CASE_TEST_FILE_NAME = /[a-z0-9]Test\./;
+
+/** True for `foo.test.ts`-style names and for anything under a `test`, `tests` or `__tests__` folder. */
+export function isTestFilePath(path: string): boolean {
+    const segments = path.split("/").filter(Boolean);
+    const name = segments.pop();
+    if (!name) {
+        return false;
+    }
+    return (
+        TEST_FILE_NAME.test(name) ||
+        CAMEL_CASE_TEST_FILE_NAME.test(name) ||
+        segments.some((segment) => TEST_DIRECTORY.test(segment))
+    );
+}
+
+/** The files to review: every changed file, or all but the test files when those are hidden. */
+export function filesToReview(files: Array<PullRequestFile>, hideTestFiles: boolean): Array<PullRequestFile> {
+    return hideTestFiles ? files.filter((file) => !isTestFilePath(file.path)) : files;
+}
+
 /** File paths in the same order as the Review Changes sidebar (flat list or tree walk). */
 export function filePathsInDisplayOrder(files: ReadonlyArray<PullRequestFile>, layout: "flat" | "tree"): Array<string> {
     if (layout === "flat") {
