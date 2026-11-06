@@ -1,5 +1,6 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { useEffect, useEffectEvent, useMemo, useRef } from "react";
+import { useRouterState } from "@tanstack/react-router";
+import { useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
 
 import { useInboxPreferences } from "#/lib/inbox-preferences.ts";
 import { armInboxChime } from "#/lib/inbox/inbox-chime.ts";
@@ -13,10 +14,12 @@ import { getInboxQueryData } from "#/lib/query/inbox.ts";
 import { defaultLabelForSection } from "#/lib/session/inbox-sections.ts";
 import { useSession, useSessionState } from "#/lib/session/provider.tsx";
 import { BACKGROUND_INBOX_REVALIDATE_INTERVAL_MS } from "#/lib/session/quiet-revalidate.ts";
+import { useTabFavicon } from "#/lib/tab-favicon.ts";
 
 /**
  * While the user is away from this tab (hidden or not focused), refresh the inbox every
  * five minutes and notify when a pull request appears in a section marked for notifications.
+ * On the Inbox page the favicon also shows an unread dot until the user comes back to the tab.
  */
 export function InboxBackgroundWatcher() {
     const session = useSession();
@@ -32,9 +35,13 @@ export function InboxBackgroundWatcher() {
     );
     const lastSeen = useRef<SectionMembershipSnapshot>(new Map());
     const syncing = useRef(false);
+    const [hasUnseenPullRequests, setHasUnseenPullRequests] = useState(false);
+    const onInbox = useRouterState({ select: (state) => state.location.pathname === "/" });
+    useTabFavicon(onInbox && hasUnseenPullRequests ? "inbox-new" : null);
 
     /** What the user has seen: only moves forward while they are looking at the tab. */
     const captureLastSeen = useEffectEvent(() => {
+        setHasUnseenPullRequests(false);
         lastSeen.current = snapshotSectionMembership(
             login ? getInboxQueryData(queryClient, login) : undefined,
             watchedSections.map((entry) => entry.id),
@@ -58,6 +65,11 @@ export function InboxBackgroundWatcher() {
             const sectionIds = watchedSections.map((entry) => entry.id);
             const entered = detectNewPullRequests(lastSeen.current, data, sectionIds);
             lastSeen.current = snapshotSectionMembership(data, sectionIds);
+
+            // The user may have come back while the refresh ran.
+            if (entered.length > 0 && !isTabAttended()) {
+                setHasUnseenPullRequests(true);
+            }
 
             showNewPullRequestNotifications(
                 entered.map(({ pullRequest, sectionId }) => {

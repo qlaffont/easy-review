@@ -69,6 +69,7 @@ import { usePullRequestPage } from "#/lib/query/pull-request.ts";
 import { pullRequestSeo, usePageSeo } from "#/lib/seo.ts";
 import { useSession } from "#/lib/session/provider.tsx";
 import { useCheckStatusRevalidate } from "#/lib/session/quiet-revalidate.ts";
+import { pullRequestFavicon, useTabFavicon } from "#/lib/tab-favicon.ts";
 import { notifyAction, notifyCopied, notifyError, notifyOptimistic } from "#/lib/toast.ts";
 import { cn } from "#/lib/utils.ts";
 
@@ -136,6 +137,7 @@ export function PullRequestOverview({
     const [commitRange, setCommitRange] = useState<CommitRangeValue>({ mode: "all" });
     useSetActionTarget(headline ? targetFromSummary(headline) : null);
     useSetPullRequestDetail(page.detail);
+    useTabFavicon(headline ? pullRequestFavicon(headline) : null);
 
     const [owner = repository, repo = repository] = repository.split("/");
     usePageSeo(

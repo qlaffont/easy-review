@@ -46,6 +46,7 @@ Notable flows:
 - Sections load one page at a time. In a section with more rows than loaded, a new row only counts when the section total grew, so an old PR moving up doesn't notify.
 - More than three new PRs in one sync → one summary notification.
 - Easy Review plays its own four-note chime on top of whatever sound the OS or browser adds, so you can tell it apart from other apps. It plays once per PR across open tabs, and only from a tab you have clicked or typed in since it loaded: browsers block sound before that.
+- On the Inbox page, the favicon also gets a red dot until you come back to the tab. The dot does not need browser notification permission, but it does need the main switch on, since that is what runs the background refresh.
 
 The main switch is stored in `localStorage` (`easy-review:inbox-prefs:v1`). **Notify** is part of the section layout, so it is included in Export / Import and restored by Reset.
 
