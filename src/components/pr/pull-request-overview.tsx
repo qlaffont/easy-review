@@ -65,7 +65,7 @@ import {
 import { Popover, PopoverContent, PopoverTrigger } from "#/components/ui/popover.tsx";
 import { RelativeTime } from "#/components/ui/relative-time.tsx";
 import { useAuthViewer } from "#/lib/query/auth.ts";
-import { usePullRequestPage } from "#/lib/query/pull-request.ts";
+import { usePullRequestPage, useReloadPullRequestWhenHeadMoves } from "#/lib/query/pull-request.ts";
 import { pullRequestSeo, usePageSeo } from "#/lib/seo.ts";
 import { useSession } from "#/lib/session/provider.tsx";
 import { useCheckStatusRevalidate } from "#/lib/session/quiet-revalidate.ts";
@@ -137,6 +137,7 @@ export function PullRequestOverview({
     const [commitRange, setCommitRange] = useState<CommitRangeValue>({ mode: "all" });
     useSetActionTarget(headline ? targetFromSummary(headline) : null);
     useSetPullRequestDetail(page.detail);
+    useReloadPullRequestWhenHeadMoves(page.detail);
     useTabFavicon(headline ? pullRequestFavicon(headline) : null);
 
     const [owner = repository, repo = repository] = repository.split("/");

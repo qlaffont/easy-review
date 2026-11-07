@@ -1,7 +1,7 @@
 import { QueryObserver } from "@tanstack/react-query";
 import { describe, expect, it } from "vitest";
 
-import { invalidatePullRequestForManualRefresh } from "#/lib/query/invalidate.ts";
+import { invalidatePullRequestForManualRefresh, pullRequestHeadMoved } from "#/lib/query/invalidate.ts";
 import { queryKeys } from "#/lib/query/query-keys.ts";
 import { pullRequestKey } from "#/lib/session/session.ts";
 import { createTestQueryClient } from "#/lib/session/testing/test-query-client.ts";
@@ -15,6 +15,7 @@ describe("invalidatePullRequestForManualRefresh", () => {
             queryKeys.pullRequest.files(key),
             queryKeys.pullRequest.threads(key),
             queryKeys.pullRequest.conversation(key),
+            queryKeys.pullRequest.commits(key),
         ];
         const calls = new Map<string, number>();
         const observers = resourceKeys.map((queryKey) => {
@@ -34,8 +35,28 @@ describe("invalidatePullRequestForManualRefresh", () => {
 
         await invalidatePullRequestForManualRefresh(queryClient, "acme/api", 1);
 
-        expect(Object.fromEntries(calls)).toEqual({ detail: 2, files: 2, threads: 2, conversation: 2 });
+        expect(Object.fromEntries(calls)).toEqual({ detail: 2, files: 2, threads: 2, conversation: 2, commits: 2 });
         expect(queryClient.getQueryData(queryKeys.pullRequest.diff(key, "src/a.ts"))).toBeUndefined();
         unsubscribe.forEach((stop) => stop());
+    });
+});
+
+describe("pullRequestHeadMoved", () => {
+    const head = (key: string, headSha: string) => ({ key, headSha });
+
+    it("stays quiet on the first read of a pull request", () => {
+        expect(pullRequestHeadMoved(null, head("acme/api#1", "aaa"))).toBe(false);
+    });
+
+    it("stays quiet while the head is unchanged", () => {
+        expect(pullRequestHeadMoved(head("acme/api#1", "aaa"), head("acme/api#1", "aaa"))).toBe(false);
+    });
+
+    it("reports a push to the same pull request", () => {
+        expect(pullRequestHeadMoved(head("acme/api#1", "aaa"), head("acme/api#1", "bbb"))).toBe(true);
+    });
+
+    it("does not mistake navigating to another pull request for a push", () => {
+        expect(pullRequestHeadMoved(head("acme/api#1", "aaa"), head("acme/api#2", "bbb"))).toBe(false);
     });
 });

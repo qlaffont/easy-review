@@ -65,6 +65,14 @@ export async function invalidatePullRequestForManualRefresh(
     await queryClient.invalidateQueries({ queryKey: ["pullRequest", key], refetchType: "active" });
 }
 
+/** Which commit a loaded overview points at. */
+export type PullRequestHead = { key: string; headSha: string };
+
+/** True when the same pull request now points at another commit — not when the page moved to another one. */
+export function pullRequestHeadMoved(previous: PullRequestHead | null, current: PullRequestHead): boolean {
+    return previous?.key === current.key && previous.headSha !== current.headSha;
+}
+
 /** CI check poll — detail only (cheap vs files/threads/conversation). */
 export function invalidatePullRequestDetailForCheckPoll(
     queryClient: QueryClient,

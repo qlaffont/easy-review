@@ -1,6 +1,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useCallback, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 
+import type { PullRequestHead } from "#/lib/query/invalidate.ts";
 import type {
     ConversationQueryData,
     FileDiffQueryData,
@@ -28,6 +29,7 @@ import { getInboxQueryData } from "#/lib/query/inbox.ts";
 import {
     invalidatePullRequestDetailForCheckPoll,
     invalidatePullRequestForManualRefresh,
+    pullRequestHeadMoved,
     revalidatePullRequestDetailForCheckPoll,
     revalidatePullRequestDetailInBackground,
 } from "#/lib/query/invalidate.ts";
@@ -280,6 +282,32 @@ export function usePullRequestPage(
         }),
         [repository, number, status, pr, filesQuery, refresh],
     );
+}
+
+/**
+ * Reload the file list, commits and diffs when a push moves the head. The check poll only reads the
+ * overview, and GitHub can move `refs/pull/N/head` before its pull request data catches up, so a
+ * manual refresh right after a push can still return the old list. Call once per open pull request.
+ */
+export function useReloadPullRequestWhenHeadMoves(detail: PullRequestDetail | null): void {
+    const queryClient = useQueryClient();
+    const seenHead = useRef<PullRequestHead | null>(null);
+    const repository = detail?.repository;
+    const number = detail?.number;
+    const key = detail?.key;
+    const headSha = detail?.headSha;
+
+    useEffect(() => {
+        if (!repository || number === undefined || !key || !headSha) {
+            return;
+        }
+        const current = { key, headSha };
+        const moved = pullRequestHeadMoved(seenHead.current, current);
+        seenHead.current = current;
+        if (moved) {
+            void invalidatePullRequestForManualRefresh(queryClient, repository, number);
+        }
+    }, [queryClient, repository, number, key, headSha]);
 }
 
 export function useReviewThreadsQuery(repository: string, number: number) {

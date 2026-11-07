@@ -7,6 +7,7 @@ export {
     usePullRequestPage,
     usePullRequestQuery,
     useRelatedPullRequestsQuery,
+    useReloadPullRequestWhenHeadMoves,
     useRepositoryMetadataQuery,
     useReviewThreadsQuery,
 } from "#/lib/query/pull-request-resources.ts";
