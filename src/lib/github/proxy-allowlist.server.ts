@@ -53,6 +53,8 @@ const REST_RULES: Array<Rule> = [
     { methods: GET, pattern: /^\/repos\/[^/]+\/[^/]+\/pulls\/\d+\/reviews$/ },
     /** Draft comments of the viewer's pending review (restored on PR load). */
     { methods: GET, pattern: /^\/repos\/[^/]+\/[^/]+\/pulls\/\d+\/reviews\/\d+\/comments$/ },
+    /** Patch hunks: which lines GitHub accepts review comments on. */
+    { methods: GET, pattern: /^\/repos\/[^/]+\/[^/]+\/pulls\/\d+\/files$/ },
     { methods: GET, pattern: /^\/repos\/[^/]+\/[^/]+\/pulls\/\d+\/comments$/ },
     { methods: new Set(["POST"]), pattern: /^\/repos\/[^/]+\/[^/]+\/pulls\/\d+\/comments$/ },
     { methods: new Set(["PATCH", "DELETE"]), pattern: /^\/repos\/[^/]+\/[^/]+\/pulls\/comments\/\d+$/ },

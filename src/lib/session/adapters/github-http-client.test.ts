@@ -1258,6 +1258,57 @@ describe("REST validation errors", () => {
     });
 });
 
+describe("commentable lines", () => {
+    it("attaches GitHub's patch hunk ranges to the file list", async () => {
+        const github = createGithubHttpClient(async (input) => {
+            const url = String(input);
+            if (url.endsWith("/graphql")) {
+                return Response.json({
+                    data: {
+                        repository: {
+                            pullRequest: {
+                                files: {
+                                    nodes: [
+                                        { path: "a.yaml", additions: 1, deletions: 0, changeType: "MODIFIED" },
+                                        { path: "huge.json", additions: 9000, deletions: 0, changeType: "ADDED" },
+                                    ],
+                                    pageInfo: { hasNextPage: false, endCursor: null },
+                                },
+                            },
+                        },
+                    },
+                });
+            }
+            expect(url).toBe("https://api.github.com/repos/acme/api/pulls/1/files?per_page=100");
+            return Response.json([{ filename: "a.yaml", patch: "@@ -6,6 +6,7 @@\n+  - b" }, { filename: "huge.json" }]);
+        });
+
+        const files = await github.listPullRequestFiles("token", "acme/api", 1);
+
+        expect(files.map((file) => [file.path, file.commentableLines])).toEqual([
+            ["a.yaml", { left: [[6, 11]], right: [[6, 12]] }],
+            ["huge.json", undefined],
+        ]);
+    });
+
+    it("explains a thread GitHub silently refused", async () => {
+        const github = createGithubHttpClient(async () =>
+            Response.json({ data: { addPullRequestReviewThread: { thread: null } } }),
+        );
+
+        await expect(
+            github.addPullRequestReviewThread("token", {
+                pullRequestNodeId: "PR_1",
+                pullRequestReviewNodeId: "PRR_1",
+                path: "a.yaml",
+                line: 1,
+                side: "RIGHT",
+                body: "test",
+            }),
+        ).rejects.toMatchObject({ message: expect.stringContaining("outside the pull request's diff") });
+    });
+});
+
 describe("pending review comments", () => {
     it("loads comments from the review-scoped endpoint", async () => {
         const requestedUrls: Array<string> = [];

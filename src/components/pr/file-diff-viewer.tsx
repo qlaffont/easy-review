@@ -14,7 +14,9 @@ import {
     X,
 } from "lucide-react";
 import {
+    createContext,
     useCallback,
+    useContext,
     useEffect,
     useLayoutEffect,
     useMemo,
@@ -68,6 +70,7 @@ import {
     selectionCommentCoordsFromAnchor,
 } from "#/lib/diff-selection-comment.ts";
 import { DIFF_EXPAND_CHUNK, expandDiffGap, materializeFileDiff } from "#/lib/session/build-file-diff.ts";
+import { isCommentableLine } from "#/lib/session/commentable-lines.ts";
 import { buildSuggestionComment, hasSuggestionFence, stripSuggestionFence } from "#/lib/session/suggestion.ts";
 import { notifyCopied, notifyError, notifySuccess } from "#/lib/toast.ts";
 import { cn } from "#/lib/utils.ts";
@@ -92,6 +95,11 @@ const STUB_COPY: Record<FileStubReason, { title: string; body: string; canForce:
         canForce: false,
     },
 };
+
+type CanCommentOn = (target: LineTarget) => boolean;
+
+/** Whether GitHub accepts a review comment on a line of the open file (inside its diff hunks). */
+const CanCommentOnContext = createContext<CanCommentOn>(() => true);
 
 export function FileDiffViewer({
     path,
@@ -183,6 +191,12 @@ export function FileDiffViewer({
         setSearchQuery("");
         setActiveMatchId(-1);
     }, [path, hideWhitespace]);
+
+    const commentableLines = file?.path === path ? file.commentableLines : undefined;
+    const canCommentOn = useCallback<CanCommentOn>(
+        (target) => isCommentableLine(commentableLines, target.side, target.line),
+        [commentableLines],
+    );
 
     const rendered = useMemo(() => {
         if (!resolvedDiff || resolvedDiff.stub || resolvedDiff.beforeText === null || resolvedDiff.afterText === null) {
@@ -343,54 +357,56 @@ export function FileDiffViewer({
                             Showing the first {rendered.lines.length} lines of a longer diff.
                         </p>
                     ) : null}
-                    <VirtualDiffLines
-                        lines={rendered.lines}
-                        path={path}
-                        layout={layout}
-                        splitView={splitView}
-                        splitRatio={splitRatio}
-                        lineHeight={lineHeight}
-                        wrapLines={wrapLines}
-                        syntax={syntax}
-                        pendingComments={pendingComments}
-                        threads={threads}
-                        viewerLogin={viewerLogin}
-                        viewerAvatarUrl={viewerAvatarUrl}
-                        minimizeComments={minimizeComments}
-                        previewBaseUrl={previewBaseUrl}
-                        repository={repository}
-                        number={number}
-                        canApplySuggestions={canApplySuggestions}
-                        mentionUsers={mentionUsers}
-                        disabled={disabled}
-                        selected={compose}
-                        noteValue={noteValue}
-                        canSuggest={canSuggest}
-                        canSave={canSave}
-                        hasPendingReview={pendingComments.length > 0}
-                        onNoteChange={setDraftBody}
-                        onCancelCompose={resetComposer}
-                        onSaveCompose={(mode) => void saveComment(mode)}
-                        onSelect={(target) => {
-                            setCompose({ ...target, text: target.text ?? "" });
-                            setDraftBody("");
-                        }}
-                        onExpandGap={(gapId, direction) => {
-                            if (direction === "full") {
-                                setShowFullFile(true);
-                                setExpansions({});
-                                return;
-                            }
-                            setShowFullFile(false);
-                            setExpansions((current) => expandDiffGap(current, gapId, direction));
-                        }}
-                        onRemovePending={onRemovePending}
-                        onUpdatePending={onUpdatePending}
-                        onReplyToThread={onReplyToThread}
-                        onSplitRatioChange={onSplitRatioChange}
-                        searchMatches={searchMatches}
-                        activeMatchId={activeMatchId}
-                    />
+                    <CanCommentOnContext.Provider value={canCommentOn}>
+                        <VirtualDiffLines
+                            lines={rendered.lines}
+                            path={path}
+                            layout={layout}
+                            splitView={splitView}
+                            splitRatio={splitRatio}
+                            lineHeight={lineHeight}
+                            wrapLines={wrapLines}
+                            syntax={syntax}
+                            pendingComments={pendingComments}
+                            threads={threads}
+                            viewerLogin={viewerLogin}
+                            viewerAvatarUrl={viewerAvatarUrl}
+                            minimizeComments={minimizeComments}
+                            previewBaseUrl={previewBaseUrl}
+                            repository={repository}
+                            number={number}
+                            canApplySuggestions={canApplySuggestions}
+                            mentionUsers={mentionUsers}
+                            disabled={disabled}
+                            selected={compose}
+                            noteValue={noteValue}
+                            canSuggest={canSuggest}
+                            canSave={canSave}
+                            hasPendingReview={pendingComments.length > 0}
+                            onNoteChange={setDraftBody}
+                            onCancelCompose={resetComposer}
+                            onSaveCompose={(mode) => void saveComment(mode)}
+                            onSelect={(target) => {
+                                setCompose({ ...target, text: target.text ?? "" });
+                                setDraftBody("");
+                            }}
+                            onExpandGap={(gapId, direction) => {
+                                if (direction === "full") {
+                                    setShowFullFile(true);
+                                    setExpansions({});
+                                    return;
+                                }
+                                setShowFullFile(false);
+                                setExpansions((current) => expandDiffGap(current, gapId, direction));
+                            }}
+                            onRemovePending={onRemovePending}
+                            onUpdatePending={onUpdatePending}
+                            onReplyToThread={onReplyToThread}
+                            onSplitRatioChange={onSplitRatioChange}
+                            searchMatches={searchMatches}
+                            activeMatchId={activeMatchId}
+                        />
+                    </CanCommentOnContext.Provider>
                 </div>
             )}
         </div>
@@ -873,13 +889,15 @@ function DiffLineNumber({
     selected: boolean;
     onSelect: (target: LineTarget) => void;
 }) {
+    const canCommentOn = useContext(CanCommentOnContext);
+
     if (number == null) {
         return (
             <span className="select-none px-2 text-right text-muted-foreground/70 tabular-nums" aria-hidden="true" />
         );
     }
 
-    const clickable = target != null && !disabled;
+    const clickable = target != null && !disabled && canCommentOn(target);
 
     return (
         <span
@@ -1176,6 +1194,7 @@ function VirtualDiffLines({
 }) {
     const rootRef = useRef<HTMLDivElement>(null);
     const parentRef = useRef<HTMLDivElement>(null);
+    const canCommentOn = useContext(CanCommentOnContext);
     const leftScrollRef = useRef<HTMLDivElement>(null);
     const rightScrollRef = useRef<HTMLDivElement>(null);
     const unifiedScrollRef = useRef<HTMLDivElement>(null);
@@ -1443,7 +1462,7 @@ function VirtualDiffLines({
             const mouseX = event.clientX;
             requestAnimationFrame(() => {
                 const match = lineTargetFromSelection(scroller, path);
-                if (!match) {
+                if (!match || !canCommentOn(match.target)) {
                     setSelectionPopup(null);
                     return;
                 }
@@ -1474,7 +1493,7 @@ function VirtualDiffLines({
             window.removeEventListener("scroll", repositionSelectionPopup, { capture: true });
             window.removeEventListener("keydown", onKeyDown);
         };
-    }, [path, disabled, repositionSelectionPopup]);
+    }, [path, disabled, canCommentOn, repositionSelectionPopup]);
 
     // Lock a drag selection to the column it starts in, so selecting old code in split view does
     // not sweep the new column (and its text) into the selection.

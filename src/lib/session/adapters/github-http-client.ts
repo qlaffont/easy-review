@@ -5,6 +5,7 @@ import type {
     ListPullRequestsOptions,
 } from "#/lib/session/ports.ts";
 import type {
+    CommentableLines,
     CheckState,
     CommitSignature,
     ContentEdit,
@@ -46,6 +47,7 @@ import { rewriteUserAttachmentsFromHtml } from "#/lib/rewrite-user-attachments.t
 import { applySuggestionsToFile, type SuggestionChange } from "#/lib/session/apply-suggestion.ts";
 import { buildFileDiff } from "#/lib/session/build-file-diff.ts";
 import { latestCheckState, mapCheckRuns, type CheckContextInput } from "#/lib/session/check-runs.ts";
+import { parseCommentableLines } from "#/lib/session/commentable-lines.ts";
 import { HUGE_FILE_BYTES, stubForPath } from "#/lib/session/diff-policy.ts";
 import { EasyReviewError } from "#/lib/session/errors.ts";
 import {
@@ -89,6 +91,12 @@ const RELATED_SEARCH_REPO_BATCH_SIZE = 10;
 const RELATED_SEARCH_RESULT_CAP = 25;
 /** GraphQL caps `pullRequest.files` at 100 per page. */
 const FILES_PAGE_SIZE = 100;
+/**
+ * `addPullRequestReviewThread` answers `thread: null` without an error when the line sits outside
+ * the pull request's diff hunks (expanded context, whole-file view).
+ */
+const OUTSIDE_DIFF_MESSAGE =
+    "GitHub could not attach a comment to that line — it is outside the pull request's diff. Comment on a changed line or the context right around it.";
 const FILES_PAGE_LIMIT = 20;
 const TIMELINE_PAGE_SIZE = 100;
 const TIMELINE_PAGE_LIMIT = 5;
@@ -778,6 +786,7 @@ export function createGithubHttpClient(
             const [owner = "", name = ""] = repository.split("/");
             const files: Array<PullRequestFile> = [];
             let cursor: string | null = null;
+            const commentable = commentableLinesByPath(token, owner, name, number);
 
             for (let page = 0; page < FILES_PAGE_LIMIT; page++) {
                 const data: PullRequestFilesQuery = await graphql<PullRequestFilesQuery>(
@@ -812,7 +821,11 @@ export function createGithubHttpClient(
                 cursor = connection.pageInfo.endCursor;
             }
 
-            return files;
+            const linesByPath = await commentable;
+            return files.map((file) => {
+                const commentableLines = linesByPath.get(file.path);
+                return commentableLines ? { ...file, commentableLines } : file;
+            });
         },
 
         async listComparedFiles(token, repository, baseOid, headOid) {
@@ -1161,7 +1174,7 @@ export function createGithubHttpClient(
 
                 const comment = data.addPullRequestReview.pullRequestReview?.comments.nodes[0];
                 if (!comment || comment.databaseId == null) {
-                    throw new EasyReviewError("unknown", "Could not read the new comment from GitHub.");
+                    throw new EasyReviewError("unknown", OUTSIDE_DIFF_MESSAGE);
                 }
 
                 return { commentId: comment.databaseId, commentNodeId: comment.id };
@@ -1186,7 +1199,7 @@ export function createGithubHttpClient(
 
             const comment = data.addPullRequestReviewThread.thread?.comments.nodes[0];
             if (!comment || comment.databaseId == null) {
-                throw new EasyReviewError("unknown", "Could not read the new comment from GitHub.");
+                throw new EasyReviewError("unknown", OUTSIDE_DIFF_MESSAGE);
             }
 
             return { commentId: comment.databaseId, commentNodeId: comment.id };
@@ -2257,6 +2270,43 @@ export function createGithubHttpClient(
                 cause,
             });
         }
+    }
+
+    /**
+     * Lines GitHub accepts review comments on, per path, from the REST patch hunks. Best effort:
+     * a failure or a file without a patch (too large) leaves that file unrestricted.
+     */
+    async function commentableLinesByPath(
+        token: string,
+        owner: string,
+        name: string,
+        number: number,
+    ): Promise<Map<string, CommentableLines>> {
+        const byPath = new Map<string, CommentableLines>();
+        let path: string | null = `/repos/${owner}/${name}/pulls/${number}/files?per_page=${FILES_PAGE_SIZE}`;
+
+        try {
+            for (let page = 0; page < FILES_PAGE_LIMIT && path; page++) {
+                const response = await rest(token, path);
+                if (!response.ok) {
+                    break;
+                }
+                const rows = (await response.json()) as unknown;
+                if (!Array.isArray(rows)) {
+                    break;
+                }
+                for (const row of rows as Array<{ filename?: unknown; patch?: unknown }>) {
+                    if (typeof row.filename === "string" && typeof row.patch === "string") {
+                        byPath.set(row.filename, parseCommentableLines(row.patch));
+                    }
+                }
+                path = nextRestPath(response.headers.get("link"));
+            }
+        } catch {
+            // Commenting stays open everywhere; GitHub still has the final word.
+        }
+
+        return byPath;
     }
 
     /** Effective pull-request rules for a branch (rulesets + classic protection). */

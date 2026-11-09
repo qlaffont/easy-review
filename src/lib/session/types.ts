@@ -269,6 +269,15 @@ export type FileStubReason = "binary" | "huge" | "generated";
 /** One entry in the Review Changes file list. Deliberately without patch text. */
 export type GithubFileViewedState = "VIEWED" | "UNVIEWED" | "DISMISSED";
 
+/**
+ * Inclusive line ranges GitHub accepts review comments on, per side, read from the pull
+ * request's patch hunks. Lines outside them (expanded context, whole-file view) are refused.
+ */
+export type CommentableLines = {
+    left: Array<[number, number]>;
+    right: Array<[number, number]>;
+};
+
 export type PullRequestFile = {
     path: string;
     previousPath: string | null;
@@ -278,7 +287,8 @@ export type PullRequestFile = {
     /** Set when the path alone is enough to refuse an automatic load. */
     stub: FileStubReason | null;
     /** Per-viewer viewed state from GitHub (`PullRequestChangedFile.viewerViewedState`). */
-    viewerViewedState?: GithubFileViewedState;
+    viewerViewedState?: GithubFileViewedState /** Unknown (no patch from GitHub, commit-range view, …) means every line is offered. */;
+    commentableLines?: CommentableLines;
 };
 
 export type DiffLineKind = "context" | "add" | "del" | "hunk" | "gap";
