@@ -1184,6 +1184,35 @@ describe("getPullRequestFileDiff", () => {
         expect(requests.some((url) => url.includes("useAutoInsRetrieval%2Ets"))).toBe(true);
         expect(diff.lines.some((line) => line.kind === "add" && line.text === "ok")).toBe(true);
     });
+
+    it("reads the old side at the merge base, not the moved base branch tip", async () => {
+        const file = (text: string) =>
+            Response.json({ type: "file", encoding: "base64", size: text.length, content: btoa(text) });
+        const github = createGithubHttpClient(async (input) => {
+            const url = String(input);
+            if (url.includes("/graphql")) {
+                return Response.json({
+                    data: { repository: { pullRequest: { baseRefOid: "maintip", headRefOid: "headoid" } } },
+                });
+            }
+            if (url.includes("/compare/maintip...headoid")) {
+                return Response.json({ merge_base_commit: { sha: "forkpoint" } });
+            }
+            if (url.includes("ref=forkpoint")) {
+                return file("tag: 622\n");
+            }
+            if (url.includes("ref=maintip")) {
+                return file("tag: 634\n");
+            }
+            return file("tag: 622\nadded\n");
+        });
+
+        const diff = await github.getPullRequestFileDiff("token", "acme/api", 26, "kustomization.yaml");
+
+        expect(diff.lines.filter((line) => line.kind === "add" || line.kind === "del")).toEqual([
+            { kind: "add", text: "added", oldNumber: null, newNumber: 2 },
+        ]);
+    });
 });
 
 describe("resolveReviewRequestPayload", () => {

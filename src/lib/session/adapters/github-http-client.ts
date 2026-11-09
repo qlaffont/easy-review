@@ -260,6 +260,8 @@ export function createGithubHttpClient(
     const REST_URL = options.restBaseUrl ?? DEFAULT_REST_URL;
     const GRAPHQL_URL = options.graphqlUrl ?? DEFAULT_GRAPHQL_URL;
     const credentials = options.credentials;
+    /** Merge bases never change for a given base/head pair, so one lookup per pair is enough. */
+    const mergeBases = new Map<string, Promise<string>>();
     /**
      * `keepPartial` is for queries that ask about many things at once: GitHub answers the fields it
      * can and reports the rest as errors, and one unreadable repository should not empty the Inbox.
@@ -907,7 +909,13 @@ export function createGithubHttpClient(
             const rangeHead = options?.headOid?.trim() || null;
             // Prefer the virtual pull-request ref for the full-PR head side. Raw head OIDs 404 on
             // the Contents API for cross-fork PRs; `refs/pull/N/head` always resolves on the base repo.
-            const beforeRef = rangeBase ?? pullRequest.baseRefOid;
+            const headOid = rangeHead ?? pullRequest.headRefOid;
+            // `baseRefOid` is the base branch tip. GitHub diffs from the merge base, so commits that
+            // landed on the base branch after the branch point must not show up as changes here.
+            const beforeRef =
+                rangeBase && rangeBase !== pullRequest.baseRefOid
+                    ? rangeBase
+                    : await resolveMergeBase(token, owner, name, pullRequest.baseRefOid, headOid);
             const afterRef = rangeHead && rangeHead !== pullRequest.headRefOid ? rangeHead : `refs/pull/${number}/head`;
             const [before, after] = await Promise.all([
                 readBlob(token, owner, name, beforePath, beforeRef, force),
@@ -2270,6 +2278,38 @@ export function createGithubHttpClient(
                 cause,
             });
         }
+    }
+
+    /** The commit a three-dot `base...head` diff starts from. Falls back to `base` when unreadable. */
+    function resolveMergeBase(token: string, owner: string, name: string, base: string, head: string): Promise<string> {
+        const key = `${owner}/${name}:${base}...${head}`;
+        const cached = mergeBases.get(key);
+        if (cached) {
+            return cached;
+        }
+
+        const lookup = (async () => {
+            const response = await rest(
+                token,
+                `/repos/${owner}/${name}/compare/${encodeURIComponent(base)}...${encodeURIComponent(head)}?per_page=1`,
+            );
+            if (!response.ok) {
+                throw await errorFromResponse(response);
+            }
+            const payload = (await response.json()) as { merge_base_commit?: { sha?: unknown } };
+            const sha = payload.merge_base_commit?.sha;
+            if (typeof sha !== "string" || !sha) {
+                throw new EasyReviewError("unknown", "GitHub did not return a merge base.");
+            }
+            return sha;
+        })();
+
+        const settled = lookup.catch(() => {
+            mergeBases.delete(key);
+            return base;
+        });
+        mergeBases.set(key, settled);
+        return settled;
     }
 
     /**
