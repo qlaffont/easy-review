@@ -1,4 +1,4 @@
-import { AlertTriangle, ChevronDown, GitMerge } from "lucide-react";
+import { AlertTriangle, Check, ChevronDown, GitMerge } from "lucide-react";
 import { useMemo, useRef, useState } from "react";
 
 import type { ResolvedPullRequestStack } from "#/lib/session/pull-request-stacks.ts";
@@ -39,6 +39,12 @@ const STACK_MERGE_METHOD_LABEL: Record<MergeMethod, string> = {
     merge: "Create merge commits",
     squash: "Squash and merge",
     rebase: "Rebase and merge",
+};
+
+const STACK_MERGE_BUTTON_LABEL: Record<MergeMethod, string> = {
+    merge: "Merge stack",
+    squash: "Squash and merge stack",
+    rebase: "Rebase and merge stack",
 };
 
 function stackMergeMethodOptions(allowed: Array<MergeMethod>) {
@@ -150,7 +156,7 @@ export function StackMergeControls({ detail, stack }: { detail: PullRequestDetai
                         <AlertDialogTrigger asChild>
                             <Button size="sm" className="h-8 rounded-r-none gap-1.5" disabled={mergeDisabled}>
                                 <GitMerge className="size-3.5" aria-hidden="true" />
-                                Merge stack {branchCount > 0 ? branchCount : evaluation.openCount}
+                                {STACK_MERGE_BUTTON_LABEL[activeOption.value]} ({branchCount})
                             </Button>
                         </AlertDialogTrigger>
                         <DropdownMenu
@@ -177,12 +183,20 @@ export function StackMergeControls({ detail, stack }: { detail: PullRequestDetai
                                 {mergeOptions.map((option) => (
                                     <DropdownMenuItem
                                         key={option.value}
+                                        className="items-start gap-2 py-2"
                                         onSelect={() => {
                                             setMergeMethod(option.value);
                                             setMergeMenuOpen(false);
                                         }}
                                     >
-                                        <span className="flex flex-col gap-0.5">
+                                        <Check
+                                            className={cn(
+                                                "mt-0.5 size-3.5 shrink-0",
+                                                activeOption.value === option.value ? "opacity-100" : "opacity-0",
+                                            )}
+                                            aria-hidden="true"
+                                        />
+                                        <span className="flex min-w-0 flex-col gap-0.5">
                                             <span className="font-medium">{option.label}</span>
                                             <span className="text-xs text-muted-foreground">
                                                 {mergeMethodDescription(option.value, branchCount)}
