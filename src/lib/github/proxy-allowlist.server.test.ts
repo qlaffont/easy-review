@@ -36,6 +36,10 @@ describe("isAllowedGithubProxyRequest", () => {
         expect(isAllowedGithubProxyRequest("GET", "/repos/acme/api/labels", undefined)).toBe(true);
         expect(isAllowedGithubProxyRequest("GET", "/repos/acme/api/teams", undefined)).toBe(true);
         expect(isAllowedGithubProxyRequest("POST", "/repos/acme/api/pulls/1/reviews", new ArrayBuffer(0))).toBe(true);
+        expect(isAllowedGithubProxyRequest("GET", "/repos/acme/api/pulls/1/reviews/42/comments", undefined)).toBe(true);
+        expect(
+            isAllowedGithubProxyRequest("POST", "/repos/acme/api/pulls/1/reviews/42/comments", new ArrayBuffer(0)),
+        ).toBe(false);
         expect(isAllowedGithubProxyRequest("GET", "/repos/acme/api/pulls/1/requested_reviewers", undefined)).toBe(true);
         expect(
             isAllowedGithubProxyRequest("DELETE", "/repos/acme/api/pulls/1/requested_reviewers", new ArrayBuffer(0)),

@@ -51,6 +51,8 @@ const REST_RULES: Array<Rule> = [
         pattern: /^\/repos\/[^/]+\/[^/]+\/pulls\/\d+\/reviews\/\d+\/dismissals$/,
     },
     { methods: GET, pattern: /^\/repos\/[^/]+\/[^/]+\/pulls\/\d+\/reviews$/ },
+    /** Draft comments of the viewer's pending review (restored on PR load). */
+    { methods: GET, pattern: /^\/repos\/[^/]+\/[^/]+\/pulls\/\d+\/reviews\/\d+\/comments$/ },
     { methods: GET, pattern: /^\/repos\/[^/]+\/[^/]+\/pulls\/\d+\/comments$/ },
     { methods: new Set(["POST"]), pattern: /^\/repos\/[^/]+\/[^/]+\/pulls\/\d+\/comments$/ },
     { methods: new Set(["PATCH", "DELETE"]), pattern: /^\/repos\/[^/]+\/[^/]+\/pulls\/comments\/\d+$/ },
