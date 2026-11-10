@@ -84,6 +84,9 @@ const REPOSITORY_PAGE_SIZE = 100;
 const REPOSITORY_PAGE_LIMIT = 10;
 /** Repositories asked for in a single aliased GraphQL document. */
 const INBOX_BATCH_SIZE = 10;
+/** Failing Inbox rows rechecked per query; each brings up to `LATEST_CHECKS_CONTEXT_LIMIT` contexts. */
+const LATEST_CHECKS_BATCH_SIZE = 10;
+const LATEST_CHECKS_CONTEXT_LIMIT = 100;
 export const OPEN_PULL_REQUESTS_PER_REPOSITORY = 30;
 export const MERGED_PULL_REQUESTS_PER_REPOSITORY = 10;
 /** Related scans batch a few repos per search query (query length + rate limit). */
@@ -315,6 +318,57 @@ export function createGithubHttpClient(
         return payload.data;
     }
 
+    /**
+     * Inbox rows only fetch the bare rollup, which GitHub keeps red after a superseded run is
+     * cancelled. Recheck just the failing rows against their latest attempts, like the Checks tab.
+     * A failed recheck keeps the rollup: the row may stay red, but the Inbox still loads.
+     */
+    async function withLatestFailingChecks(
+        token: string,
+        pullRequests: Array<PullRequestSummary>,
+    ): Promise<Array<PullRequestSummary>> {
+        const failing = pullRequests.filter((pullRequest) => pullRequest.checks === "failure");
+        if (failing.length === 0) {
+            return pullRequests;
+        }
+
+        const batches: Array<Array<PullRequestSummary>> = [];
+        for (let index = 0; index < failing.length; index += LATEST_CHECKS_BATCH_SIZE) {
+            batches.push(failing.slice(index, index + LATEST_CHECKS_BATCH_SIZE));
+        }
+
+        const latestByKey = new Map<string, CheckState>();
+        await Promise.all(
+            batches.map(async (batch) => {
+                let data: LatestChecksQuery;
+                try {
+                    data = await graphql<LatestChecksQuery>(token, buildLatestChecksQuery(batch), undefined, {
+                        keepPartial: true,
+                    });
+                } catch {
+                    return;
+                }
+
+                batch.forEach((pullRequest, index) => {
+                    const rollup = data[`pr${index}`]?.pullRequest?.commits?.nodes[0]?.commit.statusCheckRollup;
+                    const state = latestCompleteCheckState(rollup);
+                    if (state) {
+                        latestByKey.set(pullRequest.key, state);
+                    }
+                });
+            }),
+        );
+
+        if (latestByKey.size === 0) {
+            return pullRequests;
+        }
+
+        return pullRequests.map((pullRequest) => {
+            const checks = latestByKey.get(pullRequest.key);
+            return checks && checks !== pullRequest.checks ? { ...pullRequest, checks } : pullRequest;
+        });
+    }
+
     return {
         async getViewer(token) {
             const data = await graphql<{ viewer: GithubViewer }>(
@@ -427,7 +481,7 @@ export function createGithubHttpClient(
                 }
             }
 
-            return { pullRequests, pagination };
+            return { pullRequests: await withLatestFailingChecks(token, pullRequests), pagination };
         },
 
         async searchPullRequests(token, input) {
@@ -556,7 +610,7 @@ export function createGithubHttpClient(
                 });
 
                 return {
-                    pullRequests: pullRequestsFromSearchNodes(data.search.nodes),
+                    pullRequests: await withLatestFailingChecks(token, pullRequestsFromSearchNodes(data.search.nodes)),
                     totalCount: data.search.issueCount,
                     pageInfo: {
                         hasNextPage: data.search.pageInfo.hasNextPage,
@@ -593,7 +647,7 @@ export function createGithubHttpClient(
                 (nextOffset < merged.length || pages.some((page) => page.search.pageInfo.hasNextPage));
 
             return {
-                pullRequests,
+                pullRequests: await withLatestFailingChecks(token, pullRequests),
                 totalCount,
                 pageInfo: {
                     hasNextPage,
@@ -3197,6 +3251,33 @@ const PULL_REQUEST_CHECK_COMMIT = `
  * Rollup plus its contexts, so stack rows can ignore superseded attempts like the Checks tab does.
  * Kept off the Inbox batch, where per-context nodes would multiply the query cost.
  */
+/** One `statusCheckRollup.contexts` node, as `CheckContextInput` reads it. */
+const CHECK_CONTEXT_NODE_FIELDS = `
+    __typename
+    ... on CheckRun {
+        name
+        status
+        conclusion
+        detailsUrl
+        startedAt
+        completedAt
+        checkSuite {
+            databaseId
+            workflowRun {
+                event
+                workflow {
+                    name
+                }
+            }
+        }
+    }
+    ... on StatusContext {
+        context
+        state
+        targetUrl
+    }
+`;
+
 const PULL_REQUEST_LATEST_CHECKS_COMMIT = `
     commits(last: 1) {
         nodes {
@@ -3205,29 +3286,7 @@ const PULL_REQUEST_LATEST_CHECKS_COMMIT = `
                     state
                     contexts(first: 50) {
                         nodes {
-                            __typename
-                            ... on CheckRun {
-                                name
-                                status
-                                conclusion
-                                detailsUrl
-                                startedAt
-                                completedAt
-                                checkSuite {
-                                    databaseId
-                                    workflowRun {
-                                        event
-                                        workflow {
-                                            name
-                                        }
-                                    }
-                                }
-                            }
-                            ... on StatusContext {
-                                context
-                                state
-                                targetUrl
-                            }
+                            ${CHECK_CONTEXT_NODE_FIELDS}
                         }
                     }
                 }
@@ -3235,6 +3294,62 @@ const PULL_REQUEST_LATEST_CHECKS_COMMIT = `
         }
     }
 `;
+
+type LatestChecksRollup = {
+    state: string;
+    contexts?: { totalCount?: number; nodes: Array<CheckContextNode> };
+} | null;
+
+type LatestChecksQuery = Record<
+    string,
+    { pullRequest: { commits?: { nodes: Array<{ commit: { statusCheckRollup: LatestChecksRollup } }> } } | null } | null
+>;
+
+/** One aliased `repository { pullRequest(number) }` per failing row, with the contexts behind its rollup. */
+function buildLatestChecksQuery(pullRequests: ReadonlyArray<PullRequestSummary>): string {
+    const selections = pullRequests.map((pullRequest, index) => {
+        const [owner = "", name = ""] = pullRequest.repository.split("/");
+        return `
+            pr${index}: repository(owner: ${JSON.stringify(owner)}, name: ${JSON.stringify(name)}) {
+                pullRequest(number: ${pullRequest.number}) {
+                    commits(last: 1) {
+                        nodes {
+                            commit {
+                                statusCheckRollup {
+                                    state
+                                    contexts(first: ${LATEST_CHECKS_CONTEXT_LIMIT}) {
+                                        totalCount
+                                        nodes {
+                                            ${CHECK_CONTEXT_NODE_FIELDS}
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        `;
+    });
+
+    return `
+        query EasyReviewLatestChecks {
+            ${selections.join("\n")}
+        }
+    `;
+}
+
+/**
+ * Latest-attempt state, or null when the contexts GitHub returned cannot be trusted to clear the
+ * rollup: a page that stops short could leave a real failure out.
+ */
+function latestCompleteCheckState(rollup: LatestChecksRollup | undefined): CheckState | null {
+    const contexts = rollup?.contexts;
+    if (!rollup || !contexts || (contexts.totalCount ?? Infinity) > contexts.nodes.length) {
+        return null;
+    }
+    return latestCheckState(contexts.nodes, toCheckState(rollup.state));
+}
 
 /** The fields behind `PullRequestSummary`, shared by the Inbox batch and the overview query. */
 const PULL_REQUEST_SUMMARY_FIELDS = `

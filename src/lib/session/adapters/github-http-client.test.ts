@@ -836,6 +836,107 @@ describe("listPullRequests", () => {
         });
     });
 
+    function failingRollupNode(repository: string, number: number) {
+        return {
+            ...pullRequestNode(repository, number),
+            commits: { nodes: [{ commit: { statusCheckRollup: { state: "FAILURE" } } }] },
+        };
+    }
+
+    function inboxThenLatestChecks(latestChecks: GraphqlBody) {
+        const queries: Array<string> = [];
+        const fetchImpl = (async (_url: string, init: RequestInit) => {
+            const { query } = JSON.parse(String(init.body)) as { query: string };
+            queries.push(query);
+            const body: GraphqlBody = query.includes("EasyReviewLatestChecks")
+                ? latestChecks
+                : {
+                      data: {
+                          repo0: {
+                              open: {
+                                  pageInfo: { hasNextPage: false, endCursor: null },
+                                  nodes: [failingRollupNode("acme/api", 457), pullRequestNode("acme/api", 1)],
+                              },
+                              merged: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] },
+                          },
+                      },
+                  };
+            return new Response(JSON.stringify(body), { status: 200 });
+        }) as unknown as typeof fetch;
+        return { fetchImpl, queries };
+    }
+
+    function latestChecksFor(nodes: Array<unknown>, totalCount = nodes.length): GraphqlBody {
+        return {
+            data: {
+                pr0: {
+                    pullRequest: {
+                        commits: {
+                            nodes: [
+                                {
+                                    commit: {
+                                        statusCheckRollup: { state: "FAILURE", contexts: { totalCount, nodes } },
+                                    },
+                                },
+                            ],
+                        },
+                    },
+                },
+            },
+        };
+    }
+
+    it("clears a red rollup kept only by superseded cancelled runs", async () => {
+        const { fetchImpl, queries } = inboxThenLatestChecks(
+            latestChecksFor([
+                checkRun("build", "2026-11-10T09:42:12Z", "CANCELLED"),
+                checkRun("build", "2026-11-10T09:51:30Z", "SUCCESS"),
+            ]),
+        );
+        const github = createGithubHttpClient(fetchImpl);
+
+        const { pullRequests } = await github.listPullRequests("token", ["acme/api"]);
+
+        expect(pullRequests.find((pullRequest) => pullRequest.number === 457)?.checks).toBe("success");
+        expect(queries).toHaveLength(2);
+        expect(queries[1]).toContain("pullRequest(number: 457)");
+        expect(queries[1]).not.toContain("pullRequest(number: 1)");
+    });
+
+    it("keeps the row red when the latest attempt failed", async () => {
+        const { fetchImpl } = inboxThenLatestChecks(
+            latestChecksFor([
+                checkRun("build", "2026-11-10T09:42:12Z", "SUCCESS"),
+                checkRun("build", "2026-11-10T09:51:30Z", "CANCELLED"),
+            ]),
+        );
+        const github = createGithubHttpClient(fetchImpl);
+
+        const { pullRequests } = await github.listPullRequests("token", ["acme/api"]);
+
+        expect(pullRequests.find((pullRequest) => pullRequest.number === 457)?.checks).toBe("failure");
+    });
+
+    it("keeps the rollup when GitHub returned only part of the contexts", async () => {
+        const { fetchImpl } = inboxThenLatestChecks(
+            latestChecksFor([checkRun("build", "2026-11-10T09:51:30Z", "SUCCESS")], 150),
+        );
+        const github = createGithubHttpClient(fetchImpl);
+
+        const { pullRequests } = await github.listPullRequests("token", ["acme/api"]);
+
+        expect(pullRequests.find((pullRequest) => pullRequest.number === 457)?.checks).toBe("failure");
+    });
+
+    it("still loads the Inbox when the recheck fails", async () => {
+        const { fetchImpl } = inboxThenLatestChecks({ errors: [{ message: "Something went wrong." }] });
+        const github = createGithubHttpClient(fetchImpl);
+
+        const { pullRequests } = await github.listPullRequests("token", ["acme/api"]);
+
+        expect(pullRequests.find((pullRequest) => pullRequest.number === 457)?.checks).toBe("failure");
+    });
+
     it("surfaces the error when nothing at all resolved", async () => {
         const github = createGithubHttpClient(
             respondWith({ errors: [{ type: "NOT_FOUND", message: "Could not resolve to a Repository." }] }),
