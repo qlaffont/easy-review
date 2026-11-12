@@ -279,16 +279,16 @@ export function ReviewChangesMenu({ repository, number }: { repository: string; 
 
                     <fieldset
                         disabled={draft.stale}
-                        className="group/review flex flex-col gap-2 disabled:cursor-not-allowed disabled:opacity-60"
+                        className="group/review @container flex min-w-0 flex-col gap-2 disabled:cursor-not-allowed disabled:opacity-60"
                     >
                         <legend className="text-sm font-medium">Finish your review</legend>
-                        <ul className="grid grid-cols-3 gap-2">
+                        <ul className="grid grid-cols-1 gap-2 @lg:grid-cols-3">
                             {EVENTS.map((entry) => (
                                 <li key={entry.value} className="min-w-0">
                                     <HelpTooltip label={entry.hint}>
                                         <label
                                             className={cn(
-                                                "flex h-full cursor-pointer items-center justify-center gap-1.5 rounded-md border px-2 py-2 text-center whitespace-nowrap transition-colors group-disabled/review:cursor-not-allowed",
+                                                "flex h-full cursor-pointer items-center justify-start gap-1.5 @lg:justify-center rounded-md border px-2 py-2 text-center whitespace-nowrap transition-colors group-disabled/review:cursor-not-allowed",
                                                 draft.event === entry.value
                                                     ? "border-[#1f883d]/50 bg-[#dafbe1]/40 dark:border-[#3fb950]/40 dark:bg-[#238636]/15"
                                                     : "hover:bg-muted/50",
