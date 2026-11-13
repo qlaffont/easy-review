@@ -62,8 +62,10 @@ const REST_RULES: Array<Rule> = [
     { methods: GET, pattern: /^\/repos\/[^/]+\/[^/]+\/pulls\/\d+\/requested_reviewers$/ },
     { methods: new Set(["POST", "DELETE"]), pattern: /^\/repos\/[^/]+\/[^/]+\/pulls\/\d+\/requested_reviewers$/ },
     { methods: new Set(["PUT"]), pattern: /^\/repos\/[^/]+\/[^/]+\/pulls\/\d+\/merge$/ },
-    /** Stacked PRs: list the stack for a pull request, then merge it asynchronously. */
-    { methods: GET, pattern: /^\/repos\/[^/]+\/[^/]+\/stacks$/ },
+    /** Stacked PRs: list or create the stack for a pull request, then merge it asynchronously. */
+    { methods: new Set(["GET", "HEAD", "POST"]), pattern: /^\/repos\/[^/]+\/[^/]+\/stacks$/ },
+    /** Stack a pull request on top of an existing stack. */
+    { methods: new Set(["POST"]), pattern: /^\/repos\/[^/]+\/[^/]+\/stacks\/\d+\/add$/ },
     { methods: new Set(["PUT"]), pattern: /^\/repos\/[^/]+\/[^/]+\/pulls\/\d+\/merge-async$/ },
     { methods: GET, pattern: /^\/repos\/[^/]+\/[^/]+\/pulls\/\d+\/merge-async\/[^/]+$/ },
     { methods: new Set(["PATCH"]), pattern: /^\/repos\/[^/]+\/[^/]+\/pulls\/\d+$/ },

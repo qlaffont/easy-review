@@ -1,4 +1,5 @@
 import type { SuggestionChange } from "#/lib/session/apply-suggestion.ts";
+import type { PullRequestsBelowLookup } from "#/lib/session/stack-suggestion.ts";
 import type {
     DiffSide,
     FileDiff,
@@ -109,14 +110,31 @@ export type GithubClient = {
         },
     ): Promise<number>;
     /**
+     * Count several searches in the given repositories with one GitHub request (`search.issueCount`
+     * per query and repository batch, aliased). Keyed by query.
+     */
+    countPullRequestsByQuery(
+        token: string,
+        input: {
+            queries: ReadonlyArray<string>;
+            repositories: ReadonlyArray<string>;
+        },
+    ): Promise<Record<string, number>>;
+    /**
      * Pull requests for one inbox section: rows, total count, and search pagination in one call.
      * Query must come from {@link sectionFilterToSearchQuery}; results are sorted by last updated.
+     * Repository batches (long allowlists) go out as one aliased request.
      */
     fetchSectionPullRequests(
         token: string,
         input: {
             query: string;
             repositories: ReadonlyArray<string>;
+            /**
+             * Search every repository the session can see and ignore `repositories`: one request
+             * however long the allowlist. Only for searches already narrowed to the viewer.
+             */
+            allRepositories?: boolean;
             limit?: number;
             after?: string | null;
         },
@@ -326,6 +344,25 @@ export type GithubClient = {
         number: number,
         method: MergeMethod,
         options?: MergePullRequestOptions,
+    ): Promise<void>;
+    /**
+     * Open pull requests whose head branch is this pull request's base — the ones it could stack on —
+     * and whether this pull request's own head lives in a fork. One GraphQL request.
+     */
+    findPullRequestsBelow(
+        token: string,
+        repository: string,
+        number: number,
+        baseRefName: string,
+    ): Promise<PullRequestsBelowLookup>;
+    /** Create a GitHub stack from pull requests listed bottom to top (REST Stacks API). */
+    createPullRequestStack(token: string, repository: string, pullRequests: ReadonlyArray<number>): Promise<void>;
+    /** Append pull requests on top of an existing GitHub stack, lowest first (REST Stacks API). */
+    addPullRequestsToStack(
+        token: string,
+        repository: string,
+        stackNumber: number,
+        pullRequests: ReadonlyArray<number>,
     ): Promise<void>;
     /**
      * Merge this GitHub stacked pull request and every unmerged layer below it.

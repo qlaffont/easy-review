@@ -350,6 +350,35 @@ export function createGithubHttpClient(
         return payload.data;
     }
 
+    /** Several searches counted in one aliased request. */
+    async function countPullRequestsByQuery(
+        token: string,
+        input: { queries: ReadonlyArray<string>; repositories: ReadonlyArray<string> },
+    ): Promise<Record<string, number>> {
+        const counts: Record<string, number> = Object.fromEntries(input.queries.map((query) => [query, 0]));
+        if (input.repositories.length === 0 || input.queries.length === 0) {
+            return counts;
+        }
+
+        const searches = [...new Set(input.queries)].flatMap((query) =>
+            buildScopedSearchQueryBatches(query, input.repositories).map((search) => ({ query, search })),
+        );
+        if (searches.length === 0) {
+            return counts;
+        }
+
+        const data = await graphql<Record<string, { issueCount: number }>>(
+            token,
+            buildBatchedCountQuery(searches.length),
+            Object.fromEntries(searches.map((entry, index) => [`q${index}`, entry.search])),
+        );
+
+        searches.forEach((entry, index) => {
+            counts[entry.query] = (counts[entry.query] ?? 0) + (data[`c${index}`]?.issueCount ?? 0);
+        });
+        return counts;
+    }
+
     /**
      * Inbox rows only fetch the bare rollup, which GitHub keeps red after a superseded run is
      * cancelled. Recheck just the failing rows against their latest attempts, like the Checks tab.
@@ -606,30 +635,25 @@ export function createGithubHttpClient(
         },
 
         async countPullRequests(token, input) {
-            if (input.repositories.length === 0) {
-                return 0;
-            }
-
-            const batches = buildScopedSearchQueryBatches(input.query, input.repositories);
-            if (batches.length === 0) {
-                return 0;
-            }
-
-            const pages = await Promise.all(
-                batches.map((query) => graphql<CountPullRequestsQuery>(token, COUNT_PULL_REQUESTS_QUERY, { query })),
-            );
-
-            return pages.reduce((total, page) => total + page.search.issueCount, 0);
+            const counts = await countPullRequestsByQuery(token, {
+                queries: [input.query],
+                repositories: input.repositories,
+            });
+            return counts[input.query] ?? 0;
         },
 
+        countPullRequestsByQuery,
+
         async fetchSectionPullRequests(token, input) {
-            if (input.repositories.length === 0) {
+            if (input.repositories.length === 0 && !input.allRepositories) {
                 return { pullRequests: [], totalCount: 0, pageInfo: { hasNextPage: false, endCursor: null } };
             }
 
             const limit = Math.min(Math.max(input.limit ?? 10, 1), 50);
             const baseQuery = `${input.query.trim()} sort:updated-desc`;
-            const batches = buildScopedSearchQueryBatches(baseQuery, input.repositories);
+            const batches = input.allRepositories
+                ? [baseQuery]
+                : buildScopedSearchQueryBatches(baseQuery, input.repositories);
             if (batches.length === 0) {
                 return { pullRequests: [], totalCount: 0, pageInfo: { hasNextPage: false, endCursor: null } };
             }
@@ -651,22 +675,24 @@ export function createGithubHttpClient(
                 };
             }
 
+            // Long allowlists split into several searches; they share one aliased request.
             const offset = parseSectionSearchOffset(input.after);
             const fetchSize = Math.min(offset + limit, 100);
-            const pages = await Promise.all(
-                batches.map((query) =>
-                    graphql<SectionSearchPullRequestsQuery>(token, SECTION_SEARCH_PULL_REQUESTS_QUERY, {
-                        query,
-                        first: fetchSize,
-                    }),
-                ),
+            const data = await graphql<Record<string, SectionSearchPullRequestsQuery["search"]>>(
+                token,
+                buildBatchedSectionSearchQuery(batches.length),
+                {
+                    ...Object.fromEntries(batches.map((query, index) => [`q${index}`, query])),
+                    first: fetchSize,
+                },
             );
+            const pages = batches.map((_, index) => data[`b${index}`]!);
 
-            const totalCount = pages.reduce((total, page) => total + page.search.issueCount, 0);
+            const totalCount = pages.reduce((total, page) => total + page.issueCount, 0);
             const byKey = new Map<string, PullRequestSummary>();
 
             for (const page of pages) {
-                for (const summary of pullRequestsFromSearchNodes(page.search.nodes)) {
+                for (const summary of pullRequestsFromSearchNodes(page.nodes)) {
                     byKey.set(summary.key, summary);
                 }
             }
@@ -676,7 +702,7 @@ export function createGithubHttpClient(
             const nextOffset = offset + pullRequests.length;
             const hasNextPage =
                 nextOffset < totalCount &&
-                (nextOffset < merged.length || pages.some((page) => page.search.pageInfo.hasNextPage));
+                (nextOffset < merged.length || pages.some((page) => page.pageInfo.hasNextPage));
 
             return {
                 pullRequests: await withLatestFailingChecks(token, pullRequests),
@@ -1525,6 +1551,67 @@ export function createGithubHttpClient(
             await mergePullRequestAsync(token, owner, name, number, payload);
         },
 
+        async findPullRequestsBelow(token, repository, number, baseRefName) {
+            const [owner = "", name = ""] = repository.split("/");
+            const data = await graphql<PullRequestsBelowQuery>(token, PULL_REQUESTS_BELOW_QUERY, {
+                owner,
+                name,
+                number,
+                base: baseRefName,
+            });
+            const nodes = data.repository?.pullRequests.nodes ?? [];
+
+            return {
+                currentIsCrossRepository: data.repository?.pullRequest?.isCrossRepository ?? false,
+                candidates: nodes.flatMap((node) =>
+                    node
+                        ? [
+                              {
+                                  number: node.number,
+                                  title: node.title,
+                                  url: node.url,
+                                  isDraft: node.isDraft,
+                                  author: node.author?.login ?? null,
+                                  headRefName: node.headRefName,
+                                  baseRefName: node.baseRefName,
+                                  isCrossRepository: node.isCrossRepository,
+                                  stack:
+                                      node.stack && node.stackEntry
+                                          ? {
+                                                number: node.stack.number,
+                                                size: node.stack.size,
+                                                position: node.stackEntry.position,
+                                            }
+                                          : null,
+                              },
+                          ]
+                        : [],
+                ),
+            };
+        },
+
+        async createPullRequestStack(token, repository, pullRequests) {
+            const [owner = "", name = ""] = repository.split("/");
+            await restJson(
+                token,
+                "POST",
+                `/repos/${owner}/${name}/stacks`,
+                { pull_requests: [...pullRequests] },
+                { apiVersion: STACKS_API_VERSION },
+            );
+        },
+
+        async addPullRequestsToStack(token, repository, stackNumber, pullRequests) {
+            const [owner = "", name = ""] = repository.split("/");
+            await restJson(
+                token,
+                "POST",
+                `/repos/${owner}/${name}/stacks/${stackNumber}/add`,
+                { pull_requests: [...pullRequests] },
+                { apiVersion: STACKS_API_VERSION },
+            );
+        },
+
         async closePullRequest(token, repository, number) {
             const [owner = "", name = ""] = repository.split("/");
             await restJson(token, "PATCH", `/repos/${owner}/${name}/pulls/${number}`, { state: "closed" });
@@ -2123,7 +2210,7 @@ export function createGithubHttpClient(
                 headers: {
                     ...authorizationHeaders(token),
                     accept: "application/vnd.github+json",
-                    "x-github-api-version": "2026-03-10",
+                    "x-github-api-version": STACKS_API_VERSION,
                 },
                 credentials,
             });
@@ -2176,7 +2263,13 @@ export function createGithubHttpClient(
         });
     }
 
-    async function restJson(token: string, method: string, path: string, body?: unknown): Promise<unknown> {
+    async function restJson(
+        token: string,
+        method: string,
+        path: string,
+        body?: unknown,
+        { apiVersion }: { apiVersion?: string } = {},
+    ): Promise<unknown> {
         let response: Response;
 
         try {
@@ -2185,6 +2278,7 @@ export function createGithubHttpClient(
                 headers: {
                     ...authorizationHeaders(token),
                     accept: "application/vnd.github+json",
+                    ...(apiVersion ? { "x-github-api-version": apiVersion } : {}),
                     ...(body === undefined ? {} : { "content-type": "application/json" }),
                 },
                 body: body === undefined ? undefined : JSON.stringify(body),
@@ -2246,7 +2340,7 @@ export function createGithubHttpClient(
                 headers: {
                     ...authorizationHeaders(token),
                     accept: "application/vnd.github+json",
-                    "x-github-api-version": "2026-03-10",
+                    "x-github-api-version": STACKS_API_VERSION,
                     ...(body === undefined ? {} : { "content-type": "application/json" }),
                 },
                 body: body === undefined ? undefined : JSON.stringify(body),
@@ -3006,10 +3100,6 @@ type SearchPullRequestsQuery = {
     search: { nodes: Array<SearchPullRequestNode | Record<string, never> | null> };
 };
 
-type CountPullRequestsQuery = {
-    search: { issueCount: number };
-};
-
 type SectionSearchPullRequestsQuery = {
     search: {
         issueCount: number;
@@ -3201,14 +3291,6 @@ const SEARCH_PULL_REQUESTS_QUERY = `
                     }
                 }
             }
-        }
-    }
-`;
-
-const COUNT_PULL_REQUESTS_QUERY = `
-    query EasyReviewCountPullRequests($query: String!) {
-        search(query: $query, type: ISSUE, first: 1) {
-            issueCount
         }
     }
 `;
@@ -3481,6 +3563,61 @@ const PULL_REQUEST_STACK_DETAIL_FIELDS = `
 
 const PULL_REQUEST_FIELDS = `${PULL_REQUEST_SUMMARY_FIELDS}${PULL_REQUEST_CHECK_COMMIT}${PULL_REQUEST_STACK_MEMBERSHIP_FIELDS}`;
 
+/** REST API version that serves the Stacks API. */
+const STACKS_API_VERSION = "2026-03-10";
+
+type PullRequestsBelowQuery = {
+    repository: {
+        pullRequest: { isCrossRepository: boolean } | null;
+        pullRequests: {
+            nodes: Array<{
+                number: number;
+                title: string;
+                url: string;
+                isDraft: boolean;
+                isCrossRepository: boolean;
+                headRefName: string;
+                baseRefName: string;
+                author: { login: string } | null;
+                stackEntry: { position: number } | null;
+                stack: { number: number; size: number } | null;
+            } | null>;
+        };
+    } | null;
+};
+
+/** About one point: no nested connections. */
+const PULL_REQUESTS_BELOW_QUERY = `
+    query EasyReviewPullRequestsBelow($owner: String!, $name: String!, $number: Int!, $base: String!) {
+        repository(owner: $owner, name: $name) {
+            pullRequest(number: $number) {
+                isCrossRepository
+            }
+            pullRequests(headRefName: $base, states: OPEN, first: 5) {
+                nodes {
+                    number
+                    title
+                    url
+                    isDraft
+                    isCrossRepository
+                    headRefName
+                    baseRefName
+                    author {
+                        login
+                    }
+                    stackEntry {
+                        position
+                    }
+                    stack {
+                        number
+                        size
+                    }
+                }
+            }
+        }
+    }
+`;
+
 const SECTION_SEARCH_PULL_REQUESTS_QUERY = `
     query EasyReviewSectionPullRequests($query: String!, $first: Int!, $after: String) {
         search(query: $query, type: ISSUE, first: $first, after: $after) {
@@ -3497,6 +3634,53 @@ const SECTION_SEARCH_PULL_REQUESTS_QUERY = `
         }
     }
 `;
+
+/** One request for every repository batch of a section search: `b0`, `b1`… share `$first`. */
+function buildBatchedSectionSearchQuery(batchCount: number): string {
+    const variables = Array.from({ length: batchCount }, (_, index) => `$q${index}: String!`).join(", ");
+    const selections = Array.from(
+        { length: batchCount },
+        (_, index) => `
+            b${index}: search(query: $q${index}, type: ISSUE, first: $first) {
+                issueCount
+                pageInfo {
+                    hasNextPage
+                    endCursor
+                }
+                nodes {
+                    ...EasyReviewSectionPullRequest
+                }
+            }`,
+    ).join("\n");
+
+    return `
+        query EasyReviewSectionPullRequestsBatched(${variables}, $first: Int!) {
+            ${selections}
+        }
+
+        fragment EasyReviewSectionPullRequest on PullRequest {
+            ${PULL_REQUEST_FIELDS}
+        }
+    `;
+}
+
+/** Counts only (`issueCount`, one node at most): each alias costs about one hundredth of a point. */
+function buildBatchedCountQuery(searchCount: number): string {
+    const variables = Array.from({ length: searchCount }, (_, index) => `$q${index}: String!`).join(", ");
+    const selections = Array.from(
+        { length: searchCount },
+        (_, index) => `
+            c${index}: search(query: $q${index}, type: ISSUE, first: 1) {
+                issueCount
+            }`,
+    ).join("\n");
+
+    return `
+        query EasyReviewCountPullRequestsBatched(${variables}) {
+            ${selections}
+        }
+    `;
+}
 
 function pullRequestsFromSearchNodes(
     nodes: Array<PullRequestNode | Record<string, never> | null>,

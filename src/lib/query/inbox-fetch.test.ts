@@ -215,7 +215,8 @@ describe("fetchInboxSections", () => {
     it("falls back to the section's own search when I have too many open PRs to share one list", async () => {
         const github = createFakeGithub();
         github.addAccount(TOKEN, { login: "quentin" });
-        for (let number = 1; number <= 101; number += 1) {
+        // More than the shared list holds (3 pages of 39), across every repository and in the allowlist.
+        for (let number = 1; number <= 120; number += 1) {
             github.addPullRequest(TOKEN, {
                 repository: "acme/api",
                 number,
@@ -244,8 +245,8 @@ describe("fetchInboxSections", () => {
         });
 
         expect(data.sectionPullRequests["returned-to-you"]?.map((entry) => entry.number)).toEqual([500]);
-        // Two pages of 50 scanned out of 102: the count stays an upper bound, and more can be loaded.
-        expect(data.sectionCounts["returned-to-you"]).toBe(1 + 2);
+        // Two pages of 39 scanned out of 121: 77 rejected, so the count stays an upper bound and more can load.
+        expect(data.sectionCounts["returned-to-you"]).toBe(121 - 77);
         expect(data.sectionPagination["returned-to-you"]?.hasNextPage).toBe(true);
     });
 

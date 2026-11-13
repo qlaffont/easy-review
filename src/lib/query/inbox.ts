@@ -7,10 +7,12 @@ import type { GithubClient } from "#/lib/session/ports.ts";
 
 import { CACHE_POLICY } from "#/lib/query/cache-policy.ts";
 import {
+    countOnlySectionQueries,
     emptyInboxQueryData,
     fetchInboxSection,
     fetchSectionPool,
     mergeSectionResultsIntoInbox,
+    type SectionCountLoader,
     type SectionPoolLoader,
 } from "#/lib/query/inbox-fetch.ts";
 import {
@@ -59,6 +61,36 @@ export function inboxPoolLoader(
         });
 }
 
+/**
+ * Count loader for the sections that only need a count: the first section to ask counts them all in
+ * one GitHub request (see `countPullRequestsByQuery`), the others reuse that answer.
+ */
+export function inboxCountLoader(
+    queryClient: QueryClient,
+    params: {
+        github: GithubClient;
+        token: string;
+        viewerLogin: string;
+        selected: ReadonlyArray<string>;
+        queries: Iterable<string>;
+    },
+): SectionCountLoader {
+    const { github, token, viewerLogin, selected } = params;
+    const repositories = [...selected].sort().join(",");
+    const queries = [...new Set(params.queries)].sort();
+    return async (query) => {
+        const batch = queries.includes(query) ? queries : [query];
+        const counts = await queryClient.fetchQuery({
+            queryKey: queryKeys.inbox.pool(viewerLogin, repositories, `counts\n${batch.join("\n")}`),
+            queryFn: () => github.countPullRequestsByQuery(token, { queries: batch, repositories: selected }),
+            staleTime: INBOX_POOL_REUSE_MS,
+            gcTime: CACHE_POLICY.inbox.staleTime,
+            retry: false,
+        });
+        return counts[query] ?? 0;
+    };
+}
+
 export function getInboxQueryData(queryClient: QueryClient, login: string): InboxQueryData | undefined {
     return queryClient.getQueryData(inboxQueryKey(login));
 }
@@ -98,6 +130,8 @@ export async function fetchInboxSectionWithDeps(
         syncInboxData: (data: InboxQueryData) => void;
         viewerLogin: string;
         selected: ReadonlyArray<string>;
+        /** Sections that only need a count right now (read at fetch time: expand state moves). */
+        countOnlyQueries?: () => ReadonlyMap<string, string>;
     },
     definition: InboxSectionDefinition,
     signal?: AbortSignal,
@@ -118,6 +152,7 @@ export async function fetchInboxSectionWithDeps(
 
     try {
         const token = requireToken();
+        const countOnly = deps.countOnlyQueries?.() ?? new Map<string, string>();
         const result = await fetchInboxSection({
             github,
             token,
@@ -127,6 +162,9 @@ export async function fetchInboxSectionWithDeps(
             existing,
             signal,
             loadPool: inboxPoolLoader(queryClient, { github, token, viewerLogin, selected }),
+            loadCount: countOnly.has(definition.id)
+                ? inboxCountLoader(queryClient, { github, token, viewerLogin, selected, queries: countOnly.values() })
+                : undefined,
         });
 
         let merged = emptyInboxQueryData();
@@ -170,6 +208,12 @@ export function useInboxQuery() {
             syncInboxData: session.syncInboxData.bind(session),
             viewerLogin: login,
             selected,
+            countOnlyQueries: () =>
+                countOnlySectionQueries(
+                    session.state.state.inbox.sectionLayout,
+                    session.state.state.inbox.expandedSections,
+                    login,
+                ),
         }),
         [session, queryClient, login, selected],
     );

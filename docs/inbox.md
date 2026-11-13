@@ -37,7 +37,11 @@ Notable flows:
 | Another tab just loaded the inbox | Its data is adopted as is, without a GitHub call |
 | GitHub budget under 10 % | Automatic refreshes and background sync pause until GitHub's hourly window resets; the header says until when. Manual **Refresh** still works |
 
-**Returned to you**, **Waiting for reviewers (me)** and **Approved** share one search of your open pull requests, loaded in full (up to 100) and sorted locally, so their rows and counts are exact. A section whose filter you change away from your own open pull requests uses its own search again. Above 100 open pull requests they fall back to their own searches, whose count is then an upper bound until **Load more** reaches the end.
+### What a refresh loads
+
+- **Returned to you**, **Waiting for reviewers (me)** and **Approved** share one search of your open pull requests across every repository, loaded in full (up to 117) and narrowed to the selected repositories locally, so their rows and counts are exact. A section whose filter you change away from your own open pull requests uses its own search again. Beyond 117 open pull requests they fall back to their own searches, whose count is then an upper bound until **Load more** reaches the end.
+- A **collapsed** section without **Notify** loads only its count, when GitHub search applies its filter exactly. All such counts go out in one request. Opening the section loads its rows; **Open all in new tabs** loads them first too. Its rows are then also missing from the ⌘K list until it opens (typing still searches GitHub).
+- Other sections load their first page. With many selected repositories, GitHub needs several searches per section (each query is capped at 256 characters); they go out as one request.
 
 ## Background notifications (optional)
 

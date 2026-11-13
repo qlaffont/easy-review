@@ -110,6 +110,8 @@ export type FakeGithub = GithubClient & {
     deferNext(): () => void;
     /** Names of the client methods called so far, in order. */
     calls: Array<string>;
+    /** Every section search, in order: its query and whether it ignored the allowlist. */
+    sectionSearches: Array<{ query: string; allRepositories: boolean }>;
 };
 
 export type PullRequestInput = Partial<PullRequestDetail> & { repository: string; number: number };
@@ -278,6 +280,7 @@ export function createFakeGithub(): FakeGithub {
     const fileDiffQueries: Array<string> = [];
     const submittedReviews: FakeGithub["submittedReviews"] = [];
     const calls: Array<string> = [];
+    const sectionSearches: Array<{ query: string; allRepositories: boolean }> = [];
     let forcedError: EasyReviewError | null = null;
     let forcedErrorAll: EasyReviewError | null = null;
     let gate: Promise<void> | null = null;
@@ -417,6 +420,25 @@ export function createFakeGithub(): FakeGithub {
         return requirePullRequest(token, repository, number);
     }
 
+    /** Make these pull requests, bottom to top, the whole of one GitHub stack. */
+    function writeStack(
+        token: string,
+        repository: string,
+        stackNumber: number,
+        baseRefName: string,
+        numbers: ReadonlyArray<number>,
+    ): void {
+        numbers.forEach((number, index) => {
+            patchPullRequest(token, repository, number, {
+                githubStack: { number: stackNumber, size: numbers.length, position: index + 1, baseRefName },
+            });
+        });
+        const layers = numbers.map((number) => toSummary(requirePullRequest(token, repository, number)));
+        for (const number of numbers) {
+            patchPullRequest(token, repository, number, { githubStackPullRequests: layers });
+        }
+    }
+
     function requireOpen(pullRequest: PullRequestDetail): void {
         if (pullRequest.state !== "open") {
             throw new EasyReviewError("unknown", `${pullRequest.repository}#${pullRequest.number} is not open.`);
@@ -466,6 +488,7 @@ export function createFakeGithub(): FakeGithub {
 
     return {
         calls,
+        sectionSearches,
         pullRequestQueries,
         pullRequestQueryOptions,
         relatedPullRequestQueries,
@@ -766,11 +789,29 @@ export function createFakeGithub(): FakeGithub {
                 return total;
             });
         },
+        countPullRequestsByQuery(token, input) {
+            return respond("countPullRequestsByQuery", () => {
+                authenticate(token);
+                const viewerLogin = accounts.get(token)?.login ?? "";
+                const wanted = new Set(input.repositories);
+                return Object.fromEntries(
+                    input.queries.map((query) => [
+                        query,
+                        (pullRequestsByToken.get(token) ?? []).filter(
+                            (pullRequest) =>
+                                wanted.has(pullRequest.repository) &&
+                                matchesSectionSearchCountQuery(toSummary(pullRequest), query.trim(), viewerLogin),
+                        ).length,
+                    ]),
+                );
+            });
+        },
         fetchSectionPullRequests(token, input) {
             return respond("fetchSectionPullRequests", () => {
                 authenticate(token);
+                sectionSearches.push({ query: input.query, allRepositories: input.allRepositories === true });
                 const query = input.query.trim();
-                if (!query || input.repositories.length === 0) {
+                if (!query || (input.repositories.length === 0 && !input.allRepositories)) {
                     return {
                         pullRequests: [],
                         totalCount: 0,
@@ -787,7 +828,7 @@ export function createFakeGithub(): FakeGithub {
                 const matching = (pullRequestsByToken.get(token) ?? [])
                     .filter(
                         (pullRequest) =>
-                            wanted.has(pullRequest.repository) &&
+                            (input.allRepositories || wanted.has(pullRequest.repository)) &&
                             matchesSectionSearchCountQuery(toSummary(pullRequest), baseQuery, viewerLogin),
                     )
                     .sort(comparePullRequestsByUpdatedAtDesc);
@@ -1261,6 +1302,81 @@ export function createFakeGithub(): FakeGithub {
                         mergeOpenPullRequest(token, repository, layer.number);
                     }
                 }
+            });
+        },
+        findPullRequestsBelow(token, repository, number, baseRefName) {
+            return respond("findPullRequestsBelow", () => {
+                authenticate(token);
+                const candidates = (pullRequestsByToken.get(token) ?? [])
+                    .filter(
+                        (pullRequest) =>
+                            pullRequest.repository === repository &&
+                            pullRequest.state === "open" &&
+                            pullRequest.headRefName === baseRefName,
+                    )
+                    .map((pullRequest) => ({
+                        number: pullRequest.number,
+                        title: pullRequest.title,
+                        url: pullRequest.url,
+                        isDraft: pullRequest.isDraft,
+                        author: pullRequest.author,
+                        headRefName: pullRequest.headRefName,
+                        baseRefName: pullRequest.baseRefName,
+                        isCrossRepository: false,
+                        stack: pullRequest.githubStack
+                            ? {
+                                  number: pullRequest.githubStack.number,
+                                  size: pullRequest.githubStack.size,
+                                  position: pullRequest.githubStack.position,
+                              }
+                            : null,
+                    }));
+                requirePullRequest(token, repository, number);
+                return { currentIsCrossRepository: false, candidates };
+            });
+        },
+        createPullRequestStack(token, repository, numbers) {
+            return respond("createPullRequestStack", () => {
+                authenticate(token);
+                const layers = numbers.map((number) => requirePullRequest(token, repository, number));
+                const chained = layers.every(
+                    (layer, index) => index === 0 || layer.baseRefName === layers[index - 1]!.headRefName,
+                );
+                if (layers.length < 2 || !chained || layers.some((layer) => layer.githubStack)) {
+                    throw new EasyReviewError("unknown", "These pull requests can't form a valid stack.");
+                }
+                const stackNumber =
+                    Math.max(
+                        0,
+                        ...(pullRequestsByToken.get(token) ?? []).map(
+                            (pullRequest) => pullRequest.githubStack?.number ?? 0,
+                        ),
+                    ) + 1;
+                writeStack(token, repository, stackNumber, layers[0]!.baseRefName, numbers);
+            });
+        },
+        addPullRequestsToStack(token, repository, stackNumber, numbers) {
+            return respond("addPullRequestsToStack", () => {
+                authenticate(token);
+                const members = (pullRequestsByToken.get(token) ?? [])
+                    .filter(
+                        (pullRequest) =>
+                            pullRequest.repository === repository && pullRequest.githubStack?.number === stackNumber,
+                    )
+                    .sort((left, right) => left.githubStack!.position - right.githubStack!.position);
+                const top = members.at(-1);
+                const added = numbers.map((number) => requirePullRequest(token, repository, number));
+                const chained = added.every(
+                    (layer, index) =>
+                        layer.baseRefName === (index === 0 ? top?.headRefName : added[index - 1]!.headRefName),
+                );
+                if (!top || !chained || added.some((layer) => layer.githubStack)) {
+                    throw new EasyReviewError("unknown", "These pull requests can't be appended to the stack.");
+                }
+                writeStack(token, repository, stackNumber, top.githubStack!.baseRefName, [
+                    ...members.map((member) => member.number),
+                    ...numbers,
+                ]);
             });
         },
         closePullRequest(token, repository, number) {

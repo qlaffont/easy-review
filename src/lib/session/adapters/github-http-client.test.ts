@@ -1624,3 +1624,160 @@ describe("updateReviewComment", () => {
         });
     });
 });
+
+describe("section searches over a long allowlist", () => {
+    const repositories = Array.from({ length: 12 }, (_, index) => `latomate/medical-service-${index}`);
+
+    function recordingFetch(respond: (body: { query: string; variables: Record<string, unknown> }) => unknown) {
+        const requests: Array<{ query: string; variables: Record<string, unknown> }> = [];
+        const fetchImpl = (async (_url: string, init: RequestInit) => {
+            const body = JSON.parse(String(init.body)) as { query: string; variables: Record<string, unknown> };
+            requests.push(body);
+            return new Response(JSON.stringify({ data: respond(body) }), { status: 200 });
+        }) as unknown as typeof fetch;
+        return { requests, fetchImpl };
+    }
+
+    it("sends every repository batch of a section search as one request", async () => {
+        const { requests, fetchImpl } = recordingFetch((body) =>
+            Object.fromEntries(
+                Object.keys(body.variables)
+                    .filter((name) => name.startsWith("q"))
+                    .map((_, index) => [
+                        `b${index}`,
+                        {
+                            issueCount: 1,
+                            pageInfo: { hasNextPage: false, endCursor: null },
+                            nodes: [pullRequestNode(repositories[index]!, index + 1)],
+                        },
+                    ]),
+            ),
+        );
+        const github = createGithubHttpClient(fetchImpl);
+
+        const page = await github.fetchSectionPullRequests("token", {
+            query: "is:pr is:open review-requested:quentin",
+            repositories,
+            limit: 10,
+        });
+
+        expect(requests).toHaveLength(1);
+        expect(requests[0]!.query).toContain("query EasyReviewSectionPullRequestsBatched");
+        const batches = Object.keys(requests[0]!.variables).filter((name) => name.startsWith("q")).length;
+        expect(batches).toBeGreaterThan(1);
+        expect(page.totalCount).toBe(batches);
+        expect(page.pullRequests).toHaveLength(batches);
+    });
+
+    it("searches every repository in one request when asked to ignore the allowlist", async () => {
+        const { requests, fetchImpl } = recordingFetch(() => ({
+            search: { issueCount: 0, pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] },
+        }));
+        const github = createGithubHttpClient(fetchImpl);
+
+        await github.fetchSectionPullRequests("token", {
+            query: "is:pr author:quentin is:open",
+            repositories,
+            allRepositories: true,
+            limit: 39,
+        });
+
+        expect(requests).toHaveLength(1);
+        expect(requests[0]!.variables.query).toBe("is:pr author:quentin is:open sort:updated-desc");
+    });
+
+    it("counts several sections over every repository batch in one request", async () => {
+        const { requests, fetchImpl } = recordingFetch((body) =>
+            Object.fromEntries(Object.keys(body.variables).map((name) => [`c${name.slice(1)}`, { issueCount: 2 }])),
+        );
+        const github = createGithubHttpClient(fetchImpl);
+
+        const counts = await github.countPullRequestsByQuery("token", {
+            queries: ["is:pr is:open draft:true author:quentin", "is:pr is:merged merged:>2026-11-06"],
+            repositories,
+        });
+
+        expect(requests).toHaveLength(1);
+        const searches = Object.keys(requests[0]!.variables).length;
+        expect(searches).toBeGreaterThan(2);
+        expect(counts["is:pr is:open draft:true author:quentin"]! + counts["is:pr is:merged merged:>2026-11-06"]!).toBe(
+            searches * 2,
+        );
+    });
+});
+
+describe("GitHub stacks", () => {
+    function recording(body: unknown, status = 200) {
+        const requests: Array<{ url: string; init: RequestInit }> = [];
+        const fetchImpl = (async (url: string, init: RequestInit) => {
+            requests.push({ url, init });
+            return new Response(JSON.stringify(body), { status });
+        }) as unknown as typeof fetch;
+        return { requests, github: createGithubHttpClient(fetchImpl) };
+    }
+
+    it("reads the open pull requests below and their stack membership", async () => {
+        const { requests, github } = recording({
+            data: {
+                repository: {
+                    pullRequest: { isCrossRepository: false },
+                    pullRequests: {
+                        nodes: [
+                            {
+                                number: 677,
+                                title: "List DMP documents",
+                                url: "https://github.com/acme/api/pull/677",
+                                isDraft: false,
+                                isCrossRepository: false,
+                                headRefName: "feat/list",
+                                baseRefName: "main",
+                                author: { login: "qlaffont" },
+                                stackEntry: { position: 2 },
+                                stack: { number: 4, size: 2 },
+                            },
+                        ],
+                    },
+                },
+            },
+        });
+
+        const lookup = await github.findPullRequestsBelow("token", "acme/api", 682, "feat/list");
+
+        expect(JSON.parse(String(requests[0]!.init.body)).variables).toEqual({
+            owner: "acme",
+            name: "api",
+            number: 682,
+            base: "feat/list",
+        });
+        expect(lookup).toEqual({
+            currentIsCrossRepository: false,
+            candidates: [
+                expect.objectContaining({
+                    number: 677,
+                    author: "qlaffont",
+                    stack: { number: 4, size: 2, position: 2 },
+                }),
+            ],
+        });
+    });
+
+    it("creates a stack bottom to top on the Stacks API version", async () => {
+        const { requests, github } = recording({ number: 5 }, 201);
+
+        await github.createPullRequestStack("token", "acme/api", [677, 682]);
+
+        expect(requests[0]!.url).toBe("https://api.github.com/repos/acme/api/stacks");
+        expect(requests[0]!.init.method).toBe("POST");
+        expect(JSON.parse(String(requests[0]!.init.body))).toEqual({ pull_requests: [677, 682] });
+        expect((requests[0]!.init.headers as Record<string, string>)["x-github-api-version"]).toBe("2026-03-10");
+    });
+
+    it("appends on top of an existing stack", async () => {
+        const { requests, github } = recording({ number: 4 });
+
+        await github.addPullRequestsToStack("token", "acme/api", 4, [682]);
+
+        expect(requests[0]!.url).toBe("https://api.github.com/repos/acme/api/stacks/4/add");
+        expect(JSON.parse(String(requests[0]!.init.body))).toEqual({ pull_requests: [682] });
+    });
+});

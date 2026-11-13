@@ -75,6 +75,8 @@ describe("loading a pull request", () => {
 
     it("paints the Inbox row while the full overview is still loading", async () => {
         const session = await connectedSession();
+        // Only sections showing rows load them: put the PR in one that is open by default.
+        await github.requestReviewers(TOKEN, "acme/api", 1, [VIEWER]);
         await session.loadInbox();
 
         const release = github.deferNext();
@@ -177,5 +179,88 @@ describe("cache and revalidation", () => {
         await pending;
 
         expect(session.getPullRequestPage("acme/api", 1).detail).toBeNull();
+    });
+});
+
+describe("stacking onto the pull request below", () => {
+    function addChain() {
+        github.addPullRequest(TOKEN, {
+            repository: "acme/api",
+            number: 10,
+            author: VIEWER,
+            headRefName: "feat/list",
+            baseRefName: "main",
+        });
+        github.addPullRequest(TOKEN, {
+            repository: "acme/api",
+            number: 11,
+            author: VIEWER,
+            headRefName: "feat/view",
+            baseRefName: "feat/list",
+        });
+    }
+
+    it("finds the open pull request whose branch is this one's base", async () => {
+        addChain();
+
+        const lookup = await github.findPullRequestsBelow(TOKEN, "acme/api", 11, "feat/list");
+
+        expect(lookup.candidates.map((candidate) => candidate.number)).toEqual([10]);
+        expect(lookup.candidates[0]?.stack).toBeNull();
+    });
+
+    it("creates a stack of the two, the one below at the bottom", async () => {
+        addChain();
+        const session = await connectedSession();
+
+        await session.stackPullRequest("acme/api", 11, {
+            kind: "create",
+            below: (await github.findPullRequestsBelow(TOKEN, "acme/api", 11, "feat/list")).candidates[0]!,
+            pullRequests: [10, 11],
+        });
+
+        const page = session.getPullRequestPage("acme/api", 11);
+        expect(page.detail?.githubStack).toMatchObject({ size: 2, position: 2, baseRefName: "main" });
+        expect(page.detail?.githubStackPullRequests.map((layer) => layer.number)).toEqual([10, 11]);
+    });
+
+    it("adds this pull request on top of the stack the one below tops", async () => {
+        addChain();
+        github.addPullRequest(TOKEN, {
+            repository: "acme/api",
+            number: 12,
+            author: VIEWER,
+            headRefName: "feat/edit",
+            baseRefName: "feat/view",
+        });
+        await github.createPullRequestStack(TOKEN, "acme/api", [10, 11]);
+        const below = (await github.findPullRequestsBelow(TOKEN, "acme/api", 12, "feat/view")).candidates[0]!;
+        expect(below.stack).toMatchObject({ size: 2, position: 2 });
+        const session = await connectedSession();
+
+        await session.stackPullRequest("acme/api", 12, {
+            kind: "add",
+            below,
+            stackNumber: below.stack!.number,
+            pullRequests: [12],
+        });
+
+        expect(session.getPullRequestPage("acme/api", 12).detail?.githubStack).toMatchObject({
+            size: 3,
+            position: 3,
+        });
+    });
+
+    it("reports GitHub refusing the stack", async () => {
+        addChain();
+        const session = await connectedSession();
+
+        await expect(
+            session.stackPullRequest("acme/api", 11, {
+                kind: "create",
+                below: (await github.findPullRequestsBelow(TOKEN, "acme/api", 11, "feat/list")).candidates[0]!,
+                pullRequests: [11, 10],
+            }),
+        ).rejects.toThrow("can't form a valid stack");
     });
 });

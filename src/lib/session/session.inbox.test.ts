@@ -262,8 +262,10 @@ describe("GitHub budget", () => {
 
         await session.loadInbox();
 
-        // Needs your review + Waiting for reviewers search on their own; the three "my PR" sections share one.
-        expect(sectionFetchCalls()).toBe(3);
+        // Needs your review searches on its own, the three "my PR" sections share one list, and
+        // Waiting for reviewers (collapsed, silent) is only counted.
+        expect(sectionFetchCalls()).toBe(2);
+        expect(github.calls.filter((call) => call === "countPullRequestsByQuery")).toHaveLength(1);
         expect(sectionOf(session, "returned-to-you")?.pullRequests.map((entry) => entry.number)).toEqual([3]);
         expect(sectionOf(session, "waiting-for-reviewers-me")?.pullRequests.map((entry) => entry.number)).toEqual([2]);
         expect(sectionOf(session, "approved")?.pullRequests.map((entry) => entry.number)).toEqual([4]);
@@ -289,8 +291,37 @@ describe("GitHub budget", () => {
 
         await session.loadInbox();
 
-        expect(sectionFetchCalls()).toBe(1 + 4);
+        // Needs your review, Returned to you on its own, and the list Waiting (me) + Approved share.
+        expect(sectionFetchCalls()).toBe(1 + 3);
         expect(sectionOf(session, "returned-to-you")?.pullRequests.map((entry) => entry.key)).toEqual(["acme/api#1"]);
+    });
+
+    it("shares my open PRs across every repository, keeping only the allowlisted ones", async () => {
+        github.addPullRequest(TOKEN, { repository: "acme/other", number: 9, author: VIEWER });
+        const session = await connectedSession(["acme/api"]);
+
+        await session.loadInbox();
+
+        const shared = github.sectionSearches.filter((search) => search.query.includes(`author:${VIEWER}`));
+        expect(shared).toEqual([{ query: `is:pr author:${VIEWER} is:open draft:false`, allRepositories: true }]);
+        expect(sectionOf(session, "waiting-for-reviewers-me")?.pullRequests.map((entry) => entry.key)).toEqual([
+            "acme/api#2",
+        ]);
+    });
+
+    it("counts collapsed sections without loading their rows, unless they notify", async () => {
+        github.addPullRequest(TOKEN, { repository: "acme/api", number: 5, author: "octocat" });
+        const session = await connectedSession();
+        await session.loadInbox();
+        expect(sectionOf(session, "waiting-for-reviewers")).toMatchObject({ count: 1, pullRequests: [] });
+
+        // Notifications must know which pull request entered: such a section keeps its rows.
+        await session.setSectionNotifyOnNewPullRequest("waiting-for-reviewers", true);
+        await session.refreshInbox();
+
+        expect(sectionOf(session, "waiting-for-reviewers")?.pullRequests.map((entry) => entry.key)).toEqual([
+            "acme/api#5",
+        ]);
     });
 
     it("adopts Inbox data another tab loaded without calling GitHub", async () => {
@@ -392,6 +423,10 @@ describe("load more", () => {
 
         await session.loadInbox();
         await session.setSectionHidden("merging-and-recently-merged", false);
+        // Collapsed and silent: only the count is loaded.
+        expect(sectionOf(session, "merging-and-recently-merged")).toMatchObject({ count: 12, pullRequests: [] });
+
+        await session.toggleSection("merging-and-recently-merged");
 
         const section = sectionOf(session, "merging-and-recently-merged");
         expect(section?.count).toBe(12);
@@ -412,6 +447,7 @@ describe("load more", () => {
 
         await session.loadInbox();
         await session.setSectionHidden("merging-and-recently-merged", false);
+        await session.toggleSection("merging-and-recently-merged");
         await session.loadMoreInboxSection("merging-and-recently-merged");
 
         const section = sectionOf(session, "merging-and-recently-merged");

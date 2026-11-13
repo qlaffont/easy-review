@@ -140,9 +140,14 @@ async function mapWithConcurrency<TItem, TResult>(
     return results;
 }
 
-/** Page size and page cap of a shared section search: beyond this many rows, sections search on their own. */
-const SECTION_POOL_PAGE_SIZE = 50;
-const SECTION_POOL_MAX_PAGES = 2;
+/**
+ * Rows per search page when every row must come back. GitHub charges about one hundredth of a point
+ * per connection asked for: a row brings 5 (reviews, review requests, labels, assignees, last commit),
+ * so 39 rows cost 1 + 39 × 5 = 196 → 2 points, where 50 cost 3 (measured).
+ */
+export const FULL_LIST_PAGE_SIZE = 39;
+/** Pages of a shared section search: beyond this many rows, sections search on their own. */
+const SECTION_POOL_MAX_PAGES = 3;
 
 /** Every pull request behind a shared section search, and whether GitHub had no more. */
 export type SectionPool = {
@@ -152,14 +157,14 @@ export type SectionPool = {
 
 export type SectionPoolLoader = (query: string) => Promise<SectionPool>;
 
-/** Load a shared section search in full, up to {@link SECTION_POOL_MAX_PAGES} pages. */
-export async function fetchSectionPool(params: {
+async function pageThroughSearch(params: {
     github: GithubClient;
     token: string;
     query: string;
     repositories: ReadonlyArray<string>;
+    allRepositories: boolean;
 }): Promise<SectionPool> {
-    const { github, token, query, repositories } = params;
+    const { github, token, query, repositories, allRepositories } = params;
     let pullRequests: Array<PullRequestSummary> = [];
     let after: string | null = null;
 
@@ -167,7 +172,8 @@ export async function fetchSectionPool(params: {
         const result = await github.fetchSectionPullRequests(token, {
             query,
             repositories: [...repositories],
-            limit: SECTION_POOL_PAGE_SIZE,
+            allRepositories,
+            limit: FULL_LIST_PAGE_SIZE,
             after,
         });
         pullRequests = mergePullRequestSummaries(pullRequests, result.pullRequests);
@@ -184,6 +190,32 @@ export async function fetchSectionPool(params: {
     return { pullRequests, complete: false };
 }
 
+/**
+ * Load a shared section search in full. It is already narrowed to the viewer, so it first runs
+ * across every repository (one request, however long the allowlist) and keeps the allowlisted rows;
+ * only when that is too long to load does it page through the allowlist-scoped search instead.
+ */
+export async function fetchSectionPool(params: {
+    github: GithubClient;
+    token: string;
+    query: string;
+    repositories: ReadonlyArray<string>;
+}): Promise<SectionPool> {
+    const allowed = new Set(params.repositories);
+    const everywhere = await pageThroughSearch({ ...params, allRepositories: true });
+    if (everywhere.complete) {
+        return {
+            pullRequests: everywhere.pullRequests.filter((pullRequest) => allowed.has(pullRequest.repository)),
+            complete: true,
+        };
+    }
+
+    return pageThroughSearch({ ...params, allRepositories: false });
+}
+
+/** Counts several section searches at once; resolves one query's count. */
+export type SectionCountLoader = (query: string) => Promise<number>;
+
 /** Share one load per query between the sections asking for it in the same refresh. */
 export function memoizeSectionPoolLoader(load: SectionPoolLoader): SectionPoolLoader {
     const loads = new Map<string, Promise<SectionPool>>();
@@ -199,6 +231,37 @@ export function memoizeSectionPoolLoader(load: SectionPoolLoader): SectionPoolLo
     };
 }
 
+/** The section's search when GitHub applies its filter exactly, so `issueCount` is its count. */
+export function exactSectionSearchQuery(filter: SectionFilter, viewerLogin: string): string | null {
+    if (sectionFilterNeedsClientFilter(filter, viewerLogin)) {
+        return null;
+    }
+    return sectionFilterToSearchQuery(filter, viewerLogin);
+}
+
+/**
+ * Sections that only need a count this time: visible, collapsed, without notifications (those must
+ * know which pull requests entered), and searchable exactly. Keyed by section id.
+ */
+export function countOnlySectionQueries(
+    layout: ReadonlyArray<InboxSectionLayoutEntry>,
+    expandedSections: ReadonlyArray<InboxSectionId>,
+    viewerLogin: string,
+): Map<InboxSectionId, string> {
+    const expanded = new Set(expandedSections);
+    const queries = new Map<InboxSectionId, string>();
+    for (const entry of layout) {
+        if (entry.hidden || expanded.has(entry.id) || entry.notifyOnNewPullRequest) {
+            continue;
+        }
+        const query = exactSectionSearchQuery(entry.filter, viewerLogin);
+        if (query) {
+            queries.set(entry.id, query);
+        }
+    }
+    return queries;
+}
+
 /**
  * Load one inbox section: from a shared search when it has one (exact rows and count), else from
  * its own GitHub search, else from the cached pool when GitHub search cannot express the filter.
@@ -212,11 +275,27 @@ export async function fetchInboxSection(params: {
     existing: InboxQueryData;
     signal?: AbortSignal;
     loadPool?: SectionPoolLoader;
+    /**
+     * Set when the section only needs its count (collapsed, no notifications): an exact search then
+     * loads no rows. Rows load when the section opens, or page by page through Load more.
+     */
+    loadCount?: SectionCountLoader;
 }): Promise<SectionFetchResult> {
     const { github, token, viewerLogin, selected, definition, existing, signal } = params;
 
     if (signal?.aborted) {
         throw new DOMException("Aborted", "AbortError");
+    }
+
+    const countQuery = params.loadCount ? exactSectionSearchQuery(definition.filter, viewerLogin) : null;
+    if (countQuery && params.loadCount) {
+        const count = await params.loadCount(countQuery);
+        return {
+            id: definition.id,
+            pullRequests: [],
+            totalCount: count,
+            pageInfo: { hasNextPage: count > 0, endCursor: null },
+        };
     }
 
     const selectedSet = new Set(selected);
@@ -307,6 +386,8 @@ export async function fetchInboxSections(params: {
     onSectionLoaded?: (result: SectionFetchResult) => void;
     /** Shared section searches; defaults to one load per query for this call. */
     loadPool?: SectionPoolLoader;
+    /** Sections that only need a count, and the loader that counts them together. */
+    countOnly?: { sectionIds: ReadonlySet<InboxSectionId>; loadCount: SectionCountLoader };
 }): Promise<InboxFetchResult> {
     const { github, token, viewerLogin, selected, sectionLayout, existing, sectionIds, signal, onSectionLoaded } =
         params;
@@ -340,6 +421,7 @@ export async function fetchInboxSections(params: {
                 existing,
                 signal,
                 loadPool,
+                loadCount: params.countOnly?.sectionIds.has(definition.id) ? params.countOnly.loadCount : undefined,
             });
             onSectionLoaded?.(result);
             return result;
@@ -406,7 +488,7 @@ export function patchInboxPullRequest(
  * Pages one fetch may scan while the section filter keeps dropping rows, and their size. A filter
  * GitHub expresses exactly needs one page of {@link INBOX_SECTION_LOAD_SIZE}.
  */
-const CLIENT_FILTERED_SCAN_PAGE_SIZE = 50;
+const CLIENT_FILTERED_SCAN_PAGE_SIZE = FULL_LIST_PAGE_SIZE;
 const CLIENT_FILTERED_SCAN_MAX_PAGES = 2;
 
 export type SectionSearchScan = {

@@ -47,6 +47,10 @@ describe("isAllowedGithubProxyRequest", () => {
         ).toBe(true);
         expect(isAllowedGithubProxyRequest("PUT", "/repos/acme/api/pulls/1/merge", new ArrayBuffer(0))).toBe(true);
         expect(isAllowedGithubProxyRequest("GET", "/repos/acme/api/stacks", undefined)).toBe(true);
+        expect(isAllowedGithubProxyRequest("POST", "/repos/acme/api/stacks", new ArrayBuffer(0))).toBe(true);
+        expect(isAllowedGithubProxyRequest("POST", "/repos/acme/api/stacks/4/add", new ArrayBuffer(0))).toBe(true);
+        expect(isAllowedGithubProxyRequest("POST", "/repos/acme/api/stacks/4/unstack", new ArrayBuffer(0))).toBe(false);
+        expect(isAllowedGithubProxyRequest("DELETE", "/repos/acme/api/stacks", new ArrayBuffer(0))).toBe(false);
         expect(isAllowedGithubProxyRequest("PUT", "/repos/acme/api/pulls/1/merge-async", new ArrayBuffer(0))).toBe(
             true,
         );

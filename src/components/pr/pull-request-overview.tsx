@@ -42,6 +42,7 @@ import { ReactionBar } from "#/components/pr/reaction-bar.tsx";
 import { RelatedPullRequestsSidebar } from "#/components/pr/related-pull-requests.tsx";
 import { ReviewChangesMenu } from "#/components/pr/review-changes-menu.tsx";
 import { PullRequestSidebarMetadata } from "#/components/pr/sidebar-metadata.tsx";
+import { StackSuggestion } from "#/components/pr/stack-suggestion.tsx";
 import { SuggestionBatchBar } from "#/components/pr/suggestion-apply.tsx";
 import { useMarkdownTaskToggle } from "#/components/pr/use-markdown-task-toggle.ts";
 import { Button } from "#/components/ui/button.tsx";
@@ -250,6 +251,7 @@ export function PullRequestOverview({
                     <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_16rem]">
                         <div id="conversation" className="flex min-w-0 scroll-mt-20 flex-col gap-5">
                             <PullRequestStackPanel repository={repository} number={number} detail={page.detail} />
+                            <StackSuggestion repository={repository} number={number} detail={page.detail} />
                             <Description
                                 detail={page.detail}
                                 headline={headline}

@@ -27,6 +27,7 @@ import type {
 } from "#/lib/session/inbox-sections.ts";
 import type { GithubClient, GithubViewer, InboxPullRequestPageInfo, KeyValueStore } from "#/lib/session/ports.ts";
 import type { SectionFilter, SectionRecipeId } from "#/lib/session/section-filters.ts";
+import type { StackSuggestion } from "#/lib/session/stack-suggestion.ts";
 import type {
     DiffSide,
     FileDiff,
@@ -55,6 +56,7 @@ import type {
 import { shouldDeleteHeadBranchOnMerge } from "#/lib/diff-preferences.ts";
 import { CACHE_POLICY } from "#/lib/query/cache-policy.ts";
 import {
+    countOnlySectionQueries,
     emptyInboxQueryData,
     fetchInboxSections,
     mergePullRequestSummaries,
@@ -65,6 +67,7 @@ import {
 } from "#/lib/query/inbox-fetch.ts";
 import {
     getInboxQueryData,
+    inboxCountLoader,
     inboxPoolLoader,
     inboxSectionQueryKey,
     inboxSectionQueryPrefix,
@@ -1027,6 +1030,7 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
             existing,
             sectionIds,
             loadPool: inboxPoolLoader(queryClient, { github, token, viewerLogin, selected }),
+            countOnly: countOnlyLoad(viewerLogin, token, selected),
             onSectionLoaded: (result) => {
                 if (attempt !== undefined && attempt !== latestInboxLoad) {
                     return;
@@ -1061,6 +1065,25 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
         return { successes, failure };
     }
 
+    /** Collapsed sections without notifications: counted together, rows left for when they open. */
+    function countOnlyLoad(viewerLogin: string, token: string, selected: ReadonlyArray<string>) {
+        const queries = countOnlySectionQueries(
+            state.state.inbox.sectionLayout,
+            state.state.inbox.expandedSections,
+            viewerLogin,
+        );
+        return {
+            sectionIds: new Set(queries.keys()),
+            loadCount: inboxCountLoader(queryClient, {
+                github,
+                token,
+                viewerLogin,
+                selected,
+                queries: queries.values(),
+            }),
+        };
+    }
+
     async function ensureInboxSectionLoaded(sectionId: InboxSectionId): Promise<void> {
         const { inbox } = state.state;
         const pullRequests = inbox.sectionPullRequests[sectionId] ?? [];
@@ -1069,7 +1092,13 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
             return;
         }
 
-        if (!(sectionId in inbox.sectionCounts) || pullRequests.some(pullRequestSummaryNeedsHydration)) {
+        // A collapsed section may hold only its count: load its rows once it opens.
+        const countWithoutRows = pullRequests.length === 0 && (inbox.sectionCounts[sectionId] ?? 0) > 0;
+        if (
+            !(sectionId in inbox.sectionCounts) ||
+            countWithoutRows ||
+            pullRequests.some(pullRequestSummaryNeedsHydration)
+        ) {
             await loadInboxSections([sectionId]);
         }
     }
@@ -4013,6 +4042,25 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
         );
     }
 
+    /**
+     * Stack this pull request onto the open one below it on GitHub: a new stack of the two, or this
+     * one appended on top of the stack the one below tops.
+     */
+    async function stackPullRequest(repository: string, number: number, suggestion: StackSuggestion): Promise<void> {
+        const token = requireToken();
+        if (suggestion.kind === "create") {
+            await github.createPullRequestStack(token, repository, suggestion.pullRequests);
+        } else {
+            await github.addPullRequestsToStack(token, repository, suggestion.stackNumber, suggestion.pullRequests);
+        }
+
+        void queryClient.invalidateQueries({
+            queryKey: queryKeys.pullRequest.detail(pullRequestKey(repository, suggestion.below.number)),
+            refetchType: "active",
+        });
+        await refreshAfterMutation(repository, number, { reloadStack: true });
+    }
+
     async function closePullRequest(repository: string, number: number): Promise<void> {
         await github.closePullRequest(requireToken(), repository, number);
         await refreshAfterMutation(repository, number, { reloadStack: true });
@@ -4238,6 +4286,7 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
         updateReviewComment,
         updatePullRequestReview,
         closePullRequest,
+        stackPullRequest,
         uploadPullRequestMedia,
         resolveUserAttachment,
         resolveRepoBlobMedia,

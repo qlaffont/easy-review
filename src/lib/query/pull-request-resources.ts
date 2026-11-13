@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useCallback, useEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { PullRequestHead } from "#/lib/query/invalidate.ts";
 import type {
@@ -48,6 +48,12 @@ import { queryKeys } from "#/lib/query/query-keys.ts";
 import { toSessionError } from "#/lib/session/errors.ts";
 import { useSession } from "#/lib/session/provider.tsx";
 import { pullRequestKey } from "#/lib/session/session.ts";
+import {
+    dismissStackSuggestion,
+    isStackSuggestionDismissed,
+    stackSuggestionFor,
+} from "#/lib/session/stack-suggestion.ts";
+import { useStackPreferences } from "#/lib/stack-preferences.ts";
 
 function prKey(repository: string, number: number) {
     return pullRequestKey(repository, number);
@@ -460,3 +466,55 @@ export function setPullRequestDetailQueryData(
 }
 
 export { sessionErrorFromUnknown };
+
+/**
+ * Whether to offer stacking this open, unstacked pull request onto the open one below it (the
+ * one whose head branch is its base). Only with stack features on; one light GitHub query per
+ * pull request and base branch, then cached like related pull requests.
+ */
+export function useStackSuggestion(repository: string, number: number, detail: PullRequestDetail | null) {
+    const session = useSession();
+    const [stackPreferences] = useStackPreferences();
+    const key = prKey(repository, number);
+    const login = session.state.state.auth.viewer?.login ?? "";
+    const baseRefName = detail?.baseRefName ?? "";
+    const eligible = Boolean(
+        login && stackPreferences.enabled && detail && detail.state === "open" && !detail.githubStack,
+    );
+
+    const query = useQuery({
+        queryKey: queryKeys.pullRequest.stackBelow(key, baseRefName),
+        queryFn: () => session.github.findPullRequestsBelow(session.requireToken(), repository, number, baseRefName),
+        enabled: eligible && Boolean(baseRefName),
+        staleTime: CACHE_POLICY.pullRequest.related.staleTime,
+        gcTime: CACHE_POLICY.pullRequest.related.gcTime,
+        retry: false,
+    });
+
+    const suggestion = useMemo(
+        () =>
+            eligible && detail && query.data
+                ? stackSuggestionFor(
+                      { number, state: detail.state, baseRefName, inStack: Boolean(detail.githubStack) },
+                      query.data,
+                  )
+                : null,
+        [eligible, detail, query.data, number, baseRefName],
+    );
+
+    const [dismissedBelow, setDismissedBelow] = useState<number | null>(null);
+    const belowNumber = suggestion?.below.number ?? null;
+    const dismissed =
+        belowNumber !== null &&
+        (dismissedBelow === belowNumber || isStackSuggestionDismissed(repository, number, belowNumber));
+
+    const dismiss = useCallback(() => {
+        if (belowNumber === null) {
+            return;
+        }
+        dismissStackSuggestion(repository, number, belowNumber);
+        setDismissedBelow(belowNumber);
+    }, [repository, number, belowNumber]);
+
+    return { suggestion: dismissed ? null : suggestion, dismiss };
+}

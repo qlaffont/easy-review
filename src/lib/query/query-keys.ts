@@ -29,6 +29,8 @@ export const queryKeys = {
         conversation: (key: string) => ["pullRequest", key, "conversation"] as const,
         commits: (key: string) => ["pullRequest", key, "commits"] as const,
         related: (key: string) => ["pullRequest", key, "related"] as const,
+        /** Open pull requests whose head branch is this one's base (stack suggestion). */
+        stackBelow: (key: string, baseRefName: string) => ["pullRequest", key, "stackBelow", baseRefName] as const,
     },
     repository: {
         metadata: (repository: string) => ["repository", repository, "metadata"] as const,
