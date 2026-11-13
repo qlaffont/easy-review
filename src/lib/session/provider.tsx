@@ -4,6 +4,7 @@ import { createContext, use, useEffect, useState } from "react";
 
 import type { EasyReviewSession, SessionState } from "#/lib/session/session.ts";
 
+import { installQueryCostConsole, isQueryCostMeasured, recordQueryCost } from "#/lib/github/query-cost.ts";
 import { recordGithubRateLimit } from "#/lib/github/rate-limit.ts";
 import { createBrowserStore } from "#/lib/session/adapters/browser-store.ts";
 import { createGithubHttpClient, GITHUB_SESSION_CREDENTIAL } from "#/lib/session/adapters/github-http-client.ts";
@@ -35,6 +36,7 @@ function createSession(queryClient: ReturnType<typeof useQueryClient>): EasyRevi
                   graphqlUrl: "/api/github/graphql",
                   credentials: "include",
                   onRateLimit: recordGithubRateLimit,
+                  queryCost: { enabled: isQueryCostMeasured, record: recordQueryCost },
               }),
         queryClient,
         store: createBrowserStore(),
@@ -51,6 +53,10 @@ function createSession(queryClient: ReturnType<typeof useQueryClient>): EasyRevi
 export function SessionProvider({ children }: { children: React.ReactNode }) {
     const queryClient = useQueryClient();
     const [session] = useState(() => createSession(queryClient));
+
+    useEffect(() => {
+        installQueryCostConsole();
+    }, []);
 
     useEffect(() => {
         if (useFixtures) {

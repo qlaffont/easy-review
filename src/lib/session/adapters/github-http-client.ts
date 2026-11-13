@@ -43,6 +43,7 @@ import {
     parseGithubAttachmentMarkdownHtml,
     parseGithubRepoBlobRawUrl,
 } from "#/lib/github-attachment.ts";
+import { QUERY_COST_ALIAS, queryOperationName, withQueryCostProbe } from "#/lib/github/query-cost.ts";
 import { rateLimitFromHeaders, type GithubRateLimit } from "#/lib/github/rate-limit.ts";
 import { rewriteUserAttachmentsFromHtml } from "#/lib/rewrite-user-attachments.ts";
 import { applySuggestionsToFile, type SuggestionChange } from "#/lib/session/apply-suggestion.ts";
@@ -80,6 +81,11 @@ export type GithubHttpClientOptions = {
     credentials?: RequestCredentials;
     /** Called with GitHub's remaining budget after every response that reports one. */
     onRateLimit?: (rateLimit: GithubRateLimit) => void;
+    /** Opt-in per-query cost measurement (see `query-cost.ts`). */
+    queryCost?: {
+        enabled(): boolean;
+        record(entry: { operation: string; first: number | null; cost: number; remaining: number }): void;
+    };
 };
 
 const REPOSITORY_PAGE_SIZE = 100;
@@ -285,6 +291,7 @@ export function createGithubHttpClient(
         { keepPartial = false }: { keepPartial?: boolean } = {},
     ): Promise<TData> {
         let response: Response;
+        const probed = options.queryCost?.enabled() ? withQueryCostProbe(query) : null;
 
         try {
             response = await fetchImpl(GRAPHQL_URL, {
@@ -293,7 +300,7 @@ export function createGithubHttpClient(
                     ...authorizationHeaders(token),
                     "content-type": "application/json",
                 },
-                body: JSON.stringify({ query, variables }),
+                body: JSON.stringify({ query: probed ?? query, variables }),
                 credentials,
             });
         } catch (cause) {
@@ -309,6 +316,20 @@ export function createGithubHttpClient(
         }
 
         const payload = (await response.json()) as GraphqlResponse<TData>;
+
+        if (probed && payload.data && typeof payload.data === "object") {
+            const data = payload.data as Record<string, unknown>;
+            const probe = data[QUERY_COST_ALIAS] as { cost?: number; remaining?: number } | null | undefined;
+            delete data[QUERY_COST_ALIAS];
+            if (typeof probe?.cost === "number") {
+                options.queryCost?.record({
+                    operation: queryOperationName(query),
+                    first: typeof variables?.first === "number" ? variables.first : null,
+                    cost: probe.cost,
+                    remaining: probe.remaining ?? 0,
+                });
+            }
+        }
 
         if (payload.errors?.length) {
             const fatal = payload.errors.filter(isFatalGraphqlError);

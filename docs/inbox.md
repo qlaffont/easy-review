@@ -57,3 +57,16 @@ The main switch is stored in `localStorage` (`easy-review:inbox-prefs:v1`). **No
 ## Keyboard
 
 On the inbox: **↑/↓** move selection, **Enter** open (GitHub or Easy Review per setting), **⌘K** command palette.
+
+## Measuring GitHub cost
+
+To see what the Inbox really spends, open the browser console on Easy Review:
+
+```js
+easyReviewGithubCost.start()   // measure GraphQL queries from now on (this tab)
+// click Refresh, open sections, …
+easyReviewGithubCost.report()  // points and calls per operation, plus the total
+easyReviewGithubCost.stop()
+```
+
+While on, each GraphQL query also asks GitHub for its own `rateLimit { cost }`, which costs nothing. The setting survives reloads until `stop()`.
