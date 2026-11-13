@@ -111,7 +111,7 @@ export type FakeGithub = GithubClient & {
     /** Names of the client methods called so far, in order. */
     calls: Array<string>;
     /** Every section search, in order: its query and whether it ignored the allowlist. */
-    sectionSearches: Array<{ query: string; allRepositories: boolean }>;
+    sectionSearches: Array<{ query: string; allRepositories: boolean; limit: number | null }>;
 };
 
 export type PullRequestInput = Partial<PullRequestDetail> & { repository: string; number: number };
@@ -280,7 +280,7 @@ export function createFakeGithub(): FakeGithub {
     const fileDiffQueries: Array<string> = [];
     const submittedReviews: FakeGithub["submittedReviews"] = [];
     const calls: Array<string> = [];
-    const sectionSearches: Array<{ query: string; allRepositories: boolean }> = [];
+    const sectionSearches: Array<{ query: string; allRepositories: boolean; limit: number | null }> = [];
     let forcedError: EasyReviewError | null = null;
     let forcedErrorAll: EasyReviewError | null = null;
     let gate: Promise<void> | null = null;
@@ -809,7 +809,11 @@ export function createFakeGithub(): FakeGithub {
         fetchSectionPullRequests(token, input) {
             return respond("fetchSectionPullRequests", () => {
                 authenticate(token);
-                sectionSearches.push({ query: input.query, allRepositories: input.allRepositories === true });
+                sectionSearches.push({
+                    query: input.query,
+                    allRepositories: input.allRepositories === true,
+                    limit: input.limit ?? null,
+                });
                 const query = input.query.trim();
                 if (!query || (input.repositories.length === 0 && !input.allRepositories)) {
                     return {

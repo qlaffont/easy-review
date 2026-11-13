@@ -320,3 +320,22 @@ describe("disconnect", () => {
         expect(reloaded.state.state.auth.status).toBe("unauthenticated");
     });
 });
+
+describe("re-probing an active session", () => {
+    it("keeps the Inbox as it is when the same account is still signed in", async () => {
+        github.addAccount("session", { login: "quentin" });
+        const session = oauthSession();
+        await session.restore();
+        await session.setSelectedRepositories(["acme/api"]);
+        await session.loadInbox();
+        await session.toggleSection("drafts");
+        const expanded = [...session.state.state.inbox.expandedSections];
+
+        // What a manual Refresh does before reloading the sections.
+        await session.restore();
+
+        expect(session.state.state.inbox.stale).toBe(false);
+        expect(session.state.state.inbox.expandedSections).toEqual(expanded);
+        expect(session.state.state.auth.status).toBe("authenticated");
+    });
+});

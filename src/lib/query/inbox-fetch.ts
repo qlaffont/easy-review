@@ -240,18 +240,34 @@ export function exactSectionSearchQuery(filter: SectionFilter, viewerLogin: stri
 }
 
 /**
- * Sections that only need a count this time: visible, collapsed, without notifications (those must
- * know which pull requests entered), and searchable exactly. Keyed by section id.
+ * Sections nobody is looking at: visible but collapsed, and without notifications (those must know
+ * which pull requests entered). They load as little as their count allows.
+ */
+export function collapsedSilentSectionIds(
+    layout: ReadonlyArray<InboxSectionLayoutEntry>,
+    expandedSections: ReadonlyArray<InboxSectionId>,
+): Set<InboxSectionId> {
+    const expanded = new Set(expandedSections);
+    return new Set(
+        layout
+            .filter((entry) => !entry.hidden && !expanded.has(entry.id) && !entry.notifyOnNewPullRequest)
+            .map((entry) => entry.id),
+    );
+}
+
+/**
+ * Of the collapsed, silent sections, those GitHub search filters exactly: their count alone is
+ * enough, and they are counted together. Keyed by section id.
  */
 export function countOnlySectionQueries(
     layout: ReadonlyArray<InboxSectionLayoutEntry>,
     expandedSections: ReadonlyArray<InboxSectionId>,
     viewerLogin: string,
 ): Map<InboxSectionId, string> {
-    const expanded = new Set(expandedSections);
+    const collapsed = collapsedSilentSectionIds(layout, expandedSections);
     const queries = new Map<InboxSectionId, string>();
     for (const entry of layout) {
-        if (entry.hidden || expanded.has(entry.id) || entry.notifyOnNewPullRequest) {
+        if (!collapsed.has(entry.id)) {
             continue;
         }
         const query = exactSectionSearchQuery(entry.filter, viewerLogin);
@@ -276,10 +292,10 @@ export async function fetchInboxSection(params: {
     signal?: AbortSignal;
     loadPool?: SectionPoolLoader;
     /**
-     * Set when the section only needs its count (collapsed, no notifications): an exact search then
-     * loads no rows. Rows load when the section opens, or page by page through Load more.
+     * Set when the section is collapsed and silent (no notifications). An exact search then loads
+     * only its count; any other search loads small pages. Rows load fully when the section opens.
      */
-    loadCount?: SectionCountLoader;
+    collapsed?: { loadCount: SectionCountLoader };
 }): Promise<SectionFetchResult> {
     const { github, token, viewerLogin, selected, definition, existing, signal } = params;
 
@@ -287,9 +303,9 @@ export async function fetchInboxSection(params: {
         throw new DOMException("Aborted", "AbortError");
     }
 
-    const countQuery = params.loadCount ? exactSectionSearchQuery(definition.filter, viewerLogin) : null;
-    if (countQuery && params.loadCount) {
-        const count = await params.loadCount(countQuery);
+    const countQuery = params.collapsed ? exactSectionSearchQuery(definition.filter, viewerLogin) : null;
+    if (countQuery && params.collapsed) {
+        const count = await params.collapsed.loadCount(countQuery);
         return {
             id: definition.id,
             pullRequests: [],
@@ -335,6 +351,7 @@ export async function fetchInboxSection(params: {
             filter: definition.filter,
             viewerLogin,
             signal,
+            compact: Boolean(params.collapsed),
         });
 
         return {
@@ -386,8 +403,8 @@ export async function fetchInboxSections(params: {
     onSectionLoaded?: (result: SectionFetchResult) => void;
     /** Shared section searches; defaults to one load per query for this call. */
     loadPool?: SectionPoolLoader;
-    /** Sections that only need a count, and the loader that counts them together. */
-    countOnly?: { sectionIds: ReadonlySet<InboxSectionId>; loadCount: SectionCountLoader };
+    /** Collapsed, silent sections, and the loader that counts the exact ones together. */
+    collapsed?: { sectionIds: ReadonlySet<InboxSectionId>; loadCount: SectionCountLoader };
 }): Promise<InboxFetchResult> {
     const { github, token, viewerLogin, selected, sectionLayout, existing, sectionIds, signal, onSectionLoaded } =
         params;
@@ -421,7 +438,7 @@ export async function fetchInboxSections(params: {
                 existing,
                 signal,
                 loadPool,
-                loadCount: params.countOnly?.sectionIds.has(definition.id) ? params.countOnly.loadCount : undefined,
+                collapsed: params.collapsed?.sectionIds.has(definition.id) ? params.collapsed : undefined,
             });
             onSectionLoaded?.(result);
             return result;
@@ -514,10 +531,13 @@ export async function scanSectionSearch(params: {
     viewerLogin: string;
     after?: string | null;
     signal?: AbortSignal;
+    /** The section is collapsed: scan pages of {@link INBOX_SECTION_LOAD_SIZE} rows. */
+    compact?: boolean;
 }): Promise<SectionSearchScan> {
     const { github, token, query, repositories, filter, viewerLogin, signal } = params;
     const clientFiltered = sectionFilterNeedsClientFilter(filter, viewerLogin);
-    const pageSize = clientFiltered ? CLIENT_FILTERED_SCAN_PAGE_SIZE : INBOX_SECTION_LOAD_SIZE;
+    // Collapsed sections show no rows: small pages are enough for their count, at a quarter of the cost.
+    const pageSize = clientFiltered && !params.compact ? CLIENT_FILTERED_SCAN_PAGE_SIZE : INBOX_SECTION_LOAD_SIZE;
     const maxPages = clientFiltered ? CLIENT_FILTERED_SCAN_MAX_PAGES : 1;
     const pullRequests: Array<PullRequestSummary> = [];
     let dropped = 0;

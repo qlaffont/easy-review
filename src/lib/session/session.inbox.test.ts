@@ -303,7 +303,9 @@ describe("GitHub budget", () => {
         await session.loadInbox();
 
         const shared = github.sectionSearches.filter((search) => search.query.includes(`author:${VIEWER}`));
-        expect(shared).toEqual([{ query: `is:pr author:${VIEWER} is:open draft:false`, allRepositories: true }]);
+        expect(shared).toEqual([
+            { query: `is:pr author:${VIEWER} is:open draft:false`, allRepositories: true, limit: 39 },
+        ]);
         expect(sectionOf(session, "waiting-for-reviewers-me")?.pullRequests.map((entry) => entry.key)).toEqual([
             "acme/api#2",
         ]);
@@ -322,6 +324,32 @@ describe("GitHub budget", () => {
         expect(sectionOf(session, "waiting-for-reviewers")?.pullRequests.map((entry) => entry.key)).toEqual([
             "acme/api#5",
         ]);
+    });
+
+    it("scans a collapsed section GitHub cannot filter exactly in small pages", async () => {
+        github.addPullRequest(TOKEN, {
+            repository: "acme/api",
+            number: 6,
+            author: "octocat",
+            reviewDecision: "approved",
+            reviewers: [{ login: "romainpm", state: "approved", reviewId: 1 }],
+        });
+        const session = await connectedSession();
+        const id = await session.addCustomSection("has-approval");
+        const approvalSearches = () =>
+            github.sectionSearches
+                .filter((search) => search.query.includes("review:approved"))
+                .map((search) => search.limit);
+
+        await session.refreshInbox();
+        expect(session.state.state.inbox.expandedSections).toContain(id);
+        expect(approvalSearches().at(-1)).toBe(39);
+
+        await session.toggleSection(id);
+        await session.refreshInbox();
+
+        expect(approvalSearches().at(-1)).toBe(INBOX_SECTION_LOAD_SIZE);
+        expect(sectionOf(session, id)).toMatchObject({ count: 1 });
     });
 
     it("adopts Inbox data another tab loaded without calling GitHub", async () => {

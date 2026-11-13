@@ -56,6 +56,7 @@ import type {
 import { shouldDeleteHeadBranchOnMerge } from "#/lib/diff-preferences.ts";
 import { CACHE_POLICY } from "#/lib/query/cache-policy.ts";
 import {
+    collapsedSilentSectionIds,
     countOnlySectionQueries,
     emptyInboxQueryData,
     fetchInboxSections,
@@ -778,7 +779,13 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
             if (attempt !== latestAuthAttempt) return;
             token = candidate;
             await store.remove(SIGNED_OUT_KEY);
-            await loadAccountPreferences(viewer.login);
+            // A re-probe of the same signed-in account (manual Refresh) keeps the Inbox as it is:
+            // reloading preferences would mark it stale and reset open sections, and the stale Inbox
+            // would reload every section a second time on top of the Refresh itself.
+            const { auth } = state.state;
+            if (auth.status !== "authenticated" || auth.viewer?.login !== viewer.login) {
+                await loadAccountPreferences(viewer.login);
+            }
             setAuth({ status: "authenticated", viewer, error: null });
         } catch (error) {
             if (attempt !== latestAuthAttempt) return;
@@ -1030,7 +1037,7 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
             existing,
             sectionIds,
             loadPool: inboxPoolLoader(queryClient, { github, token, viewerLogin, selected }),
-            countOnly: countOnlyLoad(viewerLogin, token, selected),
+            collapsed: collapsedSectionsLoad(viewerLogin, token, selected),
             onSectionLoaded: (result) => {
                 if (attempt !== undefined && attempt !== latestInboxLoad) {
                     return;
@@ -1065,21 +1072,18 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
         return { successes, failure };
     }
 
-    /** Collapsed sections without notifications: counted together, rows left for when they open. */
-    function countOnlyLoad(viewerLogin: string, token: string, selected: ReadonlyArray<string>) {
-        const queries = countOnlySectionQueries(
-            state.state.inbox.sectionLayout,
-            state.state.inbox.expandedSections,
-            viewerLogin,
-        );
+    /** Collapsed sections without notifications: exact ones counted together, others in small pages. */
+    function collapsedSectionsLoad(viewerLogin: string, token: string, selected: ReadonlyArray<string>) {
+        const { sectionLayout, expandedSections } = state.state.inbox;
+        const countQueries = countOnlySectionQueries(sectionLayout, expandedSections, viewerLogin);
         return {
-            sectionIds: new Set(queries.keys()),
+            sectionIds: collapsedSilentSectionIds(sectionLayout, expandedSections),
             loadCount: inboxCountLoader(queryClient, {
                 github,
                 token,
                 viewerLogin,
                 selected,
-                queries: queries.values(),
+                queries: countQueries.values(),
             }),
         };
     }

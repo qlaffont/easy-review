@@ -40,7 +40,7 @@ Notable flows:
 ### What a refresh loads
 
 - **Returned to you**, **Waiting for reviewers (me)** and **Approved** share one search of your open pull requests across every repository, loaded in full (up to 117) and narrowed to the selected repositories locally, so their rows and counts are exact. A section whose filter you change away from your own open pull requests uses its own search again. Beyond 117 open pull requests they fall back to their own searches, whose count is then an upper bound until **Load more** reaches the end.
-- A **collapsed** section without **Notify** loads only its count, when GitHub search applies its filter exactly. All such counts go out in one request. Opening the section loads its rows; **Open all in new tabs** loads them first too. Its rows are then also missing from the ⌘K list until it opens (typing still searches GitHub).
+- A **collapsed** section without **Notify** loads only its count, when GitHub search applies its filter exactly. All such counts go out in one request. When GitHub cannot apply the filter exactly (for instance **At least one approval**), the collapsed section reads its search in pages of 10 instead of 39, enough for its count at a quarter of the cost. Opening the section loads its rows; **Open all in new tabs** loads them first too. Its rows are then also missing from the ⌘K list until it opens (typing still searches GitHub).
 - Other sections load their first page. With many selected repositories, GitHub needs several searches per section (each query is capped at 256 characters); they go out as one request.
 
 ## Background notifications (optional)

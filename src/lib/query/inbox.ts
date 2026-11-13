@@ -7,6 +7,7 @@ import type { GithubClient } from "#/lib/session/ports.ts";
 
 import { CACHE_POLICY } from "#/lib/query/cache-policy.ts";
 import {
+    collapsedSilentSectionIds,
     countOnlySectionQueries,
     emptyInboxQueryData,
     fetchInboxSection,
@@ -130,8 +131,11 @@ export async function fetchInboxSectionWithDeps(
         syncInboxData: (data: InboxQueryData) => void;
         viewerLogin: string;
         selected: ReadonlyArray<string>;
-        /** Sections that only need a count right now (read at fetch time: expand state moves). */
-        countOnlyQueries?: () => ReadonlyMap<string, string>;
+        /**
+         * Collapsed, silent sections and the exact searches among them that a count answers
+         * (read at fetch time: expand state moves).
+         */
+        collapsedSections?: () => { ids: ReadonlySet<string>; countQueries: Iterable<string> };
     },
     definition: InboxSectionDefinition,
     signal?: AbortSignal,
@@ -152,7 +156,7 @@ export async function fetchInboxSectionWithDeps(
 
     try {
         const token = requireToken();
-        const countOnly = deps.countOnlyQueries?.() ?? new Map<string, string>();
+        const collapsed = deps.collapsedSections?.();
         const result = await fetchInboxSection({
             github,
             token,
@@ -162,8 +166,16 @@ export async function fetchInboxSectionWithDeps(
             existing,
             signal,
             loadPool: inboxPoolLoader(queryClient, { github, token, viewerLogin, selected }),
-            loadCount: countOnly.has(definition.id)
-                ? inboxCountLoader(queryClient, { github, token, viewerLogin, selected, queries: countOnly.values() })
+            collapsed: collapsed?.ids.has(definition.id)
+                ? {
+                      loadCount: inboxCountLoader(queryClient, {
+                          github,
+                          token,
+                          viewerLogin,
+                          selected,
+                          queries: collapsed.countQueries,
+                      }),
+                  }
                 : undefined,
         });
 
@@ -208,12 +220,13 @@ export function useInboxQuery() {
             syncInboxData: session.syncInboxData.bind(session),
             viewerLogin: login,
             selected,
-            countOnlyQueries: () =>
-                countOnlySectionQueries(
-                    session.state.state.inbox.sectionLayout,
-                    session.state.state.inbox.expandedSections,
-                    login,
-                ),
+            collapsedSections: () => {
+                const { sectionLayout: layout, expandedSections } = session.state.state.inbox;
+                return {
+                    ids: collapsedSilentSectionIds(layout, expandedSections),
+                    countQueries: countOnlySectionQueries(layout, expandedSections, login).values(),
+                };
+            },
         }),
         [session, queryClient, login, selected],
     );
