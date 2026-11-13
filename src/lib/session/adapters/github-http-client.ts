@@ -43,6 +43,7 @@ import {
     parseGithubAttachmentMarkdownHtml,
     parseGithubRepoBlobRawUrl,
 } from "#/lib/github-attachment.ts";
+import { rateLimitFromHeaders, type GithubRateLimit } from "#/lib/github/rate-limit.ts";
 import { rewriteUserAttachmentsFromHtml } from "#/lib/rewrite-user-attachments.ts";
 import { applySuggestionsToFile, type SuggestionChange } from "#/lib/session/apply-suggestion.ts";
 import { buildFileDiff } from "#/lib/session/build-file-diff.ts";
@@ -77,6 +78,8 @@ export type GithubHttpClientOptions = {
     graphqlUrl?: string;
     /** Forward cookies (required for the OAuth proxy). */
     credentials?: RequestCredentials;
+    /** Called with GitHub's remaining budget after every response that reports one. */
+    onRateLimit?: (rateLimit: GithubRateLimit) => void;
 };
 
 const REPOSITORY_PAGE_SIZE = 100;
@@ -263,6 +266,12 @@ export function createGithubHttpClient(
     const REST_URL = options.restBaseUrl ?? DEFAULT_REST_URL;
     const GRAPHQL_URL = options.graphqlUrl ?? DEFAULT_GRAPHQL_URL;
     const credentials = options.credentials;
+    function observeRateLimit(response: Response): void {
+        const rateLimit = options.onRateLimit ? rateLimitFromHeaders(response.headers) : null;
+        if (rateLimit) {
+            options.onRateLimit?.(rateLimit);
+        }
+    }
     /** Merge bases never change for a given base/head pair, so one lookup per pair is enough. */
     const mergeBases = new Map<string, Promise<string>>();
     /**
@@ -292,6 +301,8 @@ export function createGithubHttpClient(
                 cause,
             });
         }
+
+        observeRateLimit(response);
 
         if (!response.ok) {
             throw await errorFromResponse(response);
@@ -2320,13 +2331,15 @@ export function createGithubHttpClient(
 
     async function rest(token: string, path: string, accept = "application/vnd.github+json"): Promise<Response> {
         try {
-            return await fetchImpl(`${REST_URL}${path}`, {
+            const response = await fetchImpl(`${REST_URL}${path}`, {
                 headers: {
                     ...authorizationHeaders(token),
                     accept,
                 },
                 credentials,
             });
+            observeRateLimit(response);
+            return response;
         } catch (cause) {
             throw new EasyReviewError("network", "Could not reach GitHub. Check your connection and try again.", {
                 cause,

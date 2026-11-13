@@ -6,7 +6,13 @@ import type { InboxSectionDefinition } from "#/lib/session/inbox-sections.ts";
 import type { GithubClient } from "#/lib/session/ports.ts";
 
 import { CACHE_POLICY } from "#/lib/query/cache-policy.ts";
-import { emptyInboxQueryData, fetchInboxSection, mergeSectionResultsIntoInbox } from "#/lib/query/inbox-fetch.ts";
+import {
+    emptyInboxQueryData,
+    fetchInboxSection,
+    fetchSectionPool,
+    mergeSectionResultsIntoInbox,
+    type SectionPoolLoader,
+} from "#/lib/query/inbox-fetch.ts";
 import {
     revalidateInboxInBackground,
     invalidateInboxForRefresh,
@@ -16,6 +22,7 @@ import { queryKeys } from "#/lib/query/query-keys.ts";
 import { EasyReviewError, toSessionError } from "#/lib/session/errors.ts";
 import { inboxSectionsFromLoaded, visibleSectionDefinitions } from "#/lib/session/inbox-sections.ts";
 import { useSession } from "#/lib/session/provider.tsx";
+import { sectionPoolSearchQuery } from "#/lib/session/section-filters.ts";
 
 export function inboxQueryKey(login: string) {
     return queryKeys.inbox.sections(login);
@@ -27,6 +34,29 @@ export function inboxSectionQueryKey(login: string, sectionId: string) {
 
 export function inboxSectionQueryPrefix(login: string) {
     return ["inbox", "section", login] as const;
+}
+
+/** Shared section searches are reused this long, so sections loading together fetch them once. */
+const INBOX_POOL_REUSE_MS = 10_000;
+
+/**
+ * Section pool loader backed by the query cache: concurrent sections share one in-flight load, and
+ * any section invalidation (refresh, revalidate, mutation) marks the pool stale with them.
+ */
+export function inboxPoolLoader(
+    queryClient: QueryClient,
+    params: { github: GithubClient; token: string; viewerLogin: string; selected: ReadonlyArray<string> },
+): SectionPoolLoader {
+    const { github, token, viewerLogin, selected } = params;
+    const repositories = [...selected].sort().join(",");
+    return (query) =>
+        queryClient.fetchQuery({
+            queryKey: queryKeys.inbox.pool(viewerLogin, repositories, query),
+            queryFn: () => fetchSectionPool({ github, token, query, repositories: selected }),
+            staleTime: INBOX_POOL_REUSE_MS,
+            gcTime: CACHE_POLICY.inbox.staleTime,
+            retry: false,
+        });
 }
 
 export function getInboxQueryData(queryClient: QueryClient, login: string): InboxQueryData | undefined {
@@ -87,14 +117,16 @@ export async function fetchInboxSectionWithDeps(
     const existing = getInboxQueryData(queryClient, viewerLogin) ?? emptyInboxQueryData();
 
     try {
+        const token = requireToken();
         const result = await fetchInboxSection({
             github,
-            token: requireToken(),
+            token,
             viewerLogin,
             selected,
             definition,
             existing,
             signal,
+            loadPool: inboxPoolLoader(queryClient, { github, token, viewerLogin, selected }),
         });
 
         let merged = emptyInboxQueryData();
@@ -207,9 +239,22 @@ export function useInboxQuery() {
 
     const refreshSection = useCallback(
         async (sectionId: string) => {
-            await invalidateInboxSectionForRefresh(queryClient, login, sectionId);
+            const definition = definitions.find((entry) => entry.id === sectionId);
+            const pool = definition ? sectionPoolSearchQuery(definition.filter, login) : null;
+            if (!pool) {
+                await invalidateInboxSectionForRefresh(queryClient, login, sectionId);
+                return;
+            }
+
+            // Sections sharing this search reload together: one fetch, consistent rows.
+            await queryClient.invalidateQueries({ queryKey: queryKeys.inbox.pools(login), refetchType: "none" });
+            await Promise.all(
+                definitions
+                    .filter((entry) => sectionPoolSearchQuery(entry.filter, login) === pool)
+                    .map((entry) => invalidateInboxSectionForRefresh(queryClient, login, entry.id)),
+            );
         },
-        [queryClient, login],
+        [queryClient, login, definitions],
     );
 
     const revalidate = useCallback(

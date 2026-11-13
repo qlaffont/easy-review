@@ -1,11 +1,13 @@
+import { QueryObserver } from "@tanstack/react-query";
 import { beforeEach, describe, expect, it } from "vitest";
 
 import type { EasyReviewSession } from "#/lib/session/session.ts";
 import type { FakeGithub } from "#/lib/session/testing/fake-github.ts";
 import type { MemoryStore } from "#/lib/session/testing/memory-store.ts";
 
+import { fetchInboxSectionWithDeps, getInboxQueryData, inboxSectionQueryKey } from "#/lib/query/inbox.ts";
 import { EasyReviewError } from "#/lib/session/errors.ts";
-import { INBOX_SECTION_LOAD_SIZE } from "#/lib/session/inbox-sections.ts";
+import { INBOX_SECTION_LOAD_SIZE, visibleSectionDefinitions } from "#/lib/session/inbox-sections.ts";
 import { createEasyReviewSession } from "#/lib/session/session.ts";
 import { createFakeGithub } from "#/lib/session/testing/fake-github.ts";
 import { createMemoryStore } from "#/lib/session/testing/memory-store.ts";
@@ -193,6 +195,123 @@ describe("cache and revalidation", () => {
         await pending;
 
         expect(session.state.state.inbox.pullRequests).toEqual([]);
+    });
+});
+
+describe("GitHub budget", () => {
+    function observeVisibleSections(session: EasyReviewSession, queryClient: ReturnType<typeof createTestQueryClient>) {
+        const deps = {
+            github,
+            queryClient,
+            requireToken: () => session.requireToken(),
+            syncInboxData: session.syncInboxData.bind(session),
+            viewerLogin: VIEWER,
+            selected: session.state.state.repos.selected,
+        };
+        const observers = visibleSectionDefinitions(session.state.state.inbox.sectionLayout).map(
+            (definition) =>
+                new QueryObserver(queryClient, {
+                    queryKey: inboxSectionQueryKey(VIEWER, definition.id),
+                    queryFn: ({ signal }) => fetchInboxSectionWithDeps(deps, definition, signal),
+                    staleTime: 120_000,
+                }),
+        );
+        return observers.map((observer) => observer.subscribe(() => {}));
+    }
+
+    const settle = () => new Promise((resolve) => setTimeout(resolve, 20));
+
+    it("loads each section once per full refresh, even while the board observes the sections", async () => {
+        const unobserved = await connectedSession();
+        let before = sectionFetchCalls();
+        await unobserved.refreshInbox();
+        const costWithoutBoard = sectionFetchCalls() - before;
+
+        const queryClient = createTestQueryClient();
+        const session = createEasyReviewSession({ github, queryClient, store: createMemoryStore() });
+        await session.connect(TOKEN);
+        await session.setSelectedRepositories(["acme/api"]);
+        const unsubscribe = observeVisibleSections(session, queryClient);
+        await settle();
+
+        before = sectionFetchCalls();
+        await session.refreshInbox();
+        await settle();
+
+        expect(sectionFetchCalls() - before).toBe(costWithoutBoard);
+        unsubscribe.forEach((stop) => stop());
+    });
+
+    it("fills Returned to you, Waiting for reviewers (me) and Approved from one shared search", async () => {
+        github.addPullRequest(TOKEN, {
+            repository: "acme/api",
+            number: 3,
+            author: VIEWER,
+            reviewDecision: "changes-requested",
+            reviewers: [{ login: "romainpm", state: "changes-requested", reviewId: 1 }],
+        });
+        github.addPullRequest(TOKEN, {
+            repository: "acme/api",
+            number: 4,
+            author: VIEWER,
+            reviewDecision: "review-required",
+            reviewRequests: ["alice"],
+            reviewers: [{ login: "romainpm", state: "approved", reviewId: 2 }],
+        });
+        const session = await connectedSession();
+
+        await session.loadInbox();
+
+        // Needs your review + Waiting for reviewers search on their own; the three "my PR" sections share one.
+        expect(sectionFetchCalls()).toBe(3);
+        expect(sectionOf(session, "returned-to-you")?.pullRequests.map((entry) => entry.number)).toEqual([3]);
+        expect(sectionOf(session, "waiting-for-reviewers-me")?.pullRequests.map((entry) => entry.number)).toEqual([2]);
+        expect(sectionOf(session, "approved")?.pullRequests.map((entry) => entry.number)).toEqual([4]);
+        expect(sectionOf(session, "approved")?.count).toBe(1);
+    });
+
+    it("lets a section whose filter no longer targets my pull requests search on its own", async () => {
+        const session = await connectedSession();
+        await session.setSectionFilter("returned-to-you", {
+            cases: [
+                {
+                    id: "c_others",
+                    name: "Others' open PRs",
+                    conditions: [
+                        { id: "f_author", field: "author", op: "is_not", value: "@me" },
+                        { id: "f_state", field: "state", op: "is", value: "open" },
+                    ],
+                },
+            ],
+        });
+        // Saving the filter reloads that section with its own search.
+        expect(sectionFetchCalls()).toBe(1);
+
+        await session.loadInbox();
+
+        expect(sectionFetchCalls()).toBe(1 + 4);
+        expect(sectionOf(session, "returned-to-you")?.pullRequests.map((entry) => entry.key)).toEqual(["acme/api#1"]);
+    });
+
+    it("adopts Inbox data another tab loaded without calling GitHub", async () => {
+        const source = await connectedSession();
+        await source.loadInbox();
+        const shared = getInboxQueryData(source.queryClient, VIEWER)!;
+
+        const queryClient = createTestQueryClient();
+        const session = createEasyReviewSession({ github, queryClient, store: createMemoryStore() });
+        await session.connect(TOKEN);
+        await session.setSelectedRepositories(["acme/api"]);
+        const before = sectionFetchCalls();
+
+        session.adoptInboxData(shared);
+
+        expect(sectionFetchCalls()).toBe(before);
+        expect(sectionOf(session, "needs-your-review")?.pullRequests.map((entry) => entry.key)).toEqual(["acme/api#1"]);
+        expect(queryClient.getQueryState(inboxSectionQueryKey(VIEWER, "needs-your-review"))?.isInvalidated).toBe(false);
+        expect(queryClient.getQueryData(inboxSectionQueryKey(VIEWER, "needs-your-review"))).toMatchObject({
+            totalCount: 1,
+        });
     });
 });
 

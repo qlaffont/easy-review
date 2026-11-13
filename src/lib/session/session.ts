@@ -60,10 +60,12 @@ import {
     mergePullRequestSummaries,
     mergeSectionResultsIntoInbox,
     patchInboxPullRequest,
-    sectionCountAfterClientFilter,
+    scanSectionSearch,
+    sectionCountAfterScan,
 } from "#/lib/query/inbox-fetch.ts";
 import {
     getInboxQueryData,
+    inboxPoolLoader,
     inboxSectionQueryKey,
     inboxSectionQueryPrefix,
     setInboxQueryData,
@@ -554,6 +556,28 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
         });
     }
 
+    /**
+     * Take Inbox data another tab just loaded, as if this tab had fetched it: the aggregate and
+     * every section query, which then count as fresh and skip their own GitHub round-trip.
+     */
+    function adoptInboxData(data: InboxQueryData): void {
+        const context = currentInboxQueryContext();
+        if (!context) {
+            return;
+        }
+
+        syncInboxQueryData(data);
+        for (const [sectionId, pullRequests] of Object.entries(data.sectionPullRequests)) {
+            queryClient.setQueryData(inboxSectionQueryKey(context.login, sectionId), {
+                sectionId,
+                pullRequests,
+                totalCount: data.sectionCounts[sectionId] ?? pullRequests.length,
+                pageInfo: data.sectionPagination[sectionId] ?? { hasNextPage: false, endCursor: null },
+                lastLoadedAt: data.lastLoadedAt,
+            });
+        }
+    }
+
     function syncInboxFromStore(): void {
         const { inbox } = state.state;
         syncInboxQueryData({
@@ -993,14 +1017,16 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
         }
 
         const existing = readInboxQueryData();
+        const token = requireToken();
         const { data, successes, failure } = await fetchInboxSections({
             github,
-            token: requireToken(),
+            token,
             viewerLogin,
             selected,
             sectionLayout: inbox.sectionLayout,
             existing,
             sectionIds,
+            loadPool: inboxPoolLoader(queryClient, { github, token, viewerLogin, selected }),
             onSectionLoaded: (result) => {
                 if (attempt !== undefined && attempt !== latestInboxLoad) {
                     return;
@@ -1074,7 +1100,12 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
         setInbox({ refreshing: true, status: keepPainted ? "ready" : "loading", error: null });
 
         try {
-            await queryClient.invalidateQueries({ queryKey: inboxSectionQueryPrefix(context.login) });
+            // Mark stale without refetching: the load below fills every section's query itself, and
+            // also runs where no board observes them (background sync from a pull request tab).
+            await queryClient.invalidateQueries({
+                queryKey: inboxSectionQueryPrefix(context.login),
+                refetchType: "none",
+            });
 
             const { successes, failure } = await loadInboxSections(undefined, attempt);
 
@@ -1229,16 +1260,17 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
                 return;
             }
 
-            const page = await github.fetchSectionPullRequests(requireToken(), {
+            const scan = await scanSectionSearch({
+                github,
+                token: requireToken(),
                 query,
                 repositories: selected,
-                limit: INBOX_SECTION_LOAD_SIZE,
+                filter: entry.filter,
+                viewerLogin,
                 after: inboxData.sectionPagination[sectionId]?.endCursor,
             });
 
-            const incoming = page.pullRequests.filter((pullRequest) =>
-                matchSectionFilter(pullRequest, entry.filter, viewerLogin),
-            );
+            const incoming = scan.pullRequests;
             const pullRequests = mergePullRequestSummaries(loaded, incoming);
             const mergedPool = mergePullRequestSummaries(inboxData.pullRequests, incoming);
 
@@ -1246,15 +1278,14 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
                 sectionPullRequests: { ...state.state.inbox.sectionPullRequests, [sectionId]: pullRequests },
                 sectionCounts: {
                     ...state.state.inbox.sectionCounts,
-                    [sectionId]: sectionCountAfterClientFilter({
-                        githubTotal: page.totalCount,
-                        fetchedOnThisPage: page.pullRequests.length,
-                        matchingOnThisPage: incoming.length,
+                    [sectionId]: sectionCountAfterScan({
+                        upperBound: inboxData.sectionCounts[sectionId] ?? scan.githubTotal,
+                        dropped: scan.dropped,
                         matchingLoaded: pullRequests.length,
-                        hasNextPage: page.pageInfo.hasNextPage,
+                        hasNextPage: scan.pageInfo.hasNextPage,
                     }),
                 },
-                sectionPagination: { ...state.state.inbox.sectionPagination, [sectionId]: page.pageInfo },
+                sectionPagination: { ...state.state.inbox.sectionPagination, [sectionId]: scan.pageInfo },
                 pullRequests: mergedPool,
                 loadingMoreSection: null,
                 error: null,
@@ -4114,6 +4145,7 @@ export function createEasyReviewSession({ github, queryClient, store, oauth }: E
         revalidateInbox,
         invalidateInbox,
         syncInboxData: syncInboxQueryData,
+        adoptInboxData,
         canLoadMoreInboxSection,
         loadMoreInboxSection,
         toggleSection,

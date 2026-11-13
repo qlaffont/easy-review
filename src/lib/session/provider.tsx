@@ -4,6 +4,7 @@ import { createContext, use, useEffect, useState } from "react";
 
 import type { EasyReviewSession, SessionState } from "#/lib/session/session.ts";
 
+import { recordGithubRateLimit } from "#/lib/github/rate-limit.ts";
 import { createBrowserStore } from "#/lib/session/adapters/browser-store.ts";
 import { createGithubHttpClient, GITHUB_SESSION_CREDENTIAL } from "#/lib/session/adapters/github-http-client.ts";
 import { createEasyReviewSession } from "#/lib/session/session.ts";
@@ -33,6 +34,7 @@ function createSession(queryClient: ReturnType<typeof useQueryClient>): EasyRevi
                   restBaseUrl: "/api/github",
                   graphqlUrl: "/api/github/graphql",
                   credentials: "include",
+                  onRateLimit: recordGithubRateLimit,
               }),
         queryClient,
         store: createBrowserStore(),

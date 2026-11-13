@@ -33,14 +33,18 @@ Notable flows:
 | Tab visible, idle | Quiet revalidate about every 3 minutes |
 | Manual **Refresh** | Full inbox refetch |
 | After review / merge | Inbox marked stale and reloaded when returning to the board |
-| Tab hidden or not focused + notifications on | Refetch about every 5 minutes |
+| Tab hidden or not focused + notifications on | One tab refetches about every 5 minutes and shares the result with the others |
+| Another tab just loaded the inbox | Its data is adopted as is, without a GitHub call |
+| GitHub budget under 10 % | Automatic refreshes and background sync pause until GitHub's hourly window resets; the header says until when. Manual **Refresh** still works |
+
+**Returned to you**, **Waiting for reviewers (me)** and **Approved** share one search of your open pull requests, loaded in full (up to 100) and sorted locally, so their rows and counts are exact. A section whose filter you change away from your own open pull requests uses its own search again. Above 100 open pull requests they fall back to their own searches, whose count is then an upper bound until **Load more** reaches the end.
 
 ## Background notifications (optional)
 
 **Inbox settings → Background updates → Notify when a pull request appears**
 
 - Requires browser notification permission.
-- Only while the tab is hidden or not focused, and only while it is open: the browser must keep the page running (no web push).
+- Only while Easy Review is open in a tab the browser keeps running (no web push). One tab syncs at a time (the tab you are looking at hands that job to a background tab) and shares the result; every tab not in use then notifies.
 - Notifies when a PR enters a section with **Notify** on (per section, expanded or not). Changes to a PR already in the section don't notify.
 - **Notify** is on by default for Needs your review, Returned to you, and Approved.
 - Sections load one page at a time. In a section with more rows than loaded, a new row only counts when the section total grew, so an old PR moving up doesn't notify.

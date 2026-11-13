@@ -42,6 +42,7 @@ import {
 import { HelpTooltip } from "#/components/ui/help-tooltip.tsx";
 import { InboxLoadingSkeleton, LazyChunkFallback } from "#/components/ui/loading.tsx";
 import { RelativeTime } from "#/components/ui/relative-time.tsx";
+import { useRateLimitPausedUntil } from "#/lib/github/rate-limit.ts";
 import { openInboxPullRequest, openInboxPullRequestsInTabs } from "#/lib/inbox/inbox-navigation.ts";
 import { useInboxStackBadges } from "#/lib/query/inbox-stack.ts";
 import { useInboxQuery } from "#/lib/query/inbox.ts";
@@ -117,6 +118,9 @@ export function InboxBoard() {
     } = useInboxQuery();
     const login = useSessionState((state) => state.auth.viewer?.login ?? "");
     const inboxUi = useSessionState((state) => state.inbox);
+    // A full refresh loads sections directly, outside their queries: count it as syncing too.
+    const syncing = isFetching || inboxUi.refreshing;
+    const autoRefreshPausedUntil = useRateLimitPausedUntil();
     const queuedAutoMerges = useSessionState((state) => state.queuedAutoMerges);
     const selectedCount = useSessionState((state) => state.repos.selected.length);
     const sectionLayout = inboxUi.sectionLayout;
@@ -308,7 +312,7 @@ export function InboxBoard() {
             <div className="sticky top-12 z-10 -mx-4 border-b bg-background px-4 py-3">
                 <div className="flex items-center justify-between gap-3">
                     <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
-                        {isFetching ? (
+                        {syncing ? (
                             <span className="inline-flex items-center gap-1.5 text-sky-700 dark:text-sky-300">
                                 <RefreshCw className="size-3 animate-spin" aria-hidden="true" />
                                 Syncing with GitHub…
@@ -320,6 +324,17 @@ export function InboxBoard() {
                         ) : (
                             "Not synced yet"
                         )}
+                        {autoRefreshPausedUntil ? (
+                            <span className="inline-flex items-center gap-1 text-amber-700 dark:text-amber-300">
+                                <span aria-hidden="true">·</span>
+                                Auto-refresh paused until{" "}
+                                {new Date(autoRefreshPausedUntil).toLocaleTimeString([], {
+                                    hour: "2-digit",
+                                    minute: "2-digit",
+                                })}{" "}
+                                (GitHub rate limit)
+                            </span>
+                        ) : null}
                         <span className="hidden items-center gap-1 sm:inline-flex">
                             <span aria-hidden="true">·</span>
                             <Keyboard className="size-3" aria-hidden="true" />
@@ -330,7 +345,7 @@ export function InboxBoard() {
                         <Button
                             variant="outline"
                             size="sm"
-                            disabled={isFetching}
+                            disabled={syncing}
                             onClick={() =>
                                 void notifyAction(() => refresh(), {
                                     loading: "Refreshing inbox…",
@@ -339,7 +354,7 @@ export function InboxBoard() {
                                 })
                             }
                         >
-                            <RefreshCw className={isFetching ? "animate-spin" : undefined} />
+                            <RefreshCw className={syncing ? "animate-spin" : undefined} />
                             Refresh
                         </Button>
                     </div>
@@ -369,7 +384,7 @@ export function InboxBoard() {
                                 icon={layoutEntry?.icon}
                                 selectedKey={selected?.key ?? null}
                                 isExpanded={isExpanded}
-                                isFetching={sectionFetching[section.id] ?? false}
+                                isFetching={(sectionFetching[section.id] ?? false) || inboxUi.refreshing}
                                 sectionError={sectionErrors[section.id] ?? null}
                                 stackBadges={stackBadges}
                                 queuedAutoMergeKeys={queuedAutoMergeKeys}
@@ -630,7 +645,8 @@ function InboxSectionPanel({
             {isExpanded ? (
                 sectionError && section.pullRequests.length === 0 ? (
                     <p className="px-3 py-3 text-sm text-destructive">{sectionError}</p>
-                ) : section.pullRequests.length === 0 ? (
+                ) : section.pullRequests.length === 0 && !canLoadMoreFromGitHub ? (
+                    // Rows can still sit further down a search the section filter mostly rejects.
                     emptySectionRow
                 ) : (
                     <div className="flex flex-col">

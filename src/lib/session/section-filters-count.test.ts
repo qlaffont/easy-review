@@ -5,7 +5,9 @@ import type { PullRequestSummary } from "#/lib/session/types.ts";
 import {
     defaultFilterForPreset,
     matchesSectionSearchCountQuery,
+    sectionFilterNeedsClientFilter,
     sectionFilterToSearchQuery,
+    sectionPoolSearchQuery,
     RECENTLY_MERGED_WITHIN_DAYS,
 } from "#/lib/session/section-filters.ts";
 
@@ -78,5 +80,38 @@ describe("sectionFilterToSearchQuery", () => {
 
         expect(matchesSectionSearchCountQuery(recent, query, VIEWER)).toBe(true);
         expect(matchesSectionSearchCountQuery(stale, query, VIEWER)).toBe(false);
+    });
+});
+
+describe("sectionPoolSearchQuery", () => {
+    it("gives the three sections about my open pull requests one shared search", () => {
+        const shared = "is:pr author:quentin is:open draft:false";
+        for (const id of ["returned-to-you", "waiting-for-reviewers-me", "approved"]) {
+            expect(sectionPoolSearchQuery(defaultFilterForPreset(id), VIEWER)).toBe(shared);
+        }
+    });
+
+    it("keeps their own search for sections GitHub filters exactly or that are not about my pull requests", () => {
+        for (const id of ["needs-your-review", "drafts", "waiting-for-reviewers", "merging-and-recently-merged"]) {
+            expect(sectionPoolSearchQuery(defaultFilterForPreset(id), VIEWER)).toBeNull();
+        }
+        expect(sectionPoolSearchQuery(defaultFilterForPreset("waiting-for-author"), VIEWER)).toBeNull();
+    });
+
+    it("does not share a search for someone else's pull requests", () => {
+        const filter = defaultFilterForPreset("returned-to-you");
+        const conditions = filter.cases[0]!.conditions.map((condition) =>
+            condition.field === "author" ? { ...condition, value: "octocat" } : condition,
+        );
+        expect(sectionPoolSearchQuery({ cases: [{ ...filter.cases[0]!, conditions }] }, VIEWER)).toBeNull();
+    });
+});
+
+describe("sectionFilterNeedsClientFilter", () => {
+    it("flags filters GitHub search cannot apply exactly", () => {
+        expect(sectionFilterNeedsClientFilter(defaultFilterForPreset("needs-your-review"), VIEWER)).toBe(false);
+        expect(sectionFilterNeedsClientFilter(defaultFilterForPreset("drafts"), VIEWER)).toBe(false);
+        expect(sectionFilterNeedsClientFilter(defaultFilterForPreset("returned-to-you"), VIEWER)).toBe(true);
+        expect(sectionFilterNeedsClientFilter(defaultFilterForPreset("approved"), VIEWER)).toBe(true);
     });
 });

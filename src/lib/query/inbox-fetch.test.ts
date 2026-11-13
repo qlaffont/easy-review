@@ -148,6 +148,107 @@ describe("fetchInboxSections", () => {
         expect(data.sectionCounts["returned-to-you"]).toBe(1);
     });
 
+    it("scans past a first page the section filter drops entirely", async () => {
+        const github = createFakeGithub();
+        github.addAccount(TOKEN, { login: "quentin" });
+        // Twelve of my PRs waiting on reviewers: GitHub returns them for Returned to you, the filter drops them.
+        for (let number = 1; number <= 12; number += 1) {
+            github.addPullRequest(TOKEN, {
+                repository: "acme/api",
+                number,
+                author: "quentin",
+                reviewDecision: "review-required",
+                reviewRequests: ["romainpm"],
+                updatedAt: `2026-07-${String(number + 10).padStart(2, "0")}T00:00:00.000Z`,
+            });
+        }
+
+        const { data } = await fetchInboxSections({
+            github,
+            token: TOKEN,
+            viewerLogin: "quentin",
+            selected: ["acme/api"],
+            sectionLayout: defaultSectionLayout(),
+            existing: emptyInboxQueryData(),
+        });
+
+        expect(data.sectionPullRequests["returned-to-you"]).toEqual([]);
+        expect(data.sectionCounts["returned-to-you"]).toBe(0);
+        expect(data.sectionPagination["returned-to-you"]?.hasNextPage).toBe(false);
+    });
+
+    it("finds a returned PR that sits beyond the first search page", async () => {
+        const github = createFakeGithub();
+        github.addAccount(TOKEN, { login: "quentin" });
+        for (let number = 1; number <= 12; number += 1) {
+            github.addPullRequest(TOKEN, {
+                repository: "acme/api",
+                number,
+                author: "quentin",
+                reviewDecision: "review-required",
+                reviewRequests: ["romainpm"],
+                updatedAt: `2026-07-${String(number + 10).padStart(2, "0")}T00:00:00.000Z`,
+            });
+        }
+        github.addPullRequest(TOKEN, {
+            repository: "acme/api",
+            number: 42,
+            author: "quentin",
+            reviewDecision: "changes-requested",
+            reviewers: [{ login: "romainpm", state: "changes-requested", reviewId: 1 }],
+            updatedAt: "2026-07-01T00:00:00.000Z",
+        });
+
+        const { data } = await fetchInboxSections({
+            github,
+            token: TOKEN,
+            viewerLogin: "quentin",
+            selected: ["acme/api"],
+            sectionLayout: defaultSectionLayout(),
+            existing: emptyInboxQueryData(),
+        });
+
+        expect(data.sectionPullRequests["returned-to-you"]?.map((entry) => entry.number)).toEqual([42]);
+        expect(data.sectionCounts["returned-to-you"]).toBe(1);
+    });
+
+    it("falls back to the section's own search when I have too many open PRs to share one list", async () => {
+        const github = createFakeGithub();
+        github.addAccount(TOKEN, { login: "quentin" });
+        for (let number = 1; number <= 101; number += 1) {
+            github.addPullRequest(TOKEN, {
+                repository: "acme/api",
+                number,
+                author: "quentin",
+                reviewDecision: "review-required",
+                reviewRequests: ["romainpm"],
+                updatedAt: new Date(Date.UTC(2026, 6, 10, 0, number)).toISOString(),
+            });
+        }
+        github.addPullRequest(TOKEN, {
+            repository: "acme/api",
+            number: 500,
+            author: "quentin",
+            reviewDecision: "changes-requested",
+            reviewers: [{ login: "romainpm", state: "changes-requested", reviewId: 1 }],
+            updatedAt: "2026-07-11T00:00:00.000Z",
+        });
+
+        const { data } = await fetchInboxSections({
+            github,
+            token: TOKEN,
+            viewerLogin: "quentin",
+            selected: ["acme/api"],
+            sectionLayout: defaultSectionLayout(),
+            existing: emptyInboxQueryData(),
+        });
+
+        expect(data.sectionPullRequests["returned-to-you"]?.map((entry) => entry.number)).toEqual([500]);
+        // Two pages of 50 scanned out of 102: the count stays an upper bound, and more can be loaded.
+        expect(data.sectionCounts["returned-to-you"]).toBe(1 + 2);
+        expect(data.sectionPagination["returned-to-you"]?.hasNextPage).toBe(true);
+    });
+
     it("keeps the GitHub total when every fetched row still matches the section", async () => {
         const github = createFakeGithub();
         github.addAccount(TOKEN, { login: "quentin" });

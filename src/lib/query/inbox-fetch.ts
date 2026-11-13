@@ -12,7 +12,13 @@ import {
     type InboxSectionLayoutEntry,
 } from "#/lib/session/inbox-sections.ts";
 import { comparePullRequestsByUpdatedAtDesc } from "#/lib/session/pull-request-search.ts";
-import { sectionFilterToSearchQuery, matchSectionFilter } from "#/lib/session/section-filters.ts";
+import {
+    matchSectionFilter,
+    sectionFilterNeedsClientFilter,
+    sectionFilterToSearchQuery,
+    sectionPoolSearchQuery,
+    type SectionFilter,
+} from "#/lib/session/section-filters.ts";
 
 const INBOX_SECTION_FETCH_CONCURRENCY = 4;
 
@@ -134,7 +140,69 @@ async function mapWithConcurrency<TItem, TResult>(
     return results;
 }
 
-/** Load one inbox section from GitHub (or from the cached pool when the filter is client-only). */
+/** Page size and page cap of a shared section search: beyond this many rows, sections search on their own. */
+const SECTION_POOL_PAGE_SIZE = 50;
+const SECTION_POOL_MAX_PAGES = 2;
+
+/** Every pull request behind a shared section search, and whether GitHub had no more. */
+export type SectionPool = {
+    pullRequests: Array<PullRequestSummary>;
+    complete: boolean;
+};
+
+export type SectionPoolLoader = (query: string) => Promise<SectionPool>;
+
+/** Load a shared section search in full, up to {@link SECTION_POOL_MAX_PAGES} pages. */
+export async function fetchSectionPool(params: {
+    github: GithubClient;
+    token: string;
+    query: string;
+    repositories: ReadonlyArray<string>;
+}): Promise<SectionPool> {
+    const { github, token, query, repositories } = params;
+    let pullRequests: Array<PullRequestSummary> = [];
+    let after: string | null = null;
+
+    for (let page = 0; page < SECTION_POOL_MAX_PAGES; page += 1) {
+        const result = await github.fetchSectionPullRequests(token, {
+            query,
+            repositories: [...repositories],
+            limit: SECTION_POOL_PAGE_SIZE,
+            after,
+        });
+        pullRequests = mergePullRequestSummaries(pullRequests, result.pullRequests);
+
+        if (!result.pageInfo.hasNextPage) {
+            return { pullRequests, complete: true };
+        }
+        if (!result.pageInfo.endCursor || result.pullRequests.length === 0) {
+            break;
+        }
+        after = result.pageInfo.endCursor;
+    }
+
+    return { pullRequests, complete: false };
+}
+
+/** Share one load per query between the sections asking for it in the same refresh. */
+export function memoizeSectionPoolLoader(load: SectionPoolLoader): SectionPoolLoader {
+    const loads = new Map<string, Promise<SectionPool>>();
+    return (query) => {
+        const existing = loads.get(query);
+        if (existing) {
+            return existing;
+        }
+        const started = load(query);
+        loads.set(query, started);
+        started.catch(() => loads.delete(query));
+        return started;
+    };
+}
+
+/**
+ * Load one inbox section: from a shared search when it has one (exact rows and count), else from
+ * its own GitHub search, else from the cached pool when GitHub search cannot express the filter.
+ */
 export async function fetchInboxSection(params: {
     github: GithubClient;
     token: string;
@@ -143,6 +211,7 @@ export async function fetchInboxSection(params: {
     definition: InboxSectionDefinition;
     existing: InboxQueryData;
     signal?: AbortSignal;
+    loadPool?: SectionPoolLoader;
 }): Promise<SectionFetchResult> {
     const { github, token, viewerLogin, selected, definition, existing, signal } = params;
 
@@ -151,30 +220,54 @@ export async function fetchInboxSection(params: {
     }
 
     const selectedSet = new Set(selected);
+    const poolQuery = sectionPoolSearchQuery(definition.filter, viewerLogin);
+
+    if (poolQuery) {
+        const loadPool =
+            params.loadPool ?? ((query: string) => fetchSectionPool({ github, token, query, repositories: selected }));
+        const pool = await loadPool(poolQuery);
+
+        if (pool.complete) {
+            const matched = pool.pullRequests
+                .filter(
+                    (pullRequest) =>
+                        selectedSet.has(pullRequest.repository) &&
+                        matchSectionFilter(pullRequest, definition.filter, viewerLogin),
+                )
+                .sort(comparePullRequestsByUpdatedAtDesc);
+
+            return {
+                id: definition.id,
+                pullRequests: matched,
+                totalCount: matched.length,
+                pageInfo: { hasNextPage: false, endCursor: null },
+            };
+        }
+    }
+
     const query = sectionFilterToSearchQuery(definition.filter, viewerLogin);
 
     if (query) {
-        const page = await github.fetchSectionPullRequests(token, {
+        const scan = await scanSectionSearch({
+            github,
+            token,
             query,
-            repositories: [...selected],
-            limit: INBOX_SECTION_LOAD_SIZE,
+            repositories: selected,
+            filter: definition.filter,
+            viewerLogin,
+            signal,
         });
-        const fetched = page.pullRequests;
-        const pullRequests = fetched.filter((pullRequest) =>
-            matchSectionFilter(pullRequest, definition.filter, viewerLogin),
-        );
 
         return {
             id: definition.id,
-            pullRequests,
-            totalCount: sectionCountAfterClientFilter({
-                githubTotal: page.totalCount,
-                fetchedOnThisPage: fetched.length,
-                matchingOnThisPage: pullRequests.length,
-                matchingLoaded: pullRequests.length,
-                hasNextPage: page.pageInfo.hasNextPage,
+            pullRequests: scan.pullRequests,
+            totalCount: sectionCountAfterScan({
+                upperBound: scan.githubTotal,
+                dropped: scan.dropped,
+                matchingLoaded: scan.pullRequests.length,
+                hasNextPage: scan.pageInfo.hasNextPage,
             }),
-            pageInfo: page.pageInfo,
+            pageInfo: scan.pageInfo,
         };
     }
 
@@ -212,9 +305,14 @@ export async function fetchInboxSections(params: {
     sectionIds?: InboxSectionFetchScope;
     signal?: AbortSignal;
     onSectionLoaded?: (result: SectionFetchResult) => void;
+    /** Shared section searches; defaults to one load per query for this call. */
+    loadPool?: SectionPoolLoader;
 }): Promise<InboxFetchResult> {
     const { github, token, viewerLogin, selected, sectionLayout, existing, sectionIds, signal, onSectionLoaded } =
         params;
+    const loadPool =
+        params.loadPool ??
+        memoizeSectionPoolLoader((query) => fetchSectionPool({ github, token, query, repositories: selected }));
 
     if (selected.length === 0) {
         return { data: emptyInboxQueryData(), successes: 0, failure: null };
@@ -241,6 +339,7 @@ export async function fetchInboxSections(params: {
                 definition,
                 existing,
                 signal,
+                loadPool,
             });
             onSectionLoaded?.(result);
             return result;
@@ -303,11 +402,83 @@ export function patchInboxPullRequest(
     return { ...data, pullRequests, sectionPullRequests, sectionCounts };
 }
 
-/** GitHub search is a superset of the section filter — drop the extras from the badge count. */
-export function sectionCountAfterClientFilter(input: {
+/**
+ * Pages one fetch may scan while the section filter keeps dropping rows, and their size. A filter
+ * GitHub expresses exactly needs one page of {@link INBOX_SECTION_LOAD_SIZE}.
+ */
+const CLIENT_FILTERED_SCAN_PAGE_SIZE = 50;
+const CLIENT_FILTERED_SCAN_MAX_PAGES = 2;
+
+export type SectionSearchScan = {
+    /** Rows that pass the section filter, in search order. */
+    pullRequests: Array<PullRequestSummary>;
+    /** Rows GitHub returned that the section filter dropped. */
+    dropped: number;
     githubTotal: number;
-    fetchedOnThisPage: number;
-    matchingOnThisPage: number;
+    pageInfo: InboxPullRequestPageInfo;
+};
+
+/**
+ * Page through a section's GitHub search until a page's worth of rows pass the section filter
+ * or the results run out. The search is only a superset of filters with client-only conditions
+ * (a custom section on involvement, say), so one page can be all rejects while matches sit further down.
+ */
+export async function scanSectionSearch(params: {
+    github: GithubClient;
+    token: string;
+    query: string;
+    repositories: ReadonlyArray<string>;
+    filter: SectionFilter;
+    viewerLogin: string;
+    after?: string | null;
+    signal?: AbortSignal;
+}): Promise<SectionSearchScan> {
+    const { github, token, query, repositories, filter, viewerLogin, signal } = params;
+    const clientFiltered = sectionFilterNeedsClientFilter(filter, viewerLogin);
+    const pageSize = clientFiltered ? CLIENT_FILTERED_SCAN_PAGE_SIZE : INBOX_SECTION_LOAD_SIZE;
+    const maxPages = clientFiltered ? CLIENT_FILTERED_SCAN_MAX_PAGES : 1;
+    const pullRequests: Array<PullRequestSummary> = [];
+    let dropped = 0;
+    let githubTotal = 0;
+    let pageInfo: InboxPullRequestPageInfo = { hasNextPage: false, endCursor: null };
+    let after = params.after ?? null;
+
+    for (let scanned = 0; scanned < maxPages; scanned += 1) {
+        if (signal?.aborted) {
+            throw new DOMException("Aborted", "AbortError");
+        }
+
+        const page = await github.fetchSectionPullRequests(token, {
+            query,
+            repositories: [...repositories],
+            limit: pageSize,
+            after,
+        });
+        const matching = page.pullRequests.filter((pullRequest) =>
+            matchSectionFilter(pullRequest, filter, viewerLogin),
+        );
+
+        pullRequests.push(...matching);
+        dropped += page.pullRequests.length - matching.length;
+        githubTotal = page.totalCount;
+        pageInfo = page.pageInfo;
+
+        if (!pageInfo.hasNextPage || !pageInfo.endCursor || pullRequests.length >= INBOX_SECTION_LOAD_SIZE) {
+            break;
+        }
+        after = pageInfo.endCursor;
+    }
+
+    return { pullRequests, dropped, githubTotal, pageInfo };
+}
+
+/**
+ * Section badge count after a scan. Exact once the search is exhausted; otherwise an upper bound:
+ * `upperBound` (GitHub total, or the previous estimate when loading more) minus rows just dropped.
+ */
+export function sectionCountAfterScan(input: {
+    upperBound: number;
+    dropped: number;
     matchingLoaded: number;
     hasNextPage: boolean;
 }): number {
@@ -315,6 +486,5 @@ export function sectionCountAfterClientFilter(input: {
         return input.matchingLoaded;
     }
 
-    const droppedOnThisPage = Math.max(0, input.fetchedOnThisPage - input.matchingOnThisPage);
-    return Math.max(input.matchingLoaded, input.githubTotal - droppedOnThisPage);
+    return Math.max(input.matchingLoaded, input.upperBound - input.dropped);
 }

@@ -5,6 +5,7 @@ import { useState, type ReactNode } from "react";
 import { isHardPageReload } from "#/lib/query/cache-policy.ts";
 import { invalidateAllQueriesOnPageReload } from "#/lib/query/invalidate.ts";
 import { createAppQueryClient } from "#/lib/query/query-client.ts";
+import { INBOX_POOL_SEGMENT } from "#/lib/query/query-keys.ts";
 
 const persister = createAsyncStoragePersister({
     storage: typeof window !== "undefined" ? window.localStorage : undefined,
@@ -23,7 +24,11 @@ export function AppQueryProvider({ children }: { children: ReactNode }) {
                 dehydrateOptions: {
                     shouldDehydrateQuery: (query) => {
                         const root = query.queryKey[0];
-                        if (root === "inbox" || root === "repos" || root === "repository") {
+                        if (root === "inbox") {
+                            // Shared section searches are rebuilt on demand, never restored.
+                            return query.queryKey[3] !== INBOX_POOL_SEGMENT;
+                        }
+                        if (root === "repos" || root === "repository") {
                             return true;
                         }
                         return root === "pullRequest" && query.queryKey[2] === "stack";

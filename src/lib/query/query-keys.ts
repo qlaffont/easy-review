@@ -1,3 +1,6 @@
+/** Reserved section-id slot for shared section searches: never a real section id. */
+export const INBOX_POOL_SEGMENT = "__pool__";
+
 /** Hierarchical query keys — every server fetch goes through here. */
 export const queryKeys = {
     auth: {
@@ -10,6 +13,13 @@ export const queryKeys = {
         /** Merged aggregate written by section fetches — not fetched directly. */
         sections: (login: string) => ["inbox", "sections", login] as const,
         section: (login: string, sectionId: string) => ["inbox", "section", login, sectionId] as const,
+        /**
+         * Shared search behind several sections (see `sectionPoolSearchQuery`). Nested under the
+         * section prefix so every section invalidation also marks it stale; never observed, never persisted.
+         */
+        pools: (login: string) => ["inbox", "section", login, INBOX_POOL_SEGMENT] as const,
+        pool: (login: string, repositories: string, query: string) =>
+            ["inbox", "section", login, INBOX_POOL_SEGMENT, repositories, query] as const,
     },
     pullRequest: {
         detail: (key: string) => ["pullRequest", key, "detail"] as const,

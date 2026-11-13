@@ -942,6 +942,52 @@ export function sectionFilterToSearchQuery(filter: SectionFilter, viewerLogin: s
     return tokens.join(" ");
 }
 
+/**
+ * Whether GitHub search returns more than the section shows, so rows must be filtered locally:
+ * a condition search cannot express (involvement, repository…), or `hasApproval`, which search
+ * reads as the overall review decision while the section accepts any one approving reviewer.
+ */
+export function sectionFilterNeedsClientFilter(filter: SectionFilter, viewerLogin: string): boolean {
+    return filter.cases.some((case_) =>
+        case_.conditions.some((condition) => {
+            if (condition.field === "hasApproval") {
+                return true;
+            }
+            const token = conditionToSearchToken(condition, viewerLogin);
+            return token === null || token.startsWith("repo:");
+        }),
+    );
+}
+
+/**
+ * The shared search behind a section about the viewer's own open pull requests that GitHub cannot
+ * filter exactly (Returned to you, Waiting for reviewers (me), Approved). Such sections share one
+ * fully loaded list and classify it locally, instead of each paging through the same results.
+ * Null for any other section, which keeps its own search.
+ */
+export function sectionPoolSearchQuery(filter: SectionFilter, viewerLogin: string): string | null {
+    if (!viewerLogin || filter.cases.length !== 1 || !sectionFilterNeedsClientFilter(filter, viewerLogin)) {
+        return null;
+    }
+
+    const conditions = filter.cases[0]!.conditions;
+    const author = conditions.find((condition) => condition.field === "author" && condition.op === "is");
+    const open = conditions.some(
+        (condition) => condition.field === "state" && condition.op === "is" && condition.value === "open",
+    );
+    if (!author || !open || resolvePerson(String(author.value), viewerLogin) !== viewerLogin) {
+        return null;
+    }
+
+    const tokens = ["is:pr", `author:${viewerLogin}`, "is:open"];
+    const draft = conditions.find((condition) => condition.field === "isDraft");
+    const draftToken = draft ? conditionToSearchToken(draft, viewerLogin) : null;
+    if (draftToken) {
+        tokens.push(draftToken);
+    }
+    return tokens.join(" ");
+}
+
 /** @deprecated Use {@link sectionFilterToSearchQuery}. */
 export const sectionFilterToSearchCountQuery = sectionFilterToSearchQuery;
 

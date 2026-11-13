@@ -1,5 +1,6 @@
 import type { QueryClient } from "@tanstack/react-query";
 
+import { isGithubRateLimitLow } from "#/lib/github/rate-limit.ts";
 import { CACHE_POLICY } from "#/lib/query/cache-policy.ts";
 import { inboxSectionQueryPrefix } from "#/lib/query/inbox.ts";
 import { queryKeys } from "#/lib/query/query-keys.ts";
@@ -41,7 +42,7 @@ export function invalidateInboxAfterRepoSelection(queryClient: QueryClient, logi
     void queryClient.invalidateQueries({ queryKey: inboxSectionQueryPrefix(login), refetchType: "active" });
 }
 
-/** Tab focus / quiet interval — refetch only when outside the background window. */
+/** Tab focus / quiet interval — refetch only when outside the background window and the GitHub budget allows. */
 export function revalidateInboxInBackground(
     queryClient: QueryClient,
     login: string,
@@ -49,6 +50,10 @@ export function revalidateInboxInBackground(
 ): void {
     const { backgroundRevalidateMinMs } = CACHE_POLICY.inbox;
     if (lastLoadedAt && Date.now() - Date.parse(lastLoadedAt) < backgroundRevalidateMinMs) {
+        return;
+    }
+    // Near GitHub's hourly limit: keep what is painted, manual Refresh still works.
+    if (isGithubRateLimitLow()) {
         return;
     }
     void queryClient.invalidateQueries({ queryKey: inboxSectionQueryPrefix(login), refetchType: "active" });
