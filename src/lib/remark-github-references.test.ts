@@ -40,6 +40,11 @@ describe("remarkGithubReferences", () => {
         expect(run([{ type: "text", value }])).toEqual([{ type: "text", value }]);
     });
 
+    it("refuses dot-segment repository names that would escape the repository path", () => {
+        const value = "latomate/..#1 latomate/.#2";
+        expect(run([{ type: "text", value }])).toEqual([{ type: "text", value }]);
+    });
+
     it("does not relink text already inside a link", () => {
         const existing = link("https://example.com", "see #12");
         expect(run([existing])).toEqual([existing]);

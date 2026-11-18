@@ -8,6 +8,9 @@ import { findAndReplace } from "mdast-util-find-and-replace";
  */
 const REFERENCE_RE = /(?<![\w./#-])(?:([a-zA-Z\d](?:[a-zA-Z\d-]{0,38}))\/([\w.-]{1,100}))?#(\d+)\b/g;
 
+/** `.` / `..` are not valid repository names; in a URL they would walk up the GitHub path. */
+const DOT_SEGMENT_RE = /^\.{1,2}$/;
+
 export type GithubReferencesOptions = {
     /** `owner/repo` that bare `#123` points at; bare references stay text without it. */
     repository?: string | null;
@@ -27,6 +30,9 @@ export function remarkGithubReferences(options: GithubReferencesOptions = {}) {
             [
                 REFERENCE_RE,
                 (value: string, owner: string | undefined, repo: string | undefined, number: string): Link | false => {
+                    if (repo && DOT_SEGMENT_RE.test(repo)) {
+                        return false;
+                    }
                     const target = owner && repo ? `${owner}/${repo}` : repository;
                     if (!target) {
                         return false;
