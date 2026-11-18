@@ -11,3 +11,10 @@ overrides:
   "postcss-selector-parser@<7.1.6": ^7.1.6
   "source-map-js@<1.2.2": ^1.2.2
   "undici@>=7.0.0 <7.29.1": ^7.29.1
+
+auditConfig:
+  ignoreGhsas:
+    # picomatch <=4.0.7 extglob ReDoS — no patched release yet (checked 2026-11-18). Only reached
+    # through build tooling (vite, tinyglobby, TanStack router generator) matching globs from our
+    # own config; not in .output. Drop this once picomatch ships a fix and bump it via overrides.
+    - GHSA-fc5q-39xc-vjpf
