@@ -15,7 +15,7 @@ import {
     type ReactElement,
     type ReactNode,
 } from "react";
-import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
+import ReactMarkdown, { defaultUrlTransform, type Options as ReactMarkdownOptions } from "react-markdown";
 import rehypeRaw from "rehype-raw";
 import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 import remarkGfm from "remark-gfm";
@@ -39,6 +39,7 @@ import {
 import { prepareMarkdownSource } from "#/lib/markdown-source.ts";
 import { remarkBoldMentions } from "#/lib/remark-bold-mentions.ts";
 import { remarkGithubEmoji } from "#/lib/remark-github-emoji.ts";
+import { remarkGithubReferences } from "#/lib/remark-github-references.ts";
 import { useOptionalSession } from "#/lib/session/provider.tsx";
 import { notifyCopied, notifyError } from "#/lib/toast.ts";
 import { cn } from "#/lib/utils.ts";
@@ -126,7 +127,7 @@ function isAllowedMarkdownImageSrc(src: string | undefined): boolean {
     }
 }
 
-const remarkPlugins = [remarkGfm, remarkAlert, remarkGithubEmoji, remarkBoldMentions];
+const staticRemarkPlugins = [remarkGfm, remarkAlert, remarkGithubEmoji, remarkBoldMentions];
 const rehypePlugins: Array<typeof rehypeRaw | [typeof rehypeSanitize, typeof sanitizeSchema]> = [
     rehypeRaw,
     [rehypeSanitize, sanitizeSchema],
@@ -943,6 +944,11 @@ export const Markdown = memo(function Markdown({
 }) {
     const urlTransform = useMemo(() => resolveAgainst(baseUrl), [baseUrl]);
     const prepared = useMemo(() => prepareMarkdownSource(source), [source]);
+    const repository = useMemo(() => repositoryFromGithubBaseUrl(baseUrl), [baseUrl]);
+    const remarkPlugins = useMemo<ReactMarkdownOptions["remarkPlugins"]>(
+        () => [...staticRemarkPlugins, [remarkGithubReferences, { repository }]],
+        [repository],
+    );
     const suggestionContext = useMemo(() => {
         const original = suggestionOriginal ?? null;
         const end = suggestionLine ?? null;
@@ -966,7 +972,7 @@ export const Markdown = memo(function Markdown({
 
     return (
         <SuggestionContext.Provider value={suggestionContext}>
-            <MarkdownRepoContext.Provider value={repositoryFromGithubBaseUrl(baseUrl)}>
+            <MarkdownRepoContext.Provider value={repository}>
                 <TaskListContext.Provider value={taskList}>
                     <div className="prose prose-sm max-w-none text-foreground dark:prose-invert prose-p:my-2 prose-hr:my-3 prose-pre:my-0 prose-pre:bg-transparent prose-pre:p-0 prose-code:text-foreground prose-code:before:content-none prose-code:after:content-none prose-strong:text-foreground [&_.graphite__hidden]:hidden [&_li:has(>input[type=checkbox])]:list-none [&_ul:has(li>input[type=checkbox])]:list-none [&_ul:has(li>input[type=checkbox])]:pl-0">
                         <ReactMarkdown
