@@ -1,3 +1,4 @@
+import { Link } from "@tanstack/react-router";
 import { Check, Copy, ExternalLink, Film, PencilLine } from "lucide-react";
 import {
     Children,
@@ -36,6 +37,7 @@ import {
     shouldEmbedGraphiteAttachment,
     type ResolvedGithubAttachment,
 } from "#/lib/github-attachment.ts";
+import { pullRequestLinkTarget } from "#/lib/github-pull-request-link.ts";
 import { prepareMarkdownSource } from "#/lib/markdown-source.ts";
 import { remarkBoldMentions } from "#/lib/remark-bold-mentions.ts";
 import { remarkGithubEmoji } from "#/lib/remark-github-emoji.ts";
@@ -728,6 +730,21 @@ const components = {
                     preferredKind={mediaKindFromLinkText(linkText) ?? undefined}
                     initialResolved={firstResolvedMediaFromChildren(children)}
                 />
+            );
+        }
+
+        const pullRequest = pullRequestLinkTarget(href);
+        if (pullRequest) {
+            return (
+                <Link
+                    to="/pr/$owner/$repo/$number"
+                    params={pullRequest}
+                    target="_blank"
+                    rel="noreferrer noopener"
+                    className={className}
+                >
+                    {children}
+                </Link>
             );
         }
 

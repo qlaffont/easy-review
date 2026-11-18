@@ -17,9 +17,11 @@ export type GithubReferencesOptions = {
 };
 
 /**
- * Link issue / pull request references the way GitHub renders them. They point at `/issues/N`:
- * the markdown alone cannot tell an issue from a pull request, and GitHub redirects that path
- * to `/pull/N` when it is one.
+ * Link issue / pull request references the way GitHub renders them. They point at `/pull/N`, which
+ * the markdown `a` renderer opens in Easy Review: most references in a PR body are pull requests,
+ * and the markdown alone cannot tell them from issues. An issue number lands on the PR page’s
+ * error state, which links back to the issue on GitHub (and GitHub itself redirects `/pull/N`
+ * to `/issues/N`).
  */
 export function remarkGithubReferences(options: GithubReferencesOptions = {}) {
     const repository = options.repository ?? null;
@@ -39,7 +41,7 @@ export function remarkGithubReferences(options: GithubReferencesOptions = {}) {
                     }
                     return {
                         type: "link",
-                        url: `https://github.com/${target}/issues/${number}`,
+                        url: `https://github.com/${target}/pull/${number}`,
                         children: [{ type: "text", value }],
                     };
                 },

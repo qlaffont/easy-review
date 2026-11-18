@@ -313,9 +313,21 @@ function PullRequestFallback({ page }: { page: PullRequestPage }) {
         <div className="mx-auto flex w-full max-w-5xl flex-col gap-4 px-4 py-6">
             <BackToInbox />
             {page.status === "error" ? (
-                <p className="rounded-lg border p-8 text-center text-sm text-destructive">
-                    {page.error?.message ?? "This pull request could not be loaded."}
-                </p>
+                <div className="flex flex-col items-center gap-3 rounded-lg border p-8 text-center text-sm">
+                    <p className="text-destructive">
+                        {page.error?.message ?? "This pull request could not be loaded."}
+                    </p>
+                    {/* `#N` references link here even when N is an issue; GitHub resolves either. */}
+                    <a
+                        href={`https://github.com/${page.repository}/issues/${page.number}`}
+                        target="_blank"
+                        rel="noreferrer noopener"
+                        className="inline-flex items-center gap-1.5 text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
+                    >
+                        Open {page.repository}#{page.number} on GitHub
+                        <ExternalLink className="size-3.5" aria-hidden="true" />
+                    </a>
+                </div>
             ) : (
                 <PullRequestLoadingSkeleton repository={page.repository} number={page.number} />
             )}

@@ -19,14 +19,14 @@ describe("remarkGithubReferences", () => {
     it("links cross-repository references", () => {
         expect(run([{ type: "text", value: "Service : latomate/medical-service#500" }])).toEqual([
             { type: "text", value: "Service : " },
-            link("https://github.com/latomate/medical-service/issues/500", "latomate/medical-service#500"),
+            link("https://github.com/latomate/medical-service/pull/500", "latomate/medical-service#500"),
         ]);
     });
 
     it("links bare references to the current repository", () => {
         expect(run([{ type: "text", value: "fixes #731." }])).toEqual([
             { type: "text", value: "fixes " },
-            link("https://github.com/latomate/medical-web/issues/731", "#731"),
+            link("https://github.com/latomate/medical-web/pull/731", "#731"),
             { type: "text", value: "." },
         ]);
     });
