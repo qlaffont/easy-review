@@ -1,4 +1,4 @@
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient, type QueryKey } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { PullRequestHead } from "#/lib/query/invalidate.ts";
@@ -170,6 +170,19 @@ function toSummary(detail: PullRequestDetail): PullRequestSummary {
     };
 }
 
+/**
+ * Keep the last data on screen while the same resource refetches, but never carry it over to another
+ * pull request or repository: switching PRs must paint like a fresh open, not flash the previous one.
+ * Every pull request and repository key holds its scope id at index 1.
+ */
+function previousWithin<T>(
+    scope: string,
+    previous: T | undefined,
+    previousQuery: { queryKey: QueryKey } | undefined,
+): T | undefined {
+    return previousQuery?.queryKey[1] === scope ? previous : undefined;
+}
+
 export function usePullRequestQuery(repository: string, number: number) {
     const session = useSession();
     const key = prKey(repository, number);
@@ -181,7 +194,7 @@ export function usePullRequestQuery(repository: string, number: number) {
         enabled: Boolean(login),
         staleTime: CACHE_POLICY.pullRequest.detail.staleTime,
         gcTime: CACHE_POLICY.pullRequest.detail.gcTime,
-        placeholderData: (previous) => previous,
+        placeholderData: (previous, previousQuery) => previousWithin(key, previous, previousQuery),
     });
 
     const inboxSummary = getInboxQueryData(session.queryClient, login)?.pullRequests.find(
@@ -237,7 +250,7 @@ export function usePullRequestFilesQuery(repository: string, number: number) {
         enabled: Boolean(login),
         staleTime: CACHE_POLICY.pullRequest.files.staleTime,
         gcTime: CACHE_POLICY.pullRequest.files.gcTime,
-        placeholderData: (previous) => previous,
+        placeholderData: (previous, previousQuery) => previousWithin(key, previous, previousQuery),
     });
 
     const refresh = useCallback(async () => {
@@ -327,7 +340,7 @@ export function useReviewThreadsQuery(repository: string, number: number) {
         enabled: Boolean(login),
         staleTime: CACHE_POLICY.pullRequest.threads.staleTime,
         gcTime: CACHE_POLICY.pullRequest.threads.gcTime,
-        placeholderData: (previous) => previous,
+        placeholderData: (previous, previousQuery) => previousWithin(key, previous, previousQuery),
     });
 
     return { ...toThreadsState(query), isFetching: query.isFetching, refetch: query.refetch };
@@ -344,7 +357,7 @@ export function useConversationQuery(repository: string, number: number) {
         enabled: Boolean(login),
         staleTime: CACHE_POLICY.pullRequest.conversation.staleTime,
         gcTime: CACHE_POLICY.pullRequest.conversation.gcTime,
-        placeholderData: (previous) => previous,
+        placeholderData: (previous, previousQuery) => previousWithin(key, previous, previousQuery),
     });
 
     return { ...toConversationState(query), isFetching: query.isFetching, refetch: query.refetch };
@@ -361,7 +374,7 @@ export function usePullRequestCommitsQuery(repository: string, number: number) {
         enabled: Boolean(login),
         staleTime: CACHE_POLICY.pullRequest.commits.staleTime,
         gcTime: CACHE_POLICY.pullRequest.commits.gcTime,
-        placeholderData: (previous) => previous,
+        placeholderData: (previous, previousQuery) => previousWithin(key, previous, previousQuery),
     });
 
     return { ...toCommitsState(query), isFetching: query.isFetching, refetch: query.refetch };
@@ -392,7 +405,7 @@ export function useFileDiffQuery(
         staleTime: CACHE_POLICY.pullRequest.diff.staleTime,
         gcTime: CACHE_POLICY.pullRequest.diff.gcTime,
         placeholderData: (previousData, previousQuery) => {
-            if (!path || !previousData || !previousQuery) {
+            if (!path || !previousData || !previousQuery || previousQuery.queryKey[1] !== key) {
                 return undefined;
             }
             const previousPath = previousQuery.queryKey[3];
@@ -428,7 +441,7 @@ export function useRelatedPullRequestsQuery(repository: string, number: number) 
         enabled: Boolean(login && (pr.detail || pr.summary)),
         staleTime: CACHE_POLICY.pullRequest.related.staleTime,
         gcTime: CACHE_POLICY.pullRequest.related.gcTime,
-        placeholderData: (previous) => previous,
+        placeholderData: (previous, previousQuery) => previousWithin(key, previous, previousQuery),
     });
 
     return { ...toRelatedState(query), isFetching: query.isFetching, refetch: query.refetch };
@@ -437,14 +450,15 @@ export function useRelatedPullRequestsQuery(repository: string, number: number) 
 export function useRepositoryMetadataQuery(repository: string | null) {
     const session = useSession();
     const login = session.state.state.auth.viewer?.login ?? "";
+    const scope = repository ?? "";
 
     const query = useQuery({
-        queryKey: queryKeys.repository.metadata(repository ?? ""),
+        queryKey: queryKeys.repository.metadata(scope),
         queryFn: ({ signal }) => fetchRepositoryMetadata(session, repository!, signal),
         enabled: Boolean(login && repository),
         staleTime: CACHE_POLICY.repository.metadata.staleTime,
         gcTime: CACHE_POLICY.repository.metadata.gcTime,
-        placeholderData: (previous) => previous,
+        placeholderData: (previous, previousQuery) => previousWithin(scope, previous, previousQuery),
     });
 
     return {
