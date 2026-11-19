@@ -1,4 +1,4 @@
-import { ArrowUpToLine, GitPullRequestClosed, Layers } from "lucide-react";
+import { ArrowUpToLine, ChevronsUpDown, GitPullRequestClosed, Layers } from "lucide-react";
 
 import { SettingsDialogTitle, SettingsPreferenceRow } from "#/components/settings/settings-ui.tsx";
 import { Dialog, DialogContent, DialogDescription, DialogHeader } from "#/components/ui/dialog.tsx";
@@ -34,6 +34,14 @@ export function StackSettingsEditor({ open, onOpenChange }: { open: boolean; onO
                         description="Keep closed PRs out of the stack panel."
                         checked={stackPreferences.hideClosed}
                         onCheckedChange={(hideClosed) => setStackPreferences({ hideClosed })}
+                        disabled={!stackPreferences.enabled}
+                    />
+                    <SettingsPreferenceRow
+                        icon={ChevronsUpDown}
+                        title="Expand stack panel by default"
+                        description="Show every pull request in the stack when opening a PR. Collapsed by default."
+                        checked={stackPreferences.expandByDefault}
+                        onCheckedChange={(expandByDefault) => setStackPreferences({ expandByDefault })}
                         disabled={!stackPreferences.enabled}
                     />
                     <SettingsPreferenceRow

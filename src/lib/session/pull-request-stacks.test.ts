@@ -200,7 +200,7 @@ describe("nextStackPullRequestAfterReview", () => {
         summary({ key: "acme/api#548", repository: "acme/api", number: 548, state: "closed" }),
         summary({ key: "acme/api#549", repository: "acme/api", number: 549 }),
     ];
-    const enabled = { enabled: true, hideClosed: false, openNextInStackAfterReview: true };
+    const enabled = { enabled: true, hideClosed: false, expandByDefault: false, openNextInStackAfterReview: true };
 
     function detailAt(number: number) {
         return {

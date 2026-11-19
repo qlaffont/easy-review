@@ -7,6 +7,9 @@ export type StackPreferences = {
     /** Hide closed pull requests in the PR stack panel. */
     hideClosed: boolean;
 
+    /** Open the PR stack panel expanded instead of collapsed. */
+    expandByDefault: boolean;
+
     /** After submitting a review on a stacked pull request, open the next open layer above it instead of the Inbox. */
     openNextInStackAfterReview: boolean;
 };
@@ -16,6 +19,7 @@ const STORAGE_KEY = "easy-review:stack-prefs:v1";
 const DEFAULT_PREFERENCES: StackPreferences = {
     enabled: false,
     hideClosed: false,
+    expandByDefault: false,
     openNextInStackAfterReview: false,
 };
 
@@ -34,6 +38,7 @@ function readPreferences(): StackPreferences {
         return {
             enabled: Boolean(parsed.enabled),
             hideClosed: Boolean(parsed.hideClosed),
+            expandByDefault: Boolean(parsed.expandByDefault),
             openNextInStackAfterReview: Boolean(parsed.openNextInStackAfterReview),
         };
     } catch {

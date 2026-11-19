@@ -150,7 +150,8 @@ export function PullRequestStackPanel({
 }) {
     const stackPreferences = useStackPreferences()[0];
     const stackState = usePullRequestStackState(repository, number, detail);
-    const [expanded, setExpanded] = useState(true);
+    const [expandedOverride, setExpandedOverride] = useState<boolean | null>(null);
+    const expanded = expandedOverride ?? stackPreferences.expandByDefault;
     const stackMergeEvaluation = useMemo(
         () => (stackState.stack ? evaluateStackMerge(stackState.stack) : null),
         [stackState.stack],
@@ -183,7 +184,7 @@ export function PullRequestStackPanel({
             <div className={cn("flex justify-between gap-3", expanded ? "items-start" : "items-center")}>
                 <button
                     type="button"
-                    onClick={() => setExpanded((value) => !value)}
+                    onClick={() => setExpandedOverride(!expanded)}
                     aria-expanded={expanded}
                     className={cn(
                         "flex min-w-0 flex-1 cursor-pointer gap-2 text-left",
