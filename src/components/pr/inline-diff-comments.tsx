@@ -306,11 +306,13 @@ function ThreadCommentCard({
     minimized: boolean;
     onReply: (body: string) => Promise<void>;
 }) {
+    const session = useSession();
     const [open, setOpen] = useCardOpen(!thread.isResolved, minimized);
     const [replyOpen, setReplyOpen] = useState(false);
     const [reply, setReply] = useState("");
     const root = thread.comments[0];
     const threadSending = isThreadSending(thread);
+    const pullRequest = `${repository}#${number}`;
 
     if (!root) {
         return null;
@@ -325,8 +327,23 @@ function ThreadCommentCard({
         setReplyOpen(false);
         void notifyOptimistic(() => onReply(body), {
             error: "Could not post the reply.",
-            pullRequest: `${repository}#${number}`,
+            pullRequest,
             copyText: body,
+        });
+    }
+
+    function toggleResolved() {
+        if (disabled) {
+            return;
+        }
+        const next = !thread.isResolved;
+        setOpen(!next);
+        if (next) {
+            setReplyOpen(false);
+        }
+        void notifyOptimistic(() => session.setReviewThreadResolved(repository, number, thread.id, next), {
+            error: next ? "Could not resolve the conversation." : "Could not unresolve the conversation.",
+            pullRequest,
         });
     }
 
@@ -378,7 +395,7 @@ function ThreadCommentCard({
                             }}
                         />
                     ))}
-                    {!thread.isResolved && !threadSending ? (
+                    {!threadSending ? (
                         <div className="border-t pt-2">
                             {replyOpen ? (
                                 <MarkdownComposer
@@ -408,6 +425,16 @@ function ThreadCommentCard({
                                             >
                                                 Cancel
                                             </Button>
+                                            {thread.isResolved ? (
+                                                <Button
+                                                    size="sm"
+                                                    variant="outline"
+                                                    disabled={disabled}
+                                                    onClick={toggleResolved}
+                                                >
+                                                    Unresolve
+                                                </Button>
+                                            ) : null}
                                             <Button
                                                 size="sm"
                                                 disabled={disabled || !reply.trim()}
@@ -420,14 +447,25 @@ function ThreadCommentCard({
                                     }
                                 />
                             ) : (
-                                <button
-                                    type="button"
-                                    disabled={disabled}
-                                    className="flex w-full cursor-pointer items-center rounded-md border bg-muted/20 px-3 py-2 text-left text-sm text-muted-foreground transition-colors hover:bg-muted/40 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
-                                    onClick={() => setReplyOpen(true)}
-                                >
-                                    Reply…
-                                </button>
+                                <div className="flex flex-wrap items-center gap-2">
+                                    <button
+                                        type="button"
+                                        disabled={disabled}
+                                        className="flex min-w-0 flex-1 cursor-pointer items-center rounded-md border bg-muted/20 px-3 py-2 text-left text-sm text-muted-foreground transition-colors hover:bg-muted/40 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+                                        onClick={() => setReplyOpen(true)}
+                                    >
+                                        Reply…
+                                    </button>
+                                    <Button
+                                        type="button"
+                                        size="sm"
+                                        variant="outline"
+                                        disabled={disabled}
+                                        onClick={toggleResolved}
+                                    >
+                                        {thread.isResolved ? "Unresolve" : "Resolve"}
+                                    </Button>
+                                </div>
                             )}
                         </div>
                     ) : null}

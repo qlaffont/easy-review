@@ -94,5 +94,19 @@ describe("InlineDiffComments", () => {
         expect(html).not.toContain("Comment actions");
         expect(html).not.toContain("Add reaction");
         expect(html).not.toContain("Reply…");
+        expect(html).not.toContain("Resolve");
+    });
+
+    it("offers reply and resolve on an open conversation", () => {
+        const html = render({ minimized: false, threads: [thread] });
+
+        expect(html).toContain("Reply…");
+        expect(html).toContain(">Resolve<");
+    });
+
+    it("keeps a resolved conversation collapsed until opened", () => {
+        const resolved = { ...thread, isResolved: true };
+
+        expect(render({ minimized: false, threads: [resolved] })).not.toContain("Reply…");
     });
 });
