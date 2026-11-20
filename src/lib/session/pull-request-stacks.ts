@@ -62,6 +62,11 @@ export function nextOpenPullRequestInStack(stack: ResolvedPullRequestStack): Pul
     return stack.pullRequests.slice(stack.position).find((pullRequest) => pullRequest.state === "open") ?? null;
 }
 
+/** Whether submitting a review on a stacked pull request moves on to the next layer above it. */
+export function walksStackAfterReview(preferences: StackPreferences): boolean {
+    return preferences.enabled && preferences.openNextInStackAfterReview;
+}
+
 /**
  * Where to go after submitting a review on `detail`, when the user opted into walking the stack.
  * Null when the option is off, the pull request is not stacked, or it is the top open layer.
@@ -70,7 +75,7 @@ export function nextStackPullRequestAfterReview(
     detail: Pick<PullRequestDetail, "repository" | "number" | "githubStack" | "githubStackPullRequests"> | null,
     preferences: StackPreferences,
 ): PullRequestSummary | null {
-    if (!detail || !preferences.enabled || !preferences.openNextInStackAfterReview) {
+    if (!detail || !walksStackAfterReview(preferences)) {
         return null;
     }
 

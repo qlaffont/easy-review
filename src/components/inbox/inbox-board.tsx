@@ -43,13 +43,20 @@ import { HelpTooltip } from "#/components/ui/help-tooltip.tsx";
 import { InboxLoadingSkeleton, LazyChunkFallback } from "#/components/ui/loading.tsx";
 import { RelativeTime } from "#/components/ui/relative-time.tsx";
 import { useRateLimitPausedUntil } from "#/lib/github/rate-limit.ts";
-import { openInboxPullRequest, openInboxPullRequestsInTabs } from "#/lib/inbox/inbox-navigation.ts";
+import { useInboxPreferences } from "#/lib/inbox-preferences.ts";
+import {
+    openInboxPullRequest,
+    openInboxPullRequestsInTabs,
+    pullRequestsToOpenAll,
+} from "#/lib/inbox/inbox-navigation.ts";
 import { useInboxStackBadges } from "#/lib/query/inbox-stack.ts";
 import { useInboxQuery } from "#/lib/query/inbox.ts";
 import { invalidateInboxAfterRepoSelection } from "#/lib/query/invalidate.ts";
 import { useSession, useSessionState } from "#/lib/session/provider.tsx";
+import { walksStackAfterReview } from "#/lib/session/pull-request-stacks.ts";
 import { describeAutoMergeBatchResult, queuedAutoMergeKey } from "#/lib/session/queued-auto-merge.ts";
 import { useQuietRevalidate } from "#/lib/session/quiet-revalidate.ts";
+import { useStackPreferences } from "#/lib/stack-preferences.ts";
 import { notifyAction, notifyError } from "#/lib/toast.ts";
 import { cn } from "#/lib/utils.ts";
 
@@ -129,6 +136,10 @@ export function InboxBoard() {
     const [filterSectionId, setFilterSectionId] = useState<InboxSectionId | null>(null);
     const [appearanceSectionId, setAppearanceSectionId] = useState<InboxSectionId | null>(null);
     const previousSelectedCount = useRef<number | null>(null);
+    const [stackPreferences] = useStackPreferences();
+    const [inboxPreferences] = useInboxPreferences();
+    // Reviewing a stacked pull request in Easy Review then opens the next layer, so “Open all” starts each stack at its bottom.
+    const openAllWalksStacks = walksStackAfterReview(stackPreferences) && inboxPreferences.openInEasyReview;
 
     function visibleCountFor(id: InboxSectionId): number {
         return visibleCountBySection[id] ?? INBOX_SECTION_PAGE_SIZE;
@@ -180,7 +191,7 @@ export function InboxBoard() {
             }
         }
 
-        const pullRequests = loadedPullRequests();
+        const pullRequests = pullRequestsToOpenAll(loadedPullRequests(), { walkStacks: openAllWalksStacks });
         const { blocked } = openInboxPullRequestsInTabs(pullRequests);
 
         // Sticky: the first tab that opens takes focus, so a timed toast would expire before the user comes back.
@@ -375,6 +386,11 @@ export function InboxBoard() {
                         const layoutEntry = sectionLayout.find((entry) => entry.id === section.id);
                         const isExpanded = inboxUi.expandedSections.includes(section.id);
                         const visibleCount = visibleCountFor(section.id);
+                        // Layers on pages not loaded yet are only skipped once loaded, so this can be an upper bound.
+                        const openAllCount =
+                            section.count -
+                            section.pullRequests.length +
+                            pullRequestsToOpenAll(section.pullRequests, { walkStacks: openAllWalksStacks }).length;
                         return (
                             <InboxSectionPanel
                                 key={section.id}
@@ -389,6 +405,8 @@ export function InboxBoard() {
                                 stackBadges={stackBadges}
                                 queuedAutoMergeKeys={queuedAutoMergeKeys}
                                 visibleCount={visibleCount}
+                                openAllCount={openAllCount}
+                                openAllWalksStacks={openAllWalksStacks}
                                 onToggle={() => {
                                     if (isExpanded) {
                                         setVisibleCountBySection((current) => {
@@ -502,6 +520,8 @@ function InboxSectionPanel({
     stackBadges,
     queuedAutoMergeKeys,
     visibleCount,
+    openAllCount,
+    openAllWalksStacks,
     onToggle,
     onRefresh,
     onAutoMergeAll,
@@ -524,6 +544,10 @@ function InboxSectionPanel({
     stackBadges: Map<string, { position: number; total: number }>;
     queuedAutoMergeKeys: ReadonlySet<string>;
     visibleCount: number;
+    /** Tabs “Open all” will open — fewer than `section.count` when stacks open at their lowest layer. */
+    openAllCount: number;
+    /** “Open all” opens each stack at its lowest layer only. */
+    openAllWalksStacks: boolean;
     onToggle: () => void;
     onRefresh: () => void;
     onAutoMergeAll?: (method: MergeMethod) => Promise<{
@@ -603,7 +627,10 @@ function InboxSectionPanel({
                     ) : null}
                     <InboxOpenAllButton
                         sectionLabel={section.label}
-                        count={count}
+                        count={openAllCount}
+                        // Stacked layers on unloaded pages are not known yet, so the count is only a ceiling.
+                        countIsCeiling={openAllWalksStacks && canLoadMoreFromGitHub}
+                        walksStacks={openAllWalksStacks}
                         disabled={count === 0 || Boolean(isFetching)}
                         onOpenAll={onOpenAll}
                     />
@@ -687,16 +714,21 @@ function InboxSectionPanel({
 function InboxOpenAllButton({
     sectionLabel,
     count,
+    countIsCeiling,
+    walksStacks,
     disabled,
     onOpenAll,
 }: {
     sectionLabel: string;
     count: number;
+    countIsCeiling: boolean;
+    walksStacks: boolean;
     disabled: boolean;
     onOpenAll: () => Promise<void>;
 }) {
     const [pending, setPending] = useState(false);
     const [confirming, setConfirming] = useState(false);
+    const tabs = `${countIsCeiling ? "up to " : ""}${count} tabs`;
 
     function openAll() {
         setPending(true);
@@ -730,14 +762,16 @@ function InboxOpenAllButton({
             <AlertDialog open={confirming} onOpenChange={setConfirming}>
                 <AlertDialogContent className="max-w-lg">
                     <AlertDialogHeader>
-                        <AlertDialogTitle>Open {count} tabs?</AlertDialogTitle>
+                        <AlertDialogTitle>Open {tabs}?</AlertDialogTitle>
                         <AlertDialogDescription>
-                            Every pull request in {sectionLabel} will open in its own browser tab.
+                            {walksStacks
+                                ? `Every pull request in ${sectionLabel} will open in its own browser tab, except stacked ones: each stack opens at its lowest layer, and the next one opens after you review it.`
+                                : `Every pull request in ${sectionLabel} will open in its own browser tab.`}
                         </AlertDialogDescription>
                     </AlertDialogHeader>
                     <AlertDialogFooter>
                         <AlertDialogCancel>Cancel</AlertDialogCancel>
-                        <AlertDialogAction onClick={openAll}>Open {count} tabs</AlertDialogAction>
+                        <AlertDialogAction onClick={openAll}>Open {tabs}</AlertDialogAction>
                     </AlertDialogFooter>
                 </AlertDialogContent>
             </AlertDialog>

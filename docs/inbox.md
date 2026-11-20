@@ -20,7 +20,7 @@ Notable flows:
 
 **In-app review:** **Inbox settings → Navigation → Open pull requests in Easy Review**. Also applies to **Enter** and the command palette action “Open selected pull request”.
 
-**Open all in new tabs:** the external-link button in a section header opens every pull request of that section in its own tab, following the same GitHub / Easy Review setting. Rows not loaded yet are fetched first, and sections with more than 20 pull requests ask for confirmation. Browsers allow only one tab per click by default: allow pop-ups for the site to open them all (a toast says when tabs were blocked).
+**Open all in new tabs:** the external-link button in a section header opens every pull request of that section in its own tab, following the same GitHub / Easy Review setting. Rows not loaded yet are fetched first, and sections with more than 20 pull requests ask for confirmation. When Easy Review opens the pull requests and **Open next pull request in stack after review** is on, each stack opens only at its lowest layer in the section, since reviewing it opens the next layer; the confirmation then shows “up to” while stacked rows are still unloaded. Browsers allow only one tab per click by default: allow pop-ups for the site to open them all (a toast says when tabs were blocked).
 
 **Close tab after review:** with this PR setting on, submitting a review closes the Easy Review tab if the pull request is the only page in its history. The tab waits for the submission to succeed, so a failure stays visible. A tab with other history entries stays open and follows the usual settings. Opening the next pull request in a stack takes priority over closing.
 

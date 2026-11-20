@@ -1,7 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { resetInboxPreferencesCache } from "#/lib/inbox-preferences.ts";
-import { openInboxPullRequest, openInboxPullRequestsInTabs } from "#/lib/inbox/inbox-navigation.ts";
+import {
+    openInboxPullRequest,
+    openInboxPullRequestsInTabs,
+    pullRequestsToOpenAll,
+} from "#/lib/inbox/inbox-navigation.ts";
 
 const memory = new Map<string, string>();
 
@@ -131,5 +135,36 @@ describe("openInboxPullRequestsInTabs", () => {
         expect(openInboxPullRequestsInTabs(pullRequests)).toEqual({ blocked: 1 });
 
         expect(tabs.map((tab) => tab.location.href)).toEqual(["https://github.com/acme/api/pull/2"]);
+    });
+});
+
+describe("pullRequestsToOpenAll", () => {
+    function pullRequest(repository: string, number: number, stack?: { number: number; position: number }) {
+        return {
+            repository,
+            number,
+            url: `https://github.com/${repository}/pull/${number}`,
+            githubStack: stack
+                ? { number: stack.number, size: 3, position: stack.position, baseRefName: "main" }
+                : null,
+        };
+    }
+
+    const section = [
+        pullRequest("acme/app", 12, { number: 1, position: 3 }),
+        pullRequest("acme/app", 30),
+        pullRequest("acme/app", 11, { number: 1, position: 2 }),
+        pullRequest("acme/api", 11, { number: 1, position: 1 }),
+        pullRequest("acme/app", 40, { number: 2, position: 2 }),
+    ];
+
+    it("keeps only the lowest layer of each stack when reviews walk up the stack", () => {
+        expect(
+            pullRequestsToOpenAll(section, { walkStacks: true }).map((pr) => `${pr.repository}#${pr.number}`),
+        ).toEqual(["acme/app#30", "acme/app#11", "acme/api#11", "acme/app#40"]);
+    });
+
+    it("opens every pull request when reviews do not walk up the stack", () => {
+        expect(pullRequestsToOpenAll(section, { walkStacks: false })).toEqual(section);
     });
 });
