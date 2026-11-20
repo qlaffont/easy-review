@@ -122,6 +122,21 @@ describe("shouldEmbedGithubAttachment", () => {
     it("embeds user-attachments links with no visible label (GitHub HTML thumbnail wrapper)", () => {
         expect(shouldEmbedGithubAttachment(ATTACHMENT, "")).toBe(true);
     });
+
+    it("embeds bare signed CDN urls", () => {
+        const signed = "https://private-user-images.githubusercontent.com/1/2-3.png?jwt=abc";
+        expect(shouldEmbedGithubAttachment(signed, signed)).toBe(true);
+    });
+
+    it("keeps bare GitHub page urls (pull requests, issues, raw files) as links", () => {
+        for (const url of [
+            "https://github.com/latomate/medical-service/pull/469",
+            "https://github.com/acme/api/issues/12",
+            "https://raw.githubusercontent.com/acme/api/main/README.md",
+        ]) {
+            expect(shouldEmbedGithubAttachment(url, url)).toBe(false);
+        }
+    });
 });
 
 describe("Markdown github attachment embeds", () => {
@@ -135,6 +150,13 @@ describe("Markdown github attachment embeds", () => {
                 `<a[^>]*href="${ATTACHMENT.replaceAll("/", "\\/")}"[^>]*>\\s*${ATTACHMENT.replaceAll("/", "\\/")}`,
             ),
         );
+    });
+
+    it("renders a bare GitHub issue url as a link with its text, not an image", () => {
+        const issue = "https://github.com/acme/api/issues/12";
+        const html = renderMarkdown(`> Linked: ${issue} · next`);
+        expect(html).toMatch(new RegExp(`<a[^>]*href="${issue}"[^>]*>${issue}</a>`));
+        expect(html).not.toMatch(/<img\b/);
     });
 
     it("still links ordinary urls", () => {

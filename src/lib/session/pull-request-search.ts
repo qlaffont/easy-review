@@ -121,6 +121,12 @@ export function parsePullRequestUrl(query: string): ParsedPullRequestRef | null 
     return parseGitHubPullRequestUrl(query) ?? parseGraphitePullRequestUrl(query);
 }
 
+/** GitHub URL (any page) or Graphite PR URL — what a paste on the inbox should hand to the palette. */
+export function isGitHubLink(text: string): boolean {
+    const trimmed = text.trim();
+    return parsePullRequestUrl(trimmed) !== null || /^(?:https?:\/\/)?(?:www\.)?github\.com\/\S+$/i.test(trimmed);
+}
+
 /** GitHub rejects search queries longer than this. */
 export const GITHUB_SEARCH_QUERY_MAX_LENGTH = 256;
 

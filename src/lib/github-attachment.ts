@@ -187,7 +187,7 @@ export function shouldEmbedGithubAttachment(href: string | undefined, linkText: 
 
     const text = linkText.trim();
     const isUserAttachment = isGithubUserAttachmentUrl(href);
-    const isSignedMedia = !isUserAttachment && isAllowedResolvedAttachmentSrc(href);
+    const isSignedMedia = !isUserAttachment && isSignedAttachmentCdnUrl(href);
 
     if (!isUserAttachment && !isSignedMedia) {
         return false;
@@ -244,6 +244,28 @@ export function isAllowedResolvedAttachmentSrc(src: string): boolean {
             host === "www.github.com" ||
             host.endsWith(".githubusercontent.com") ||
             host.endsWith(".amazonaws.com")
+        );
+    } catch {
+        return false;
+    }
+}
+
+/**
+ * Short-lived CDN URL GitHub swaps in for an upload (`bodyHTML` / `POST /markdown`). Only these
+ * hosts count as media: any other GitHub URL (a pull request, an issue, `raw.githubusercontent.com`)
+ * written bare in a body is a link, not an image.
+ */
+function isSignedAttachmentCdnUrl(src: string): boolean {
+    try {
+        const url = new URL(src);
+        if (url.protocol !== "https:") {
+            return false;
+        }
+        const host = url.hostname.toLowerCase();
+        return (
+            host === "private-user-images.githubusercontent.com" ||
+            host === "user-images.githubusercontent.com" ||
+            (host.startsWith("github-production-user-asset-") && host.endsWith(".amazonaws.com"))
         );
     } catch {
         return false;

@@ -1,3 +1,4 @@
+import { useRouterState } from "@tanstack/react-router";
 import { Loader2 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
@@ -21,7 +22,7 @@ import { TruncatedText } from "#/components/ui/truncated-text.tsx";
 import { availableActions } from "#/lib/actions/catalog.ts";
 import { useInboxPullRequests } from "#/lib/query/inbox.ts";
 import { useSession, useSessionState } from "#/lib/session/provider.tsx";
-import { matchesPullRequestSearchQuery, parsePullRequestUrl } from "#/lib/session/pull-request-search.ts";
+import { isGitHubLink, matchesPullRequestSearchQuery, parsePullRequestUrl } from "#/lib/session/pull-request-search.ts";
 
 const GROUPS = ["Navigation", "Clipboard", "Inbox", "Pull request"] as const;
 const MAX_PR_RESULTS = 25;
@@ -90,6 +91,13 @@ function openInNewTab(path: string) {
     }
 }
 
+function isEditableTarget(target: EventTarget | null): boolean {
+    if (!(target instanceof HTMLElement)) {
+        return false;
+    }
+    return target.isContentEditable || target.closest("input, textarea, select") !== null;
+}
+
 function IndexShortcutKeys({ index }: { index: number }) {
     // Option/Alt avoids ⌘/Ctrl+number (browser tab switching). Bare digits would fight search.
     const mod = isApplePlatform() ? "⌥" : "Alt";
@@ -106,6 +114,7 @@ export function CommandPalette() {
     const [remotePullRequests, setRemotePullRequests] = useState<Array<PullRequestSummary>>([]);
     const [searchingPullRequests, setSearchingPullRequests] = useState(false);
     const entriesRef = useRef<Array<PaletteEntry>>([]);
+    const onInbox = useRouterState({ select: (state) => state.location.pathname === "/" });
 
     useEffect(() => {
         function onKeyDown(event: KeyboardEvent) {
@@ -118,6 +127,29 @@ export function CommandPalette() {
         window.addEventListener("keydown", onKeyDown);
         return () => window.removeEventListener("keydown", onKeyDown);
     }, []);
+
+    // On the inbox, pasting a GitHub link anywhere behaves like ⌘K + paste.
+    useEffect(() => {
+        if (!onInbox || open) {
+            return;
+        }
+
+        function onPaste(event: ClipboardEvent) {
+            if (event.defaultPrevented || isEditableTarget(event.target)) {
+                return;
+            }
+            const text = event.clipboardData?.getData("text/plain").trim() ?? "";
+            if (!isGitHubLink(text)) {
+                return;
+            }
+            event.preventDefault();
+            setQuery(text);
+            setOpen(true);
+        }
+
+        window.addEventListener("paste", onPaste);
+        return () => window.removeEventListener("paste", onPaste);
+    }, [onInbox, open]);
 
     useEffect(() => {
         if (!open) {

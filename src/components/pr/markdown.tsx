@@ -37,7 +37,11 @@ import {
     shouldEmbedGraphiteAttachment,
     type ResolvedGithubAttachment,
 } from "#/lib/github-attachment.ts";
-import { pullRequestLinkTarget } from "#/lib/github-pull-request-link.ts";
+import {
+    pullRequestLinkTarget,
+    pullRequestReferenceLabel,
+    type PullRequestLinkTarget,
+} from "#/lib/github-pull-request-link.ts";
 import { prepareMarkdownSource } from "#/lib/markdown-source.ts";
 import { remarkBoldMentions } from "#/lib/remark-bold-mentions.ts";
 import { remarkGithubEmoji } from "#/lib/remark-github-emoji.ts";
@@ -706,6 +710,32 @@ function MarkdownVideo({ src, ...props }: ComponentPropsWithoutRef<"video">) {
     );
 }
 
+/** Opens in Easy Review; a bare URL reads as GitHub shows it (`#123` / `owner/repo#123`). */
+function PullRequestAnchor({
+    target,
+    isBareUrl,
+    className,
+    children,
+}: {
+    target: PullRequestLinkTarget;
+    isBareUrl: boolean;
+    className?: string;
+    children: ReactNode;
+}) {
+    const repository = useContext(MarkdownRepoContext);
+    return (
+        <Link
+            to="/pr/$owner/$repo/$number"
+            params={target}
+            target="_blank"
+            rel="noreferrer noopener"
+            className={className}
+        >
+            {isBareUrl ? pullRequestReferenceLabel(target, repository) : children}
+        </Link>
+    );
+}
+
 const components = {
     a: ({ href, children, className, ...props }: ComponentPropsWithoutRef<"a">) => {
         const linkText = linkChildrenText(children);
@@ -736,15 +766,9 @@ const components = {
         const pullRequest = pullRequestLinkTarget(href);
         if (pullRequest) {
             return (
-                <Link
-                    to="/pr/$owner/$repo/$number"
-                    params={pullRequest}
-                    target="_blank"
-                    rel="noreferrer noopener"
-                    className={className}
-                >
+                <PullRequestAnchor target={pullRequest} isBareUrl={linkText === href} className={className}>
                     {children}
-                </Link>
+                </PullRequestAnchor>
             );
         }
 
@@ -991,7 +1015,7 @@ export const Markdown = memo(function Markdown({
         <SuggestionContext.Provider value={suggestionContext}>
             <MarkdownRepoContext.Provider value={repository}>
                 <TaskListContext.Provider value={taskList}>
-                    <div className="prose prose-sm max-w-none text-foreground dark:prose-invert prose-p:my-2 prose-hr:my-3 prose-pre:my-0 prose-pre:bg-transparent prose-pre:p-0 prose-code:text-foreground prose-code:before:content-none prose-code:after:content-none prose-strong:text-foreground [&_.graphite__hidden]:hidden [&_li:has(>input[type=checkbox])]:list-none [&_ul:has(li>input[type=checkbox])]:list-none [&_ul:has(li>input[type=checkbox])]:pl-0">
+                    <div className="prose prose-sm max-w-none text-foreground dark:prose-invert prose-p:my-2 prose-hr:my-3 prose-pre:my-0 prose-pre:bg-transparent prose-pre:p-0 prose-code:text-foreground prose-code:before:content-none prose-code:after:content-none prose-strong:text-foreground prose-blockquote:font-normal prose-blockquote:not-italic prose-blockquote:text-muted-foreground [&_blockquote_p]:before:content-none [&_blockquote_p]:after:content-none [&_.graphite__hidden]:hidden [&_li:has(>input[type=checkbox])]:list-none [&_ul:has(li>input[type=checkbox])]:list-none [&_ul:has(li>input[type=checkbox])]:pl-0">
                         <ReactMarkdown
                             remarkPlugins={remarkPlugins}
                             rehypePlugins={rehypePlugins}

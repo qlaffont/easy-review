@@ -38,3 +38,14 @@ export function pullRequestLinkTarget(href: string | undefined): PullRequestLink
 
     return { owner, repo, number };
 }
+
+/**
+ * GitHub’s label for a bare pull request URL: `#123` inside the same repository,
+ * `owner/repo#123` across repositories.
+ */
+export function pullRequestReferenceLabel(target: PullRequestLinkTarget, repository: string | null): string {
+    const slug = `${target.owner}/${target.repo}`;
+    return repository && slug.toLowerCase() === repository.toLowerCase()
+        ? `#${target.number}`
+        : `${slug}#${target.number}`;
+}

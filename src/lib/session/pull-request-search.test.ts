@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+    isGitHubLink,
     matchesPullRequestSearchQuery,
     parseGitHubPullRequestUrl,
     parseGraphitePullRequestUrl,
@@ -94,5 +95,20 @@ describe("matchesPullRequestSearchQuery", () => {
             ),
         ).toBe(true);
         expect(matchesPullRequestSearchQuery(pullRequest, "https://github.com/other/repo/pull/1")).toBe(false);
+    });
+});
+
+describe("isGitHubLink", () => {
+    it("accepts GitHub URLs and Graphite PR URLs", () => {
+        expect(isGitHubLink("https://github.com/acme/web/pull/42")).toBe(true);
+        expect(isGitHubLink("  github.com/acme/web/issues/7 ")).toBe(true);
+        expect(isGitHubLink("https://app.graphite.com/github/pr/acme/web/42")).toBe(true);
+    });
+
+    it("rejects plain text and other hosts", () => {
+        expect(isGitHubLink("fix login")).toBe(false);
+        expect(isGitHubLink("https://gitlab.com/acme/web")).toBe(false);
+        expect(isGitHubLink("https://github.com/")).toBe(false);
+        expect(isGitHubLink("see https://github.com/acme/web/pull/42")).toBe(false);
     });
 });
