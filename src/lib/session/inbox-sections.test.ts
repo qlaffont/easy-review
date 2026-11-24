@@ -160,34 +160,12 @@ describe("default section filters", () => {
         expect(matchSectionFilter(subject, defaultFilterForPreset("waiting-for-reviewers-me"), VIEWER)).toBe(false);
     });
 
-    it("puts your PR in Returned to you when a human commented without approving or requesting changes", () => {
+    it("keeps your PR in Waiting for reviewers (me) when a reviewer only commented", () => {
         const subject = pullRequest({
             author: VIEWER,
             reviewDecision: "review-required",
-            reviewRequests: ["other-reviewer"],
             reviewers: [{ login: "romainpm", state: "commented", reviewId: 1 }],
         });
-        expect(matchSectionFilter(subject, defaultFilterForPreset("returned-to-you"), VIEWER)).toBe(true);
-        expect(matchSectionFilter(subject, defaultFilterForPreset("waiting-for-reviewers-me"), VIEWER)).toBe(false);
-    });
-
-    it("moves a commented PR to Waiting for reviewers (me) once the commenter is re-requested", () => {
-        const subject = pullRequest({
-            author: VIEWER,
-            reviewDecision: "review-required",
-            reviewRequests: ["romainpm"],
-            reviewers: [{ login: "romainpm", state: "commented", reviewId: 1 }],
-        });
-        expect(matchSectionFilter(subject, defaultFilterForPreset("returned-to-you"), VIEWER)).toBe(false);
-        expect(matchSectionFilter(subject, defaultFilterForPreset("waiting-for-reviewers-me"), VIEWER)).toBe(true);
-    });
-
-    it.each([
-        ["a bot flagged by GitHub", { login: "coderabbitai", state: "commented", reviewId: 1, isBot: true }],
-        ["a [bot] login", { login: "renovate[bot]", state: "commented", reviewId: 1 }],
-        ["the author replying to a thread", { login: VIEWER, state: "commented", reviewId: 1 }],
-    ] as const)("ignores a comment review from %s", (_name, reviewer) => {
-        const subject = pullRequest({ author: VIEWER, reviewDecision: "review-required", reviewers: [reviewer] });
         expect(matchSectionFilter(subject, defaultFilterForPreset("returned-to-you"), VIEWER)).toBe(false);
         expect(matchSectionFilter(subject, defaultFilterForPreset("waiting-for-reviewers-me"), VIEWER)).toBe(true);
     });
@@ -205,9 +183,9 @@ describe("default section filters", () => {
         expect(matchSectionFilter(subject, defaultFilterForPreset("approved"), VIEWER)).toBe(true);
     });
 
-    it("searches beyond changes-requested PRs so commented ones reach Returned to you", () => {
+    it("searches only changes-requested PRs for Returned to you", () => {
         expect(sectionFilterToSearchQuery(defaultFilterForPreset("returned-to-you"), VIEWER)).toBe(
-            `is:pr author:${VIEWER} is:open draft:false -review:approved`,
+            `is:pr author:${VIEWER} is:open draft:false review:changes_requested`,
         );
     });
 
@@ -222,12 +200,12 @@ describe("default section filters", () => {
             ],
         ],
         [
-            "the changes-requested-only default",
+            "the changes-requested-or-commented default",
             [
                 { field: "author", op: "is", value: "@me" },
                 { field: "state", op: "is", value: "open" },
                 { field: "isDraft", op: "is", value: false },
-                { field: "reviewDecision", op: "is", value: "changes-requested" },
+                { field: "reviewDecision", op: "is_not", value: "approved" },
                 { field: "involvement", op: "is", value: "my-changes-requested" },
             ],
         ],
@@ -238,12 +216,9 @@ describe("default section filters", () => {
                 filter: { cases: [{ id: "case", name: "stored", conditions }] },
             },
         ]);
-        const commented = pullRequest({
-            author: VIEWER,
-            reviewDecision: "review-required",
-            reviewers: [{ login: "romainpm", state: "commented", reviewId: 1 }],
-        });
-        expect(matchSectionFilter(commented, entry!.filter, VIEWER)).toBe(true);
+        const stripIds = (filter: typeof entry.filter) =>
+            filter.cases.map((case_) => case_.conditions.map(({ field, op, value }) => ({ field, op, value })));
+        expect(stripIds(entry!.filter)).toEqual(stripIds(defaultFilterForPreset("returned-to-you")));
     });
 
     it("leaves a customized Returned to you filter alone", () => {

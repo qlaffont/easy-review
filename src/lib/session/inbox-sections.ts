@@ -413,9 +413,15 @@ function migratePresetFilter(id: InboxSectionId, filter: SectionFilter): Section
             "isDraft|is|false",
             "reviewDecision|is|changes-requested",
         ]);
-        const changesRequestedOnly = new Set([...legacy, "involvement|is|my-changes-requested"]);
+        const withCommented = new Set([
+            "author|is|@me",
+            "state|is|open",
+            "isDraft|is|false",
+            "reviewDecision|is_not|approved",
+            "involvement|is|my-changes-requested",
+        ]);
         if (
-            ![legacy, changesRequestedOnly].some(
+            ![legacy, withCommented].some(
                 (expected) =>
                     fingerprints.size === expected.size && [...expected].every((entry) => fingerprints.has(entry)),
             )

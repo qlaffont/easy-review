@@ -124,7 +124,7 @@ describe("fetchInboxSections", () => {
         expect(data.sectionCounts["returned-to-you"]).toBe(0);
     });
 
-    it("loads a PR commented by a human into Returned to you", async () => {
+    it("keeps a PR only commented by a human out of Returned to you", async () => {
         const github = createFakeGithub();
         github.addAccount(TOKEN, { login: "quentin" });
         github.addPullRequest(TOKEN, {
@@ -144,14 +144,15 @@ describe("fetchInboxSections", () => {
             existing: emptyInboxQueryData(),
         });
 
-        expect(data.sectionPullRequests["returned-to-you"]?.map((entry) => entry.number)).toEqual([9]);
-        expect(data.sectionCounts["returned-to-you"]).toBe(1);
+        expect(data.sectionPullRequests["returned-to-you"]).toEqual([]);
+        expect(data.sectionCounts["returned-to-you"]).toBe(0);
+        expect(data.sectionPullRequests["waiting-for-reviewers-me"]?.map((entry) => entry.number)).toEqual([9]);
     });
 
     it("scans past a first page the section filter drops entirely", async () => {
         const github = createFakeGithub();
         github.addAccount(TOKEN, { login: "quentin" });
-        // Twelve of my PRs waiting on reviewers: GitHub returns them for Returned to you, the filter drops them.
+        // Twelve of my PRs waiting on reviewers: the shared search returns them, the Returned to you filter drops them.
         for (let number = 1; number <= 12; number += 1) {
             github.addPullRequest(TOKEN, {
                 repository: "acme/api",
@@ -221,8 +222,10 @@ describe("fetchInboxSections", () => {
                 repository: "acme/api",
                 number,
                 author: "quentin",
-                reviewDecision: "review-required",
+                // Re-requested: the section's own search returns them, its filter drops them.
+                reviewDecision: "changes-requested",
                 reviewRequests: ["romainpm"],
+                reviewers: [{ login: "romainpm", state: "changes-requested", reviewId: 1 }],
                 updatedAt: new Date(Date.UTC(2026, 6, 10, 0, number)).toISOString(),
             });
         }
