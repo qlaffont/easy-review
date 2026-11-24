@@ -363,9 +363,11 @@ export function PullRequestControls({ detail }: { detail: PullRequestDetail }) {
                 <StatusRow
                     icon={<CheckCircle2 className="size-4" aria-hidden="true" />}
                     iconClassName={
-                        checksStatus.ok
+                        checksStatus.tone === "success"
                             ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
-                            : "bg-red-500/10 text-red-600 dark:text-red-400"
+                            : checksStatus.tone === "neutral"
+                              ? "bg-muted text-muted-foreground"
+                              : "bg-red-500/10 text-red-600 dark:text-red-400"
                     }
                     title={checksStatus.title}
                 />

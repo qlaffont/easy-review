@@ -142,10 +142,11 @@ export function toCheckRunState(status: string, conclusion: string | null): Chec
             return "success";
         case "FAILURE":
         case "TIMED_OUT":
-        case "CANCELLED":
         case "ACTION_REQUIRED":
         case "STARTUP_FAILURE":
             return "failure";
+        case "CANCELLED":
+            return "cancelled";
         default:
             return "none";
     }
@@ -183,6 +184,10 @@ function checkRunSummary(state: CheckState, startedAt: string | null, completedA
 
     if (state === "failure") {
         return duration ? `Failing after ${duration}` : "Failing";
+    }
+
+    if (state === "cancelled") {
+        return duration ? `Cancelled after ${duration}` : "Cancelled";
     }
 
     if (state === "success") {
@@ -257,6 +262,10 @@ export function latestCheckState(
     }
     if (states.includes("pending")) {
         return "pending";
+    }
+    // A cancelled check never passed, so it outranks the ones that did.
+    if (states.includes("cancelled")) {
+        return "cancelled";
     }
     if (states.includes("success")) {
         return "success";

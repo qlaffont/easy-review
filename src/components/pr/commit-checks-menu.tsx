@@ -1,4 +1,4 @@
-import { CheckCircle2, CircleDashed, LoaderCircle, XCircle } from "lucide-react";
+import { CheckCircle2, CircleDashed, LoaderCircle, OctagonAlert, XCircle } from "lucide-react";
 
 import type { CheckRun, CheckState } from "#/lib/session/types.ts";
 
@@ -8,19 +8,22 @@ import { cn } from "#/lib/utils.ts";
 const CHECK_ORDER: Record<CheckState, number> = {
     failure: 0,
     pending: 1,
-    success: 2,
-    none: 3,
+    cancelled: 2,
+    success: 3,
+    none: 4,
 };
 
 const ROLLUP_TITLE: Record<Exclude<CheckState, "none">, string> = {
     failure: "Some checks were not successful",
     pending: "Some checks have not completed yet",
+    cancelled: "Some checks were cancelled",
     success: "All checks have passed",
 };
 
 const ROLLUP_TITLE_CLASS: Record<Exclude<CheckState, "none">, string> = {
     failure: "text-red-600 dark:text-red-400",
     pending: "text-amber-700 dark:text-amber-300",
+    cancelled: "text-foreground",
     success: "text-emerald-700 dark:text-emerald-300",
 };
 
@@ -36,7 +39,8 @@ export function CommitChecksMenu({ state, runs }: { state: CheckState; runs: Arr
     const successCount = runs.filter((run) => run.state === "success").length;
     const failureCount = runs.filter((run) => run.state === "failure").length;
     const pendingCount = runs.filter((run) => run.state === "pending").length;
-    const summary = summarizeRollup({ successCount, failureCount, pendingCount, total: runs.length });
+    const cancelledCount = runs.filter((run) => run.state === "cancelled").length;
+    const summary = summarizeRollup({ successCount, failureCount, cancelledCount, pendingCount, total: runs.length });
 
     return (
         <Popover>
@@ -111,6 +115,8 @@ export function CheckStateIcon({ state, className }: { state: CheckState; classN
     switch (state) {
         case "failure":
             return <XCircle className={cn("text-red-600 dark:text-red-400", className)} aria-hidden="true" />;
+        case "cancelled":
+            return <OctagonAlert className={cn("text-muted-foreground", className)} aria-hidden="true" />;
         case "success":
             return (
                 <CheckCircle2 className={cn("text-emerald-600 dark:text-emerald-400", className)} aria-hidden="true" />
@@ -130,11 +136,13 @@ export function CheckStateIcon({ state, className }: { state: CheckState; classN
 function summarizeRollup({
     successCount,
     failureCount,
+    cancelledCount,
     pendingCount,
     total,
 }: {
     successCount: number;
     failureCount: number;
+    cancelledCount: number;
     pendingCount: number;
     total: number;
 }): string | null {
@@ -149,6 +157,9 @@ function summarizeRollup({
     if (failureCount > 0) {
         parts.push(`${failureCount} failing`);
     }
+    if (cancelledCount > 0) {
+        parts.push(`${cancelledCount} cancelled`);
+    }
     if (pendingCount > 0) {
         parts.push(`${pendingCount} pending`);
     }
@@ -158,7 +169,7 @@ function summarizeRollup({
     }
 
     if (parts.length === 1) {
-        return `${parts[0]} check${(successCount || failureCount || pendingCount) === 1 ? "" : "s"}`;
+        return `${parts[0]} check${(successCount || failureCount || cancelledCount || pendingCount) === 1 ? "" : "s"}`;
     }
 
     const last = parts.pop()!;

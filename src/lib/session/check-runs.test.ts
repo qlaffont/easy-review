@@ -106,14 +106,14 @@ describe("jobs a newer run has not created yet", () => {
         expect(latestCheckState(nodes, "failure")).toBe("pending");
     });
 
-    it("keeps a failure once the newer run has finished without that job", () => {
+    it("stays cancelled once the newer run has finished without that job", () => {
         const nodes = [
             job("build", REPLACED_RUN, cancelled),
             job("build", LATEST_RUN),
             job("build-import-client", REPLACED_RUN, cancelled),
         ];
 
-        expect(latestCheckState(nodes, "failure")).toBe("failure");
+        expect(latestCheckState(nodes, "failure")).toBe("cancelled");
     });
 
     it("keeps a failure from another workflow that only shares a job name", () => {
@@ -132,6 +132,30 @@ describe("jobs a newer run has not created yet", () => {
         const nodes = [job("CodeRabbit", 114325926079), job("build", LATEST_RUN, running)];
 
         expect(mapCheckRuns(nodes).map((run) => run.name)).toEqual(["CodeRabbit", "build"]);
+    });
+});
+
+describe("cancelled checks", () => {
+    const cancelled = checkRun("build", {
+        conclusion: "CANCELLED",
+        startedAt: "2026-07-28T12:00:00.000Z",
+        completedAt: "2026-07-28T12:08:47.000Z",
+    });
+
+    it("are listed as cancelled, not failing", () => {
+        expect(mapCheckRuns([cancelled])).toMatchObject([{ state: "cancelled", summary: "Cancelled after 8m 47s" }]);
+    });
+
+    it("keep the commit from reading as passed", () => {
+        expect(latestCheckState([cancelled, checkRun("lint")], "failure")).toBe("cancelled");
+    });
+
+    it("do not hide a check that failed or is still running", () => {
+        const failed = checkRun("test", { conclusion: "FAILURE" });
+        const running = checkRun("e2e", { status: "IN_PROGRESS", conclusion: null, completedAt: null });
+
+        expect(latestCheckState([cancelled, failed], "failure")).toBe("failure");
+        expect(latestCheckState([cancelled, running], "failure")).toBe("pending");
     });
 });
 

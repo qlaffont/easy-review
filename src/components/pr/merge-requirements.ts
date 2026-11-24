@@ -108,7 +108,7 @@ export function mergingBlockedDescription(detail: PullRequestDetail): string | n
     if (detail.reviewDecision === "changes-requested") {
         return "Changes have been requested on this pull request.";
     }
-    if (detail.mergeStateStatus === "unstable" || detail.checks === "failure") {
+    if (detail.mergeStateStatus === "unstable" || detail.checks === "failure" || detail.checks === "cancelled") {
         return "Required checks have not passed.";
     }
     if (detail.mergeStateStatus === "behind") {
@@ -139,20 +139,26 @@ export function mergeFooterHint(detail: PullRequestDetail, mergeOptionsLength: n
     return `Ready to land into ${detail.baseRefName}.`;
 }
 
-export function checksStatusLabel(detail: PullRequestDetail): { title: string; ok: boolean } | null {
+export function checksStatusLabel(
+    detail: PullRequestDetail,
+): { title: string; tone: "success" | "neutral" | "failure" } | null {
     if (detail.checkCount === 0 && detail.checkRuns.length === 0 && detail.checks === "none") {
         return null;
     }
 
+    if (detail.checks === "cancelled") {
+        return { title: "Some checks were cancelled", tone: "neutral" };
+    }
+
     if (detail.checks === "failure" || detail.mergeStateStatus === "unstable") {
-        return { title: "Some checks have not passed", ok: false };
+        return { title: "Some checks have not passed", tone: "failure" };
     }
 
     if (detail.checks === "pending") {
-        return { title: "Checks are in progress", ok: false };
+        return { title: "Checks are in progress", tone: "failure" };
     }
 
-    return { title: "All checks have passed", ok: true };
+    return { title: "All checks have passed", tone: "success" };
 }
 
 function formatPullRequestTitle(detail: Pick<PullRequestDetail, "title" | "number">): string {

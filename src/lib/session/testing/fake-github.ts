@@ -199,7 +199,7 @@ function buildPullRequest(input: PullRequestInput): PullRequestDetail {
                 ? "draft"
                 : input.reviewDecision === "review-required" || input.reviewDecision === "changes-requested"
                   ? "blocked"
-                  : input.checks === "failure"
+                  : input.checks === "failure" || input.checks === "cancelled"
                     ? "unstable"
                     : input.mergeable === "conflicting"
                       ? "dirty"

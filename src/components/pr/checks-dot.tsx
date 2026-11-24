@@ -8,6 +8,7 @@ const CHECK_LABELS: Record<CheckState, string> = {
     pending: "Checks running",
     success: "Checks passed",
     failure: "Checks failed",
+    cancelled: "Checks cancelled",
 };
 
 const CHECK_COLORS: Record<CheckState, string> = {
@@ -15,6 +16,7 @@ const CHECK_COLORS: Record<CheckState, string> = {
     pending: "bg-amber-500",
     success: "bg-emerald-500",
     failure: "bg-red-500",
+    cancelled: "bg-muted-foreground",
 };
 
 /** The one place check colour is decided, so a row and an overview never disagree. */

@@ -4,6 +4,7 @@ import type { PullRequestDetail } from "#/lib/session/types.ts";
 
 import {
     approveAndMergeBlockedReason,
+    checksStatusLabel,
     defaultMergeCommitFields,
     hasMergeConflicts,
     isMergeBlockedByRequirements,
@@ -66,6 +67,16 @@ function detail(overrides: Partial<PullRequestDetail> = {}): PullRequestDetail {
         ...overrides,
     };
 }
+
+describe("checksStatusLabel", () => {
+    it("reports cancelled checks apart from failures, without calling them passed", () => {
+        expect(checksStatusLabel(detail({ checks: "cancelled", mergeStateStatus: "unstable" }))).toEqual({
+            title: "Some checks were cancelled",
+            tone: "neutral",
+        });
+        expect(checksStatusLabel(detail({ checks: "failure" }))?.tone).toBe("failure");
+    });
+});
 
 describe("merge requirements", () => {
     it("blocks merge when review is required", () => {

@@ -1,5 +1,5 @@
 /** Rolled-up state of the CI attached to the head commit. */
-export type CheckState = "none" | "pending" | "success" | "failure";
+export type CheckState = "none" | "pending" | "success" | "failure" | "cancelled";
 
 export type ReviewDecision = "approved" | "changes-requested" | "review-required" | null;
 

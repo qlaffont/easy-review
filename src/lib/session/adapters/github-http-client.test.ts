@@ -36,7 +36,7 @@ function pullRequestNode(repository: string, number: number) {
     };
 }
 
-function checkRun(name: string, startedAt: string, conclusion: "CANCELLED" | "SUCCESS") {
+function checkRun(name: string, startedAt: string, conclusion: "CANCELLED" | "FAILURE" | "SUCCESS") {
     return {
         __typename: "CheckRun",
         name,
@@ -907,7 +907,7 @@ describe("listPullRequests", () => {
         const { fetchImpl } = inboxThenLatestChecks(
             latestChecksFor([
                 checkRun("build", "2026-11-10T09:42:12Z", "SUCCESS"),
-                checkRun("build", "2026-11-10T09:51:30Z", "CANCELLED"),
+                checkRun("build", "2026-11-10T09:51:30Z", "FAILURE"),
             ]),
         );
         const github = createGithubHttpClient(fetchImpl);
@@ -915,6 +915,20 @@ describe("listPullRequests", () => {
         const { pullRequests } = await github.listPullRequests("token", ["acme/api"]);
 
         expect(pullRequests.find((pullRequest) => pullRequest.number === 457)?.checks).toBe("failure");
+    });
+
+    it("marks the row cancelled when the latest attempt was cancelled", async () => {
+        const { fetchImpl } = inboxThenLatestChecks(
+            latestChecksFor([
+                checkRun("lint", "2026-11-10T09:42:12Z", "SUCCESS"),
+                checkRun("build", "2026-11-10T09:51:30Z", "CANCELLED"),
+            ]),
+        );
+        const github = createGithubHttpClient(fetchImpl);
+
+        const { pullRequests } = await github.listPullRequests("token", ["acme/api"]);
+
+        expect(pullRequests.find((pullRequest) => pullRequest.number === 457)?.checks).toBe("cancelled");
     });
 
     it("keeps the rollup when GitHub returned only part of the contexts", async () => {

@@ -9,6 +9,7 @@ export type StackMergeBlockReason =
     | "review-required"
     | "changes-requested"
     | "checks-failing"
+    | "checks-cancelled"
     | "behind"
     | "blocked"
     | "blocked-downstack";
@@ -39,6 +40,7 @@ const BLOCK_REASON_LABEL: Record<StackMergeBlockReason, string> = {
     "review-required": "Review required",
     "changes-requested": "Changes requested",
     "checks-failing": "Checks failing",
+    "checks-cancelled": "Checks cancelled",
     behind: "Behind base branch",
     blocked: "Not ready",
     "blocked-downstack": "Blocked downstack",
@@ -50,6 +52,7 @@ const BLOCK_REASON_DETAIL: Record<Exclude<StackMergeBlockReason, "blocked-downst
     "review-required": "Review is required before merging.",
     "changes-requested": "Changes have been requested on this pull request.",
     "checks-failing": "Required checks have not passed.",
+    "checks-cancelled": "Required checks were cancelled.",
     behind: "This branch is out of date with its base branch.",
     blocked: "This pull request does not meet merge requirements.",
 };
@@ -98,6 +101,10 @@ function ownBlockReason(
 
     if (pullRequest.checks === "failure") {
         return "checks-failing";
+    }
+
+    if (pullRequest.checks === "cancelled") {
+        return "checks-cancelled";
     }
 
     if (pullRequest.mergeStateStatus === "behind") {

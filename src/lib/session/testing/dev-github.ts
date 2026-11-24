@@ -18,7 +18,7 @@ export const DEV_TOKEN = "dev";
 const DEV_LOGIN = "quentin";
 
 const REPOSITORIES = ["quentin/easy-review", "acme/api", "acme/web", "acme/infra"];
-const CHECKS: Array<CheckState> = ["success", "success", "pending", "failure", "none"];
+const CHECKS: Array<CheckState> = ["success", "success", "pending", "failure", "cancelled", "none"];
 const REVIEW_STATES: Array<ReviewState> = ["approved", "commented", "changes-requested"];
 
 type Shape = Partial<PullRequestSummary>;
@@ -63,9 +63,11 @@ function checkRuns(rollup: CheckState): Array<CheckRun> {
             summary:
                 state === "failure"
                     ? `Failing after ${duration}`
-                    : state === "success"
-                      ? `Successful in ${duration}`
-                      : `Running for ${duration}`,
+                    : state === "cancelled"
+                      ? `Cancelled after ${duration}`
+                      : state === "success"
+                        ? `Successful in ${duration}`
+                        : `Running for ${duration}`,
         };
     });
 }
