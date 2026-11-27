@@ -472,7 +472,7 @@ function StackReviewersButton({
                             don&apos;t have them yet. Bots and each pull request&apos;s author are skipped.
                         </AlertDialogDescription>
                     </AlertDialogHeader>
-                    <ul className="flex flex-col gap-2 text-sm">
+                    <ul className="flex min-w-0 flex-col gap-2 text-sm">
                         {plan.updates.map(({ pullRequest, missing }) => (
                             <li key={pullRequest.key} className="flex min-w-0 flex-col gap-0.5">
                                 <span className="flex min-w-0 items-center gap-2">
