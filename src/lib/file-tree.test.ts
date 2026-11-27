@@ -80,6 +80,9 @@ describe("isTestFilePath", () => {
         "tests/fixtures/data.json",
         "src/test/kotlin/Invoice.kt",
         "src/__tests__/view.tsx",
+        "src/api/user.fixture",
+        "src/api/user.fixture.json",
+        "src/api/user.fixture.ts",
     ])("treats %s as a test file", (path) => {
         expect(isTestFilePath(path)).toBe(true);
     });
@@ -94,6 +97,8 @@ describe("isTestFilePath", () => {
         "src/test",
         "src/test-utils.ts",
         "src/testing.ts",
+        "src/fixture.ts",
+        "src/user.fixtures.ts",
     ])("leaves %s alone", (path) => {
         expect(isTestFilePath(path)).toBe(false);
     });

@@ -113,8 +113,10 @@ const TEST_DIRECTORY = /^_*tests?_*$/i;
 const TEST_FILE_NAME = /(?:^|[._-])test\./i;
 /** `InvoiceTest.kt` — only an uppercase `Test` starts a word here. */
 const CAMEL_CASE_TEST_FILE_NAME = /[a-z0-9]Test\./;
+/** `user.fixture` or `user.fixture.json`. */
+const FIXTURE_FILE_NAME = /\.fixture(?:\.|$)/i;
 
-/** True for `foo.test.ts`-style names and for anything under a `test`, `tests` or `__tests__` folder. */
+/** True for `foo.test.ts`- and `foo.fixture`-style names and for anything under a `test`, `tests` or `__tests__` folder. */
 export function isTestFilePath(path: string): boolean {
     const segments = path.split("/").filter(Boolean);
     const name = segments.pop();
@@ -124,6 +126,7 @@ export function isTestFilePath(path: string): boolean {
     return (
         TEST_FILE_NAME.test(name) ||
         CAMEL_CASE_TEST_FILE_NAME.test(name) ||
+        FIXTURE_FILE_NAME.test(name) ||
         segments.some((segment) => TEST_DIRECTORY.test(segment))
     );
 }
